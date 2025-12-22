@@ -1,0 +1,16 @@
+[package]
+name = "rsfgsea-gpu"
+version = "0.1.0"
+edition = "2024"
+authors = ["Denis Demin"]
+description = "GPU backend for rsfgsea"
+license = "MIT"
+
+[dependencies]
+wgpu = "23.0"
+pollster = "0.3"
+bytemuck = { version = "1.13", features = ["derive"] }
+flume = "0.11"
+futures-intrusive = "0.5"
+anyhow = "1.0"
+log = "0.4"

@@ -1,0 +1,7 @@
+[workspace]
+members = [
+    "rsfgsea",
+    "rsfgsea-gpu",
+    "rsfgseapy",
+]
+resolver = "2"

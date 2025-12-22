@@ -1,0 +1,20 @@
+[package]
+name = "rsfgseapy"
+version = "0.1.0"
+edition = "2024"
+authors = ["Denis Demin"]
+description = "Python bindings for rsfgsea"
+license = "MIT"
+
+[lib]
+name = "rsfgseapy"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = { version = "0.23", features = ["extension-module"] }
+rsfgsea = { path = "../rsfgsea" }
+anyhow = "1.0"
+rayon = "1.10"
+
+[features]
+gpu = ["rsfgsea/gpu"]
