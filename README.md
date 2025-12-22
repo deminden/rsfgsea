@@ -5,7 +5,7 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 ## Features
 
 - **Full fgsea logic**: Implements multilevel splitting Monte Carlo for accurate p-value estimation (down to `1e-100` and beyond), Normalized Enrichment Scores (NES), and `log2err`.
-- **Smart GPU Acceleration**: High-performance WebGPU implementation that automatically combines fast screening with high-precision multilevel refinement. Offloads heavy $O(k)$ computations to thousands of shader cores.
+- **GPU Acceleration**: WebGPU implementation that combines fast screening with high-precision multilevel refinement.
 - **High Efficiency**: Uses $O(k)$ algorithms for Enrichment Score calculation, avoiding redundant scans. **5x faster** than R `fgsea` (multilevel) at scale on CPU, and significantly faster on GPU.
 - **Optimized sampling**: Simulates permutations using high-speed non-crypto random number generators (`SmallRng`) and Fisher-Yates shuffling.
 
