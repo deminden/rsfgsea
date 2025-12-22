@@ -1,4 +1,4 @@
-use criterion::{black_box, criterion_group, criterion_main, Criterion};
+use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use rsfgsea::prelude::*;
 
 fn benchmark_es(c: &mut Criterion) {

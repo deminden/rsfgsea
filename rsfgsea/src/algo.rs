@@ -399,13 +399,13 @@ pub fn run_multilevel_gsea(
 
         // Sort by ES. If obs_es is negative, we want to look at the lower tail (more negative)
         if is_pos {
-            scores.sort_by(|a, b| a.0 .0.compare(&b.0 .0));
+            scores.sort_by(|a, b| a.0.0.compare(&b.0.0));
         } else {
-            scores.sort_by(|a, b| b.0 .0.compare(&a.0 .0));
+            scores.sort_by(|a, b| b.0.0.compare(&a.0.0));
         }
 
         let mid = sample_size / 2;
-        let threshold = scores[mid].0 .0;
+        let threshold = scores[mid].0.0;
 
         // Termination condition
         let reached = if is_pos {
@@ -419,9 +419,9 @@ pub fn run_multilevel_gsea(
                 .iter()
                 .filter(|s| {
                     if is_pos {
-                        s.0 .0.compare(&obs_es) != std::cmp::Ordering::Less
+                        s.0.0.compare(&obs_es) != std::cmp::Ordering::Less
                     } else {
-                        s.0 .0.compare(&obs_es) != std::cmp::Ordering::Greater
+                        s.0.0.compare(&obs_es) != std::cmp::Ordering::Greater
                     }
                 })
                 .count();
