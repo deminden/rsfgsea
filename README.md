@@ -56,10 +56,17 @@ let results = run_gsea(
 
 ### Python Extension
 
-The Python extension lives in `rsfgseapy` and is built with `maturin`.
+The Python extension lives in `crates/rsfgseapy` and is built with `maturin`.
 
 ```bash
-cd rsfgseapy
+# Build
+git clone https://github.com/deminden/rsfgsea
+cd rsfgsea
+cargo build --workspace --release
+
+# Install Python extension
+cd crates/rsfgseapy
+#pip install maturin # if you don't have maturin installed
 maturin develop --release
 ```
 
@@ -134,6 +141,25 @@ Benchmarked on **AMD Ryzen 9 7950X3D (16 cores, 32 threads)**. Times exclude I/O
 - **Enrichment Scores (ES)**: Exact match (within floating point tolerances). `rsfgsea` uses 128-bit integer accumulators for intermediate sums to prevent catastrophic cancellation.
 - **P-values & NES**: Statistically consistent. Differences purely due to random seed variation (Monte Carlo simulations).
 - **Validation**: Verified against `fgsea` reference outputs across multiple datasets using `tests/r_validation.rs`.
+
+## Contributing
+
+Contributions are very welcome! 
+If you’d like to help improve `rsfgsea`, feel free to open an issue to discuss ideas, report bugs, or request features.
+
+Pull requests are encouraged — especially for:
+- performance improvements
+- correctness / numerical stability fixes
+- additional tests (including cross-validation vs R `fgsea`)
+- documentation, examples, and benchmarking
+
+### Development notes
+
+- Please run formatting and linting before submitting:
+  ```bash
+  cargo fmt --all
+  cargo clippy --workspace --all-targets --all-features
+  cargo test --workspace --all-features
 
 ## License
 
