@@ -75,7 +75,6 @@ let results = rsfgsea::algo::run_gsea_gpu(
 ```
 
 **Hardware Selection (Environment Variables):**
-- `WGPU_BACKEND`: Force a specific backend (e.g., `vulkan`, `metal`, `dx12`, `gl`).
 - `MESA_D3D12_DEFAULT_ADAPTER_NAME`: On WSL2, use `NVIDIA` to force selection of your discrete GPU over integrated graphics.
 
 ### Python Extension
@@ -167,9 +166,8 @@ Benchmarked on **GTEx Muscle - Skeletal data (59,033 genes, 818 samples)**. Comp
 | **rsfgsea (GPU)** | **NVIDIA RTX 4080** | 10,000,000 | **3,243 ms** | **1,062 ms** | **3.3x** |
 
 **Performance Analysis**:
-- The **RTX 4080** is **10.1x faster** than a 32-thread high-end CPU at the actual GSEA computation (Pure Comp Time).
-- The total speedup is currently limited by CPU-side permutation generation (Fisher-Yates shuffling). 
-- GPU scaling is exceptional: 10M permutations are processed in ~1 second on the shader cores.
+- The **RTX 4080** is **~10x faster** than a 32-thread high-end CPU at the actual GSEA computation (without permutation generation).
+- The total speedup is currently limited by CPU-side permutation generation (Fisher-Yates shuffling).
 
 **Note**: `rsfgsea` scales efficiently with thread count, whereas R's `fgsea` (using `BiocParallel`) hits scaling limits and high overhead, particularly with large pathway collections.
 
