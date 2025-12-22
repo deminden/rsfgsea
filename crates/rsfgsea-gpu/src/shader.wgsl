@@ -11,7 +11,7 @@ struct Params {
     k: f32,
     n_total: f32,
     batch_size: f32,
-    _pad: f32,
+    score_type: f32, // 0: Std, 1: Pos, 2: Neg
 }
 @group(0) @binding(3) var<uniform> params: Params;
 
@@ -75,9 +75,16 @@ fn main(@builtin(global_invocation_id) global_id: vec3<u32>) {
         }
     }
 
-    if (abs(curr_max) >= abs(curr_min)) {
+    let score_type = u32(params.score_type);
+    if (score_type == 1u) { // Pos
         results[batch_idx] = GpuResult(curr_max, max_idx);
-    } else {
+    } else if (score_type == 2u) { // Neg
         results[batch_idx] = GpuResult(curr_min, min_idx);
+    } else { // Std
+        if (abs(curr_max) >= abs(curr_min)) {
+            results[batch_idx] = GpuResult(curr_max, max_idx);
+        } else {
+            results[batch_idx] = GpuResult(curr_min, min_idx);
+        }
     }
 }

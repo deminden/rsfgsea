@@ -1,6 +1,6 @@
 [package]
 name = "rsfgsea"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["Denis Demin"]
 description = "Fast Gene Set Enrichment Analysis in Rust"
@@ -17,6 +17,7 @@ rayon = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 special = "0.10"
 thiserror = "1.0"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 
 # Optional GPU support
 rsfgsea-gpu = { path = "../rsfgsea-gpu", optional = true }
@@ -26,7 +27,7 @@ criterion = "0.4"
 
 [features]
 default = []
-gpu = ["dep:rsfgsea-gpu"]
+gpu = ["dep:rsfgsea-gpu", "dep:tokio"]
 
 [[bench]]
 name = "gsea_bench"

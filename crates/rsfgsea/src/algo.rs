@@ -479,3 +479,111 @@ pub fn run_multilevel_gsea(
 
     (p_val, Some(log2err))
 }
+
+#[cfg(feature = "gpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn run_gsea_gpu(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    n_perm: usize,
+    seed: u64,
+    min_size: usize,
+    max_size: usize,
+    score_type: ScoreType,
+    gsea_param: f64,
+) -> Result<Vec<EnrichmentResult>, anyhow::Error> {
+    use rsfgsea_gpu::GpuEngine;
+    use std::collections::BTreeMap;
+
+    let (abs_weights, _, _) = ranks.prepare(gsea_param);
+    let abs_weights_f32: Vec<f32> = abs_weights.iter().map(|&w| w as f32).collect();
+    
+    let gene_to_idx: HashMap<String, usize> = ranks.genes.iter().enumerate().map(|(i, g)| (g.clone(), i)).collect();
+    
+    // 1. Group pathways by size
+    let mut by_size: BTreeMap<usize, Vec<(usize, Vec<usize>)>> = BTreeMap::new();
+    for (i, p) in pathways.iter().enumerate() {
+        let hits: Vec<usize> = p.genes.iter().filter_map(|g| gene_to_idx.get(g).copied()).collect();
+        let k = hits.len();
+        if k >= min_size && k <= max_size {
+            by_size.entry(k).or_default().push((i, hits));
+        }
+    }
+
+    let runtime = tokio::runtime::Runtime::new()?;
+    let engine = runtime.block_on(GpuEngine::new())?;
+    let scores_buffer = engine.upload_scores(&abs_weights_f32);
+    let gpu_score_type = match score_type {
+        ScoreType::Std => 0,
+        ScoreType::Pos => 1,
+        ScoreType::Neg => 2,
+    };
+
+    let mut results = vec![None; pathways.len()];
+
+    for (k, group) in by_size {
+        println!("Processing {} pathways of size k={}...", group.len(), k);
+        
+        for (orig_idx, hits) in group {
+            // First pass: Simple GSEA to filter
+            let gpu_res = engine.fgsea_simple_pathway_with_buffer(
+                &scores_buffer,
+                &hits,
+                &abs_weights_f32,
+                n_perm,
+                seed + orig_idx as u64,
+                gpu_score_type
+            )?;
+
+            if gpu_res.p_value <= 0.05 {
+                // Second pass: Multilevel for significance
+                let ml_res = engine.fgsea_multilevel_pathway(
+                    &hits,
+                    &abs_weights_f32,
+                    1000, // sampleSize for multilevel refinement
+                    seed + orig_idx as u64,
+                    gpu_score_type
+                )?;
+                
+                results[orig_idx] = Some(EnrichmentResult {
+                    pathway_name: pathways[orig_idx].name.clone(),
+                    p_value: ml_res.p_value,
+                    padj: None,
+                    es: ml_res.es,
+                    nes: Some(gpu_res.nes.unwrap_or(0.0)),
+                    log2err: Some(ml_res.log2err),
+                    size: k,
+                    leading_edge: Vec::new(),
+                });
+            } else {
+                results[orig_idx] = Some(EnrichmentResult {
+                    pathway_name: pathways[orig_idx].name.clone(),
+                    p_value: gpu_res.p_value,
+                    padj: None,
+                    es: gpu_res.es,
+                    nes: gpu_res.nes,
+                    log2err: None,
+                    size: k,
+                    leading_edge: Vec::new(),
+                });
+            }
+        }
+    }
+
+    let mut final_results: Vec<EnrichmentResult> = results.into_iter().flatten().collect();
+    
+    // Sort and calculate padj
+    final_results.sort_by(|a, b| a.p_value.partial_cmp(&b.p_value).unwrap());
+    let m = final_results.len();
+    for (i, res) in final_results.iter_mut().enumerate() {
+        res.padj = Some((res.p_value * m as f64 / (i + 1) as f64).min(1.0));
+    }
+    
+    // Ensure padj is monotonic
+    for i in (0..m-1).rev() {
+        let next_padj = final_results[i+1].padj.unwrap_or(1.0);
+        final_results[i].padj = Some(final_results[i].padj.unwrap_or(1.0).min(next_padj));
+    }
+
+    Ok(final_results)
+}

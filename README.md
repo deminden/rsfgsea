@@ -4,8 +4,9 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 
 ## Features
 
-- **Full fgsea logic**: Implements multilevel splitting Monte Carlo for accurate p-value estimation (down to `1e-50`), Normalized Enrichment Scores (NES), and `log2err`.
-- **High Efficiency**: Uses $O(k)$ algorithms for Enrichment Score calculation, avoiding redundant scans. **5x faster** than R `fgsea` (multilevel) at scale.
+- **Full fgsea logic**: Implements multilevel splitting Monte Carlo for accurate p-value estimation (down to `1e-100` and beyond), Normalized Enrichment Scores (NES), and `log2err`.
+- **Smart GPU Acceleration**: High-performance WebGPU implementation that automatically combines fast screening with high-precision multilevel refinement. Offloads heavy $O(k)$ computations to thousands of shader cores.
+- **High Efficiency**: Uses $O(k)$ algorithms for Enrichment Score calculation, avoiding redundant scans. **5x faster** than R `fgsea` (multilevel) at scale on CPU, and significantly faster on GPU.
 - **Optimized sampling**: Simulates permutations using high-speed non-crypto random number generators (`SmallRng`) and Fisher-Yates shuffling.
 
 ## Usage
@@ -53,6 +54,29 @@ let results = run_gsea(
     1.0     // gsea_param
 );
 ```
+
+#### GPU Support
+To enable GPU acceleration, build with the `gpu` feature:
+```bash
+cargo build --release --features gpu
+```
+
+Use the GPU-specific runner in your code:
+```rust
+let results = rsfgsea::algo::run_gsea_gpu(
+    &ranks, 
+    &pathways, 
+    1000,           // initial simple permutations
+    42,             // seed
+    15, 500,        // size limits
+    ScoreType::Std, 
+    1.0             // gsea_param
+)?;
+```
+
+**Hardware Selection (Environment Variables):**
+- `WGPU_BACKEND`: Force a specific backend (e.g., `vulkan`, `metal`, `dx12`, `gl`).
+- `MESA_D3D12_DEFAULT_ADAPTER_NAME`: On WSL2, use `NVIDIA` to force selection of your discrete GPU over integrated graphics.
 
 ### Python Extension
 
@@ -132,6 +156,20 @@ Benchmarked on **AMD Ryzen 9 7950X3D (16 cores, 32 threads)**. Times exclude I/O
 | | | R `fgseaSimple` | 4,205.0 ms | 670.11 ms | 1.0x |
 | **29,705** | 10k Perms | **rsfgsea** | **2,850.1 ms** | **143.6 ms** | **6.8x** |
 | | | R `fgseaSimple` | 3,920.5 ms | 982.7 ms | 1.0x |
+
+### 3. GPU Acceleration (Simple GSEA)
+Benchmarked on **GTEx Muscle - Skeletal data (59,033 genes, 818 samples)**. Comparing CPU (32 threads) vs NVIDIA RTX 4080 and Integrated GPU.
+
+| Implementation | Compute Device | Permutations | Total Time | Pure Comp Time | Speedup |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **rsfgsea (CPU)** | Ryzen 9 7950X3D (32T) | 10,000,000 | 10,803 ms | 10,803 ms | 1.0x |
+| **rsfgsea (GPU)** | **Integrated AMD Graphics** | 1,000,000 | 876 ms | - | 1.2x |
+| **rsfgsea (GPU)** | **NVIDIA RTX 4080** | 10,000,000 | **3,243 ms** | **1,062 ms** | **3.3x** |
+
+**Performance Analysis**:
+- The **RTX 4080** is **10.1x faster** than a 32-thread high-end CPU at the actual GSEA computation (Pure Comp Time).
+- The total speedup is currently limited by CPU-side permutation generation (Fisher-Yates shuffling). 
+- GPU scaling is exceptional: 10M permutations are processed in ~1 second on the shader cores.
 
 **Note**: `rsfgsea` scales efficiently with thread count, whereas R's `fgsea` (using `BiocParallel`) hits scaling limits and high overhead, particularly with large pathway collections.
 
