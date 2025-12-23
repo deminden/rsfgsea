@@ -97,9 +97,7 @@ async fn test_fgsea_simple_pathway() {
     let k = 50;
 
     // Create ranked scores: decreasing from top
-    let abs_scores: Vec<f32> = (0..n_total)
-        .map(|i| (n_total - i) as f32)
-        .collect();
+    let abs_scores: Vec<f32> = (0..n_total).map(|i| (n_total - i) as f32).collect();
 
     // Pathway enriched at the top: indices 0..50
     let pathway_top: Vec<usize> = (0..k).collect();
@@ -149,7 +147,10 @@ async fn test_fgsea_simple_pathway_random() {
     println!("  P-value: {:.4}", result.p_value);
 
     // ES can be positive or negative but should be small
-    assert!(result.es.abs() < 0.5, "ES should be small for random pathway");
+    assert!(
+        result.es.abs() < 0.5,
+        "ES should be small for random pathway"
+    );
 }
 
 /// Test fgsea_simple_pathway with bottom-enriched pathway
@@ -161,9 +162,7 @@ async fn test_fgsea_simple_pathway_bottom() {
     let k = 50;
 
     // Create ranked scores
-    let abs_scores: Vec<f32> = (0..n_total)
-        .map(|i| (n_total - i) as f32)
-        .collect();
+    let abs_scores: Vec<f32> = (0..n_total).map(|i| (n_total - i) as f32).collect();
 
     // Pathway enriched at the bottom: indices (n_total-k)..n_total
     let pathway_bottom: Vec<usize> = (n_total - k..n_total).collect();
@@ -192,13 +191,11 @@ async fn test_fgsea_simple_realistic() {
 
     // Create scores with some distribution
     use rand::prelude::*;
-    use rand_distr::{Normal, Distribution};
+    use rand_distr::{Distribution, Normal};
     let mut rng = StdRng::seed_from_u64(12345);
     let normal = Normal::new(0.0, 1.0).unwrap();
 
-    let mut scores: Vec<f64> = (0..n_total)
-        .map(|_| normal.sample(&mut rng))
-        .collect();
+    let mut scores: Vec<f64> = (0..n_total).map(|_| normal.sample(&mut rng)).collect();
 
     // Add strong signal to top 100 genes
     for score in scores.iter_mut().take(100) {
@@ -237,9 +234,7 @@ async fn test_gpu_performance() {
     let n_perm = 10000;
 
     // Create test data
-    let abs_scores: Vec<f32> = (0..n_total)
-        .map(|i| (n_total - i) as f32)
-        .collect();
+    let abs_scores: Vec<f32> = (0..n_total).map(|i| (n_total - i) as f32).collect();
 
     let pathway: Vec<usize> = (0..k).collect();
 

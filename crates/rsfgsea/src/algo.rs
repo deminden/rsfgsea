@@ -497,13 +497,22 @@ pub fn run_gsea_gpu(
 
     let (abs_weights, _, _) = ranks.prepare(gsea_param);
     let abs_weights_f32: Vec<f32> = abs_weights.iter().map(|&w| w as f32).collect();
-    
-    let gene_to_idx: HashMap<String, usize> = ranks.genes.iter().enumerate().map(|(i, g)| (g.clone(), i)).collect();
-    
+
+    let gene_to_idx: HashMap<String, usize> = ranks
+        .genes
+        .iter()
+        .enumerate()
+        .map(|(i, g)| (g.clone(), i))
+        .collect();
+
     // 1. Group pathways by size
     let mut by_size: BTreeMap<usize, Vec<(usize, Vec<usize>)>> = BTreeMap::new();
     for (i, p) in pathways.iter().enumerate() {
-        let hits: Vec<usize> = p.genes.iter().filter_map(|g| gene_to_idx.get(g).copied()).collect();
+        let hits: Vec<usize> = p
+            .genes
+            .iter()
+            .filter_map(|g| gene_to_idx.get(g).copied())
+            .collect();
         let k = hits.len();
         if k >= min_size && k <= max_size {
             by_size.entry(k).or_default().push((i, hits));
@@ -523,7 +532,7 @@ pub fn run_gsea_gpu(
 
     for (k, group) in by_size {
         println!("Processing {} pathways of size k={}...", group.len(), k);
-        
+
         for (orig_idx, hits) in group {
             // First pass: Simple GSEA to filter
             let gpu_res = engine.fgsea_simple_pathway_with_buffer(
@@ -532,7 +541,7 @@ pub fn run_gsea_gpu(
                 &abs_weights_f32,
                 n_perm,
                 seed + orig_idx as u64,
-                gpu_score_type
+                gpu_score_type,
             )?;
 
             if gpu_res.p_value <= 0.05 {
@@ -542,9 +551,9 @@ pub fn run_gsea_gpu(
                     &abs_weights_f32,
                     1000, // sampleSize for multilevel refinement
                     seed + orig_idx as u64,
-                    gpu_score_type
+                    gpu_score_type,
                 )?;
-                
+
                 results[orig_idx] = Some(EnrichmentResult {
                     pathway_name: pathways[orig_idx].name.clone(),
                     p_value: ml_res.p_value,
@@ -571,17 +580,17 @@ pub fn run_gsea_gpu(
     }
 
     let mut final_results: Vec<EnrichmentResult> = results.into_iter().flatten().collect();
-    
+
     // Sort and calculate padj
     final_results.sort_by(|a, b| a.p_value.partial_cmp(&b.p_value).unwrap());
     let m = final_results.len();
     for (i, res) in final_results.iter_mut().enumerate() {
         res.padj = Some((res.p_value * m as f64 / (i + 1) as f64).min(1.0));
     }
-    
+
     // Ensure padj is monotonic
-    for i in (0..m-1).rev() {
-        let next_padj = final_results[i+1].padj.unwrap_or(1.0);
+    for i in (0..m - 1).rev() {
+        let next_padj = final_results[i + 1].padj.unwrap_or(1.0);
         final_results[i].padj = Some(final_results[i].padj.unwrap_or(1.0).min(next_padj));
     }
 
