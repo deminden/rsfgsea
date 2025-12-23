@@ -371,6 +371,101 @@ impl GpuEngine {
         })
     }
 
+    pub fn generate_null_distribution(
+        &self,
+        scores_buffer: &wgpu::Buffer,
+        k: usize,
+        n_total: usize,
+        n_perm: usize,
+        seed: u64,
+        score_type: u32,
+    ) -> Result<Vec<f32>> {
+        use rand::SeedableRng;
+        use rand::prelude::*;
+        use rand::rngs::SmallRng;
+
+        let batch_size = 200000;
+        let num_batches = n_perm.div_ceil(batch_size);
+        let pool: Vec<usize> = (0..n_total).collect();
+        let mut all_es = Vec::with_capacity(n_perm);
+
+        for batch_idx in 0..num_batches {
+            let current_batch_size = if batch_idx == num_batches - 1 {
+                n_perm - batch_idx * batch_size
+            } else {
+                batch_size
+            } as u32;
+
+            let mut subsets = vec![0u32; current_batch_size as usize * k];
+
+            subsets.par_chunks_mut(k).enumerate().for_each_with(
+                pool.clone(),
+                |local_pool, (i, chunk)| {
+                    let mut local_rng = SmallRng::seed_from_u64(
+                        seed + batch_idx as u64 * batch_size as u64 + i as u64,
+                    );
+                    for i in 0..k {
+                        let j = local_rng.gen_range(i..n_total);
+                        local_pool.swap(i, j);
+                        chunk[i] = local_pool[i] as u32;
+                    }
+                    chunk.sort_unstable();
+                },
+            );
+
+            let batch_results = self.compute_es_batch_with_buffer(
+                scores_buffer,
+                &subsets,
+                k as u32,
+                n_total as u32,
+                current_batch_size,
+                score_type,
+            )?;
+
+            for res in batch_results {
+                all_es.push(res.es);
+            }
+        }
+
+        Ok(all_es)
+    }
+
+    pub fn calculate_null_stats(null_es: &[f32], obs_es: f64) -> (u64, u64, u64, u64, f64, f64) {
+        let mut n_le_es = 0u64;
+        let mut n_ge_es = 0u64;
+        let mut n_le_zero = 0u64;
+        let mut n_ge_zero = 0u64;
+        let mut le_zero_sum = 0.0f64;
+        let mut ge_zero_sum = 0.0f64;
+
+        for &es in null_es {
+            let perm_es = es as f64;
+            if perm_es <= obs_es {
+                n_le_es += 1;
+            }
+            if perm_es >= obs_es {
+                n_ge_es += 1;
+            }
+            if perm_es <= 0.0 {
+                n_le_zero += 1;
+                le_zero_sum += perm_es;
+            }
+            if perm_es >= 0.0 {
+                n_ge_zero += 1;
+                ge_zero_sum += perm_es;
+            }
+        }
+
+        (
+            n_le_es,
+            n_ge_es,
+            n_le_zero,
+            n_ge_zero,
+            le_zero_sum,
+            ge_zero_sum,
+        )
+    }
+
     pub fn fgsea_multilevel_pathway(
         &self,
         pathway_indices: &[usize],

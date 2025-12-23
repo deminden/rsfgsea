@@ -531,25 +531,104 @@ pub fn run_gsea_gpu(
     let mut results = vec![None; pathways.len()];
 
     for (k, group) in by_size {
-        println!("Processing {} pathways of size k={}...", group.len(), k);
+        println!(
+            "Processing {} pathways of size k={} using shared null distribution...",
+            group.len(),
+            k
+        );
+
+        let null_distribution = engine.generate_null_distribution(
+            &scores_buffer,
+            k,
+            ranks.len(),
+            n_perm,
+            seed,
+            gpu_score_type,
+        )?;
+
+        // Pre-calculate stats for the null distribution
+        let mut n_le_zero = 0u64;
+        let mut n_ge_zero = 0u64;
+        let mut le_zero_sum = 0.0f64;
+        let mut ge_zero_sum = 0.0f64;
+        for &es in &null_distribution {
+            let perm_es = es as f64;
+            if perm_es <= 0.0 {
+                n_le_zero += 1;
+                le_zero_sum += perm_es;
+            }
+            if perm_es >= 0.0 {
+                n_ge_zero += 1;
+                ge_zero_sum += perm_es;
+            }
+        }
+        let le_zero_mean = if n_le_zero > 0 {
+            le_zero_sum / n_le_zero as f64
+        } else {
+            0.0
+        };
+        let ge_zero_mean = if n_ge_zero > 0 {
+            ge_zero_sum / n_ge_zero as f64
+        } else {
+            0.0
+        };
 
         for (orig_idx, hits) in group {
-            // First pass: Simple GSEA to filter
-            let gpu_res = engine.fgsea_simple_pathway_with_buffer(
-                &scores_buffer,
-                &hits,
-                &abs_weights_f32,
-                n_perm,
-                seed + orig_idx as u64,
-                gpu_score_type,
-            )?;
+            let mut sorted_hits = hits.clone();
+            sorted_hits.sort_unstable();
+            let (obs_es, peak_idx) =
+                calculate_es(&sorted_hits, &abs_weights, ranks.len(), score_type);
 
-            if gpu_res.p_value <= 0.05 {
-                // Second pass: Multilevel for significance
+            let mut n_le_es = 0u64;
+            let mut n_ge_es = 0u64;
+            for &es in &null_distribution {
+                let perm_es = es as f64;
+                if perm_es <= obs_es {
+                    n_le_es += 1;
+                }
+                if perm_es >= obs_es {
+                    n_ge_es += 1;
+                }
+            }
+
+            let p_value_simple = if obs_es > 0.0 {
+                (n_ge_es + 1) as f64 / (n_ge_zero + 1) as f64
+            } else {
+                (n_le_es + 1) as f64 / (n_le_zero + 1) as f64
+            };
+
+            let nes = if obs_es > 0.0 {
+                if ge_zero_mean != 0.0 {
+                    Some(obs_es / ge_zero_mean)
+                } else {
+                    None
+                }
+            } else if le_zero_mean != 0.0 {
+                Some(obs_es / le_zero_mean.abs())
+            } else {
+                None
+            };
+
+            let leading_edge: Vec<String> = if obs_es >= 0.0 {
+                sorted_hits
+                    .iter()
+                    .filter(|&&idx| idx <= peak_idx)
+                    .map(|&idx| ranks.genes[idx].clone())
+                    .collect()
+            } else {
+                sorted_hits
+                    .iter()
+                    .filter(|&&idx| idx >= peak_idx)
+                    .map(|&idx| ranks.genes[idx].clone())
+                    .collect()
+            };
+
+            if p_value_simple <= 0.05 {
+                // High precision pass for significant pathways
                 let ml_res = engine.fgsea_multilevel_pathway(
                     &hits,
                     &abs_weights_f32,
-                    1000, // sampleSize for multilevel refinement
+                    1000,
                     seed + orig_idx as u64,
                     gpu_score_type,
                 )?;
@@ -559,21 +638,21 @@ pub fn run_gsea_gpu(
                     p_value: ml_res.p_value,
                     padj: None,
                     es: ml_res.es,
-                    nes: Some(gpu_res.nes.unwrap_or(0.0)),
+                    nes,
                     log2err: Some(ml_res.log2err),
                     size: k,
-                    leading_edge: Vec::new(),
+                    leading_edge,
                 });
             } else {
                 results[orig_idx] = Some(EnrichmentResult {
                     pathway_name: pathways[orig_idx].name.clone(),
-                    p_value: gpu_res.p_value,
+                    p_value: p_value_simple,
                     padj: None,
-                    es: gpu_res.es,
-                    nes: gpu_res.nes,
+                    es: obs_es,
+                    nes,
                     log2err: None,
                     size: k,
-                    leading_edge: Vec::new(),
+                    leading_edge,
                 });
             }
         }
