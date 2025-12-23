@@ -65,20 +65,20 @@ async fn test_compute_es_batch_multiple() {
     // Generate random permutations
     use rand::prelude::*;
     let mut rng = rand::thread_rng();
-    let mut all_indices = Vec::with_capacity(n_perm * k as usize);
+    let mut subsets_indices = Vec::with_capacity(n_perm * k as usize);
 
     for _ in 0..n_perm {
         let mut pool: Vec<usize> = (0..n_total as usize).collect();
         pool.shuffle(&mut rng);
         let mut subset = pool[..k as usize].to_vec();
         subset.sort_unstable();
-        for i in 0..k as usize {
-            all_indices.push(subset[i] as u32);
+        for item in subset.iter().take(k as usize) {
+            subsets_indices.push(*item as u32);
         }
     }
 
     let results = engine
-        .compute_es_batch(&abs_scores, &all_indices, k, n_total, n_perm as u32, 0)
+        .compute_es_batch(&abs_scores, &subsets_indices, k, n_total, n_perm as u32, 0)
         .expect("GPU compute failed");
 
     assert_eq!(results.len(), n_perm);

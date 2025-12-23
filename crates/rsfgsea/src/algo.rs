@@ -573,87 +573,108 @@ pub fn run_gsea_gpu(
             0.0
         };
 
-        for (orig_idx, hits) in group {
-            let mut sorted_hits = hits.clone();
-            sorted_hits.sort_unstable();
-            let (obs_es, peak_idx) =
-                calculate_es(&sorted_hits, &abs_weights, ranks.len(), score_type);
+        // Process pathways of this size in parallel
+        let group_results: Vec<Option<EnrichmentResult>> = group
+            .par_iter()
+            .map(|(orig_idx, hits)| {
+                let mut sorted_hits = hits.clone();
+                sorted_hits.sort_unstable();
+                let (obs_es, peak_idx) =
+                    calculate_es(&sorted_hits, &abs_weights, ranks.len(), score_type);
 
-            let mut n_le_es = 0u64;
-            let mut n_ge_es = 0u64;
-            for &es in &null_distribution {
-                let perm_es = es as f64;
-                if perm_es <= obs_es {
-                    n_le_es += 1;
+                let mut n_le_es = 0u64;
+                let mut n_ge_es = 0u64;
+                for &es in &null_distribution {
+                    let perm_es = es as f64;
+                    if perm_es <= obs_es {
+                        n_le_es += 1;
+                    }
+                    if perm_es >= obs_es {
+                        n_ge_es += 1;
+                    }
                 }
-                if perm_es >= obs_es {
-                    n_ge_es += 1;
-                }
-            }
 
-            let p_value_simple = if obs_es > 0.0 {
-                (n_ge_es + 1) as f64 / (n_ge_zero + 1) as f64
-            } else {
-                (n_le_es + 1) as f64 / (n_le_zero + 1) as f64
-            };
+                let p_value_simple = if obs_es > 0.0 {
+                    (n_ge_es + 1) as f64 / (n_ge_zero + 1) as f64
+                } else {
+                    (n_le_es + 1) as f64 / (n_le_zero + 1) as f64
+                };
 
-            let nes = if obs_es > 0.0 {
-                if ge_zero_mean != 0.0 {
-                    Some(obs_es / ge_zero_mean)
+                let nes = if obs_es > 0.0 {
+                    if ge_zero_mean != 0.0 {
+                        Some(obs_es / ge_zero_mean)
+                    } else {
+                        None
+                    }
+                } else if le_zero_mean != 0.0 {
+                    Some(obs_es / le_zero_mean.abs())
                 } else {
                     None
+                };
+
+                let leading_edge: Vec<String> = if obs_es >= 0.0 {
+                    sorted_hits
+                        .iter()
+                        .filter(|&&idx| idx <= peak_idx)
+                        .map(|&idx| ranks.genes[idx].clone())
+                        .collect()
+                } else {
+                    sorted_hits
+                        .iter()
+                        .filter(|&&idx| idx >= peak_idx)
+                        .map(|&idx| ranks.genes[idx].clone())
+                        .collect()
+                };
+
+                if p_value_simple <= 0.05 {
+                    // High precision pass for significant pathways
+                    let ml_res = engine
+                        .fgsea_multilevel_pathway_with_buffer(
+                            &scores_buffer,
+                            hits,
+                            &abs_weights_f32,
+                            1000,
+                            seed + *orig_idx as u64,
+                            gpu_score_type,
+                        )
+                        .ok()?;
+
+                    // Scale multilevel p-value
+                    let denom_prob = if obs_es > 0.0 {
+                        (n_ge_zero + 1) as f64 / (n_perm + 1) as f64
+                    } else {
+                        (n_le_zero + 1) as f64 / (n_perm + 1) as f64
+                    };
+                    let p_value_ml = (ml_res.p_value / denom_prob).min(1.0);
+
+                    Some(EnrichmentResult {
+                        pathway_name: pathways[*orig_idx].name.clone(),
+                        p_value: p_value_ml,
+                        padj: None,
+                        es: ml_res.es,
+                        nes,
+                        log2err: Some(ml_res.log2err),
+                        size: k,
+                        leading_edge,
+                    })
+                } else {
+                    Some(EnrichmentResult {
+                        pathway_name: pathways[*orig_idx].name.clone(),
+                        p_value: p_value_simple,
+                        padj: None,
+                        es: obs_es,
+                        nes,
+                        log2err: None,
+                        size: k,
+                        leading_edge,
+                    })
                 }
-            } else if le_zero_mean != 0.0 {
-                Some(obs_es / le_zero_mean.abs())
-            } else {
-                None
-            };
+            })
+            .collect();
 
-            let leading_edge: Vec<String> = if obs_es >= 0.0 {
-                sorted_hits
-                    .iter()
-                    .filter(|&&idx| idx <= peak_idx)
-                    .map(|&idx| ranks.genes[idx].clone())
-                    .collect()
-            } else {
-                sorted_hits
-                    .iter()
-                    .filter(|&&idx| idx >= peak_idx)
-                    .map(|&idx| ranks.genes[idx].clone())
-                    .collect()
-            };
-
-            if p_value_simple <= 0.05 {
-                // High precision pass for significant pathways
-                let ml_res = engine.fgsea_multilevel_pathway(
-                    &hits,
-                    &abs_weights_f32,
-                    1000,
-                    seed + orig_idx as u64,
-                    gpu_score_type,
-                )?;
-
-                results[orig_idx] = Some(EnrichmentResult {
-                    pathway_name: pathways[orig_idx].name.clone(),
-                    p_value: ml_res.p_value,
-                    padj: None,
-                    es: ml_res.es,
-                    nes,
-                    log2err: Some(ml_res.log2err),
-                    size: k,
-                    leading_edge,
-                });
-            } else {
-                results[orig_idx] = Some(EnrichmentResult {
-                    pathway_name: pathways[orig_idx].name.clone(),
-                    p_value: p_value_simple,
-                    padj: None,
-                    es: obs_es,
-                    nes,
-                    log2err: None,
-                    size: k,
-                    leading_edge,
-                });
+        for (i, res) in group_results.into_iter().enumerate() {
+            if let Some(r) = res {
+                results[group[i].0] = Some(r);
             }
         }
     }

@@ -474,9 +474,29 @@ impl GpuEngine {
         seed: u64,
         score_type: u32,
     ) -> Result<FgseaMultilevelResult> {
+        let scores_buffer = self.upload_scores(abs_scores);
+        self.fgsea_multilevel_pathway_with_buffer(
+            &scores_buffer,
+            pathway_indices,
+            abs_scores,
+            n_perm,
+            seed,
+            score_type,
+        )
+    }
+
+    pub fn fgsea_multilevel_pathway_with_buffer(
+        &self,
+        scores_buffer: &wgpu::Buffer,
+        pathway_indices: &[usize],
+        abs_scores: &[f32],
+        n_perm: usize, // Base number of permutations (e.g. 1000)
+        seed: u64,
+        score_type: u32,
+    ) -> Result<FgseaMultilevelResult> {
         use rand::SeedableRng;
         use rand::prelude::*;
-        use rand::rngs::{SmallRng, StdRng};
+        use rand::rngs::StdRng;
         use rayon::prelude::*;
 
         let n_total = abs_scores.len();
@@ -490,7 +510,6 @@ impl GpuEngine {
         let obs_es = self.calculate_es_cpu(&sorted_pathway, abs_scores, score_type)?;
         let is_pos = obs_es >= 0.0;
 
-        let scores_buffer = self.upload_scores(abs_scores);
         let _seed_rng = StdRng::seed_from_u64(seed);
 
         // Initial samples
@@ -499,7 +518,7 @@ impl GpuEngine {
         current_samples
             .par_chunks_mut(k)
             .for_each_with(pool.clone(), |local_pool, chunk| {
-                let mut local_rng = SmallRng::from_entropy();
+                let mut local_rng = rand::thread_rng();
                 for i in 0..k {
                     let j = local_rng.gen_range(i..n_total);
                     local_pool.swap(i, j);
@@ -514,7 +533,7 @@ impl GpuEngine {
         for _level in 0..200 {
             // Evaluated current samples on GPU
             let batch_results = self.compute_es_batch_with_buffer(
-                &scores_buffer,
+                scores_buffer,
                 &current_samples,
                 k as u32,
                 n_total as u32,
@@ -569,7 +588,7 @@ impl GpuEngine {
 
             let current_samples_ref = &current_samples;
             next_samples.par_chunks_mut(k).for_each(|chunk| {
-                let mut local_rng = SmallRng::from_entropy();
+                let mut local_rng = rand::thread_rng();
                 let src_idx = top_indices[local_rng.gen_range(0..top_indices.len())];
                 let mut sample = current_samples_ref[src_idx * k..(src_idx + 1) * k].to_vec();
 

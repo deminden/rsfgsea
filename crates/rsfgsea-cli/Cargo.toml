@@ -18,6 +18,10 @@ path = "src/bin/benchmark.rs"
 name = "gsea-verify"
 path = "src/bin/verify_precision.rs"
 
+[[bin]]
+name = "gsea-optimize-test"
+path = "src/bin/verify_optimization.rs"
+
 [dependencies]
 rsfgsea = { path = "../rsfgsea" }
 rsfgsea-gpu = { path = "../rsfgsea-gpu" }

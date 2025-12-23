@@ -1,6 +1,5 @@
 /// Simple CPU-only unit tests for the GPU implementation logic
 /// These test the ES calculation on CPU without requiring GPU hardware
-use rsfgsea_gpu::GpuEngine;
 
 #[test]
 fn test_es_calculation_logic() {
@@ -94,8 +93,8 @@ fn test_data_preparation() {
     for _ in 0..n_perm {
         let mut pool: Vec<usize> = (0..n_total).collect();
         pool.partial_shuffle(&mut rng, k);
-        for i in 0..k {
-            all_indices.push(pool[i] as u32);
+        for item in pool.iter().take(k) {
+            all_indices.push(*item as u32);
         }
     }
 
