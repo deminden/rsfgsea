@@ -668,6 +668,7 @@ pub fn run_gsea(
 
     final_results
 }
+#[allow(clippy::too_many_arguments)]
 pub fn run_multilevel_gsea(
     n_total: usize,
     scaled_scores: &[i64],

@@ -1,3 +1,6 @@
+#![allow(dead_code)]
+#![allow(clippy::needless_range_loop)]
+
 use crate::core::ScoreType;
 use crate::rng_compat::{Mt19937Compat, combination};
 

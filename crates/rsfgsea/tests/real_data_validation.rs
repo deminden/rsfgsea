@@ -27,7 +27,7 @@ mod tests {
         for (gene, pathway, es, pval) in ref_data {
             ref_map
                 .entry(gene)
-                .or_insert_with(HashMap::new)
+                .or_default()
                 .insert(pathway, (es, pval));
         }
 

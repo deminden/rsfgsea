@@ -1,3 +1,7 @@
+#![allow(dead_code)]
+#![allow(unused_assignments)]
+#![allow(clippy::needless_range_loop)]
+
 use crate::rng_compat::{Mt19937Compat, combination, uid_wrapper};
 use special::Gamma;
 

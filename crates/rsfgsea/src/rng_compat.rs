@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 // FGSEA-compatible RNG helpers:
 // - MT19937 engine compatible with boost::mt19937
 // - uid_wrapper rejection sampling
