@@ -2,7 +2,8 @@
 #![allow(clippy::needless_range_loop)]
 
 use crate::core::ScoreType;
-use crate::rng_compat::{Mt19937Compat, combination};
+use crate::rng_compat::{Mt19937Compat, combination, uid_wrapper};
+use rayon::prelude::*;
 
 const EPS: f64 = 1e-13;
 
@@ -489,6 +490,84 @@ pub struct BatchCounts {
     pub ge_zero_sum: Vec<f64>,
 }
 
+#[inline]
+fn splitmix64(mut x: u64) -> u64 {
+    x = x.wrapping_add(0x9e37_79b9_7f4a_7c15);
+    let mut z = x;
+    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    z ^ (z >> 31)
+}
+
+fn merge_batch_counts(mut acc: BatchCounts, rhs: BatchCounts) -> BatchCounts {
+    for i in 0..acc.le_es.len() {
+        acc.le_es[i] += rhs.le_es[i];
+        acc.ge_es[i] += rhs.ge_es[i];
+        acc.le_zero[i] += rhs.le_zero[i];
+        acc.ge_zero[i] += rhs.ge_zero[i];
+        acc.le_zero_sum[i] += rhs.le_zero_sum[i];
+        acc.ge_zero_sum[i] += rhs.ge_zero_sum[i];
+    }
+    acc
+}
+
+#[inline]
+fn empty_batch_counts(m: usize) -> BatchCounts {
+    BatchCounts {
+        le_es: vec![0; m],
+        ge_es: vec![0; m],
+        le_zero: vec![0; m],
+        ge_zero: vec![0; m],
+        le_zero_sum: vec![0.0; m],
+        ge_zero_sum: vec![0.0; m],
+    }
+}
+
+#[inline]
+fn chunk_ranges(iterations: usize) -> Vec<(usize, usize, usize)> {
+    if iterations == 0 {
+        return Vec::new();
+    }
+    let workers = rayon::current_num_threads().max(1);
+    let chunks = iterations.min((workers * 8).max(1));
+    let base = iterations / chunks;
+    let rem = iterations % chunks;
+    let mut ranges = Vec::with_capacity(chunks);
+    let mut start = 0usize;
+    for ci in 0..chunks {
+        let len = base + usize::from(ci < rem);
+        let end = start + len;
+        ranges.push((ci, start, end));
+        start = end;
+    }
+    ranges
+}
+
+#[inline]
+fn sample_k_small_reuse(
+    n: usize,
+    k: usize,
+    rng: &mut Mt19937Compat,
+    marks: &mut [u32],
+    stamp: &mut u32,
+    out: &mut Vec<usize>,
+) {
+    *stamp = stamp.wrapping_add(1);
+    if *stamp == 0 {
+        marks.fill(0);
+        *stamp = 1;
+    }
+    out.clear();
+    while out.len() < k {
+        let x = uid_wrapper(1, n, rng);
+        let idx = x - 1;
+        if marks[idx] != *stamp {
+            marks[idx] = *stamp;
+            out.push(x);
+        }
+    }
+}
+
 pub fn calc_gsea_stat_cumulative_batch(
     stats: &[i64],
     gsea_param: f64,
@@ -501,16 +580,11 @@ pub fn calc_gsea_stat_cumulative_batch(
     let n = stats.len();
     let k = *pathways_sizes.iter().max().unwrap_or(&0);
     let m = pathways_sizes.len();
-    let mut out = BatchCounts {
-        le_es: vec![0; m],
-        ge_es: vec![0; m],
-        le_zero: vec![0; m],
-        ge_zero: vec![0; m],
-        le_zero_sum: vec![0.0; m],
-        ge_zero_sum: vec![0.0; m],
-    };
+    let mut out = empty_batch_counts(m);
+    if iterations == 0 || m == 0 || k == 0 {
+        return out;
+    }
     let mut rng = Mt19937Compat::new(seed as u32);
-
     for _ in 0..iterations {
         let selected = combination(1, n, k, &mut rng); // 1-based
         let rand_es = calc_gsea_stat_cumulative(stats, &selected, gsea_param, score_type);
@@ -532,8 +606,74 @@ pub fn calc_gsea_stat_cumulative_batch(
             }
         }
     }
-
     out
+}
+
+pub fn calc_gsea_stat_cumulative_batch_parallel(
+    stats: &[i64],
+    gsea_param: f64,
+    pathway_scores: &[f64],
+    pathways_sizes: &[usize], // 1-based indices into cumulative vector
+    iterations: usize,
+    seed: u64,
+    score_type: ScoreType,
+) -> BatchCounts {
+    let n = stats.len();
+    let k = *pathways_sizes.iter().max().unwrap_or(&0);
+    let m = pathways_sizes.len();
+    let empty = empty_batch_counts(m);
+    if iterations == 0 || m == 0 || k == 0 {
+        return empty;
+    }
+    let score_indices: Vec<usize> = pathways_sizes.iter().map(|&x| x - 1).collect();
+    let pool_template: Vec<usize> = (1..=n).collect();
+
+    chunk_ranges(iterations)
+        .into_par_iter()
+        .map(|(chunk_idx, range_start, range_end)| {
+            let mut out = empty_batch_counts(m);
+            let chunk_seed = splitmix64(seed ^ ((chunk_idx as u64) << 1) ^ (range_start as u64));
+            let mut rng = Mt19937Compat::new(chunk_seed as u32);
+            let mut pool = pool_template.clone();
+            let mut marks = vec![0u32; n];
+            let mut stamp = 0u32;
+            let mut selected = vec![0usize; k];
+            for _ in range_start..range_end {
+                if k > n / 2 {
+                    pool.copy_from_slice(&pool_template);
+                    for i in (0..k).rev() {
+                        let r = n - 1 - i;
+                        let x = uid_wrapper(0, r, &mut rng);
+                        let j = i + x;
+                        pool.swap(i, j);
+                    }
+                    selected.copy_from_slice(&pool[..k]);
+                } else {
+                    sample_k_small_reuse(n, k, &mut rng, &mut marks, &mut stamp, &mut selected);
+                }
+
+                let rand_es = calc_gsea_stat_cumulative(stats, &selected, gsea_param, score_type);
+                for i in 0..m {
+                    let v = rand_es[score_indices[i]];
+                    if v <= pathway_scores[i] {
+                        out.le_es[i] += 1;
+                    }
+                    if v >= pathway_scores[i] {
+                        out.ge_es[i] += 1;
+                    }
+                    if v <= 0.0 {
+                        out.le_zero[i] += 1;
+                        out.le_zero_sum[i] += v;
+                    }
+                    if v >= 0.0 {
+                        out.ge_zero[i] += 1;
+                        out.ge_zero_sum[i] += v;
+                    }
+                }
+            }
+            out
+        })
+        .reduce(|| empty_batch_counts(m), merge_batch_counts)
 }
 
 pub fn calc_gsea_stat_cumulative_batch_f64(
@@ -548,16 +688,11 @@ pub fn calc_gsea_stat_cumulative_batch_f64(
     let n = stats.len();
     let k = *pathways_sizes.iter().max().unwrap_or(&0);
     let m = pathways_sizes.len();
-    let mut out = BatchCounts {
-        le_es: vec![0; m],
-        ge_es: vec![0; m],
-        le_zero: vec![0; m],
-        ge_zero: vec![0; m],
-        le_zero_sum: vec![0.0; m],
-        ge_zero_sum: vec![0.0; m],
-    };
+    let mut out = empty_batch_counts(m);
+    if iterations == 0 || m == 0 || k == 0 {
+        return out;
+    }
     let mut rng = Mt19937Compat::new(seed as u32);
-
     for _ in 0..iterations {
         let selected = combination(1, n, k, &mut rng); // 1-based
         let rand_es = calc_gsea_stat_cumulative_f64(stats, &selected, gsea_param, score_type);
@@ -579,6 +714,73 @@ pub fn calc_gsea_stat_cumulative_batch_f64(
             }
         }
     }
-
     out
+}
+
+pub fn calc_gsea_stat_cumulative_batch_f64_parallel(
+    stats: &[f64],
+    gsea_param: f64,
+    pathway_scores: &[f64],
+    pathways_sizes: &[usize], // 1-based indices into cumulative vector
+    iterations: usize,
+    seed: u64,
+    score_type: ScoreType,
+) -> BatchCounts {
+    let n = stats.len();
+    let k = *pathways_sizes.iter().max().unwrap_or(&0);
+    let m = pathways_sizes.len();
+    let empty = empty_batch_counts(m);
+    if iterations == 0 || m == 0 || k == 0 {
+        return empty;
+    }
+    let score_indices: Vec<usize> = pathways_sizes.iter().map(|&x| x - 1).collect();
+    let pool_template: Vec<usize> = (1..=n).collect();
+
+    chunk_ranges(iterations)
+        .into_par_iter()
+        .map(|(chunk_idx, range_start, range_end)| {
+            let mut out = empty_batch_counts(m);
+            let chunk_seed = splitmix64(seed ^ ((chunk_idx as u64) << 1) ^ (range_start as u64));
+            let mut rng = Mt19937Compat::new(chunk_seed as u32);
+            let mut pool = pool_template.clone();
+            let mut marks = vec![0u32; n];
+            let mut stamp = 0u32;
+            let mut selected = vec![0usize; k];
+            for _ in range_start..range_end {
+                if k > n / 2 {
+                    pool.copy_from_slice(&pool_template);
+                    for i in (0..k).rev() {
+                        let r = n - 1 - i;
+                        let x = uid_wrapper(0, r, &mut rng);
+                        let j = i + x;
+                        pool.swap(i, j);
+                    }
+                    selected.copy_from_slice(&pool[..k]);
+                } else {
+                    sample_k_small_reuse(n, k, &mut rng, &mut marks, &mut stamp, &mut selected);
+                }
+
+                let rand_es =
+                    calc_gsea_stat_cumulative_f64(stats, &selected, gsea_param, score_type);
+                for i in 0..m {
+                    let v = rand_es[score_indices[i]];
+                    if v <= pathway_scores[i] {
+                        out.le_es[i] += 1;
+                    }
+                    if v >= pathway_scores[i] {
+                        out.ge_es[i] += 1;
+                    }
+                    if v <= 0.0 {
+                        out.le_zero[i] += 1;
+                        out.le_zero_sum[i] += v;
+                    }
+                    if v >= 0.0 {
+                        out.ge_zero[i] += 1;
+                        out.ge_zero_sum[i] += v;
+                    }
+                }
+            }
+            out
+        })
+        .reduce(|| empty_batch_counts(m), merge_batch_counts)
 }

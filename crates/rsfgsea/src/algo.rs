@@ -1,8 +1,7 @@
 use crate::core::{EnrichmentResult, Pathway, RankedList, ScoreType};
 use crate::esruler_compat::EsRulerCompat;
 use crate::fastgsea_compat::{calc_gsea_stat_cumulative_batch_f64, calc_gsea_stat_cumulative_f64};
-use crate::rng_compat::{Mt19937Compat, RMt19937SeedCompat, combination, uid_wrapper};
-#[cfg(feature = "gpu")]
+use crate::rng_compat::{Mt19937Compat, RMt19937SeedCompat, combination};
 use rayon::prelude::*;
 use special::Gamma;
 use statrs::distribution::{Beta, ContinuousCDF};
@@ -210,25 +209,6 @@ fn log2_qbeta(prob: f64, shape1: f64, shape2: f64) -> f64 {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MultilevelEngine {
-    EsRulerCompat,
-    Legacy,
-}
-
-impl MultilevelEngine {
-    pub fn from_env() -> Self {
-        match std::env::var("RSFGSEA_MULTILEVEL_ENGINE")
-            .unwrap_or_else(|_| "esruler".to_string())
-            .to_lowercase()
-            .as_str()
-        {
-            "legacy" => Self::Legacy,
-            _ => Self::EsRulerCompat,
-        }
-    }
-}
-
 fn derive_fgsea_simple_seed(seed: u64) -> (u64, RMt19937SeedCompat) {
     // Mirrors first sample.int(1e9, 1) draw in fgseaMultilevel().
     let mut rng = RMt19937SeedCompat::from_r_set_seed(seed as u32);
@@ -313,6 +293,81 @@ pub fn run_gsea(
     score_type: ScoreType,
     gsea_param: f64,
 ) -> Vec<EnrichmentResult> {
+    run_gsea_internal(
+        ranks, pathways, n_perm, seed, min_size, max_size, eps, score_type, gsea_param, true,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_gsea_simple(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    n_perm: usize,
+    seed: u64,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+) -> Vec<EnrichmentResult> {
+    run_gsea_internal(
+        ranks, pathways, n_perm, seed, min_size, max_size, eps, score_type, gsea_param, false,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    nperm: Option<usize>,
+    n_perm_simple: usize,
+    seed: u64,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+) -> Vec<EnrichmentResult> {
+    if let Some(nperm_simple_mode) = nperm {
+        run_gsea_simple(
+            ranks,
+            pathways,
+            nperm_simple_mode,
+            seed,
+            min_size,
+            max_size,
+            eps,
+            score_type,
+            gsea_param,
+        )
+    } else {
+        run_gsea(
+            ranks,
+            pathways,
+            n_perm_simple,
+            seed,
+            min_size,
+            max_size,
+            eps,
+            score_type,
+            gsea_param,
+        )
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_gsea_internal(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    n_perm: usize,
+    seed: u64,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    allow_multilevel: bool,
+) -> Vec<EnrichmentResult> {
     struct Working {
         pathway_name: String,
         size: usize,
@@ -366,52 +421,59 @@ pub fn run_gsea(
     // maxSize <- min(maxSize, length(universe) - 1)
     let min_size = min_size.max(1);
     let max_size = max_size.min(n_total.saturating_sub(1));
+    let eps = eps.clamp(0.0, 1.0);
     let (abs_weights, scaled_scores, ns_total) = ranks.prepare(gsea_param);
     let (simple_seed, mut r_seed_rng) = derive_fgsea_simple_seed(seed);
 
-    let mut work = Vec::new();
-    for pw in pathways {
-        let mut hits: Vec<usize> = pw
-            .genes
-            .iter()
-            .filter_map(|g| gene_to_idx.get(g).copied())
-            .collect();
-        hits.sort_unstable();
-        hits.dedup();
-        if hits.len() < min_size || hits.len() > max_size {
-            continue;
-        }
-        let (obs_es, _) =
-            calculate_gsea_score(&hits, &scaled_scores, ns_total, n_total, score_type);
-        let (es, peak_idx) = calculate_es_fgsea(&abs_weights, &hits, n_total, score_type);
-        work.push(Working {
-            pathway_name: pw.name.clone(),
-            size: hits.len(),
-            hits,
-            es,
-            obs_es,
-            peak_idx,
-            n_le_es: 0,
-            n_ge_es: 0,
-            n_le_zero: 0,
-            n_ge_zero: 0,
-            le_zero_sum: 0.0,
-            ge_zero_sum: 0.0,
-            nes: None,
-            p_value: f64::NAN,
-            padj: None,
-            log2err: None,
-        });
-    }
+    // Heavy pathway preprocessing is independent per pathway; use parallel map
+    // while preserving deterministic input order.
+    let mut work: Vec<Working> = pathways
+        .par_iter()
+        .map(|pw| {
+            let mut hits: Vec<usize> = pw
+                .genes
+                .iter()
+                .filter_map(|g| gene_to_idx.get(g).copied())
+                .collect();
+            hits.sort_unstable();
+            hits.dedup();
+            if hits.len() < min_size || hits.len() > max_size {
+                return None;
+            }
+            let (obs_es, _) =
+                calculate_gsea_score(&hits, &scaled_scores, ns_total, n_total, score_type);
+            let (es, peak_idx) = calculate_es_fgsea(&abs_weights, &hits, n_total, score_type);
+            Some(Working {
+                pathway_name: pw.name.clone(),
+                size: hits.len(),
+                hits,
+                es,
+                obs_es,
+                peak_idx,
+                n_le_es: 0,
+                n_ge_es: 0,
+                n_le_zero: 0,
+                n_ge_zero: 0,
+                le_zero_sum: 0.0,
+                ge_zero_sum: 0.0,
+                nes: None,
+                p_value: f64::NAN,
+                padj: None,
+                log2err: None,
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .flatten()
+        .collect();
 
-    if n_perm > 0 && !work.is_empty() {
+    if allow_multilevel && n_perm > 0 && !work.is_empty() {
         if work.len() == 1 {
             let mut rng = Mt19937Compat::new(simple_seed as u32);
             let k = work[0].size;
             let pathway_score = work[0].es;
             for _ in 0..n_perm {
-                let mut rand_sample = combination(1, n_total, k, &mut rng);
-                rand_sample.sort_unstable();
+                let rand_sample = combination(1, n_total, k, &mut rng);
                 let rand_es =
                     calc_gsea_stat_cumulative_f64(&abs_weights, &rand_sample, 1.0, score_type)
                         [k - 1];
@@ -588,7 +650,7 @@ pub fn run_gsea(
             let eps_group = eps * denom_prob_min;
 
             let obs_es: Vec<GseaScore> = idxs.iter().map(|&i| work[i].obs_es).collect();
-            let ml = run_multilevel_gsea_group_with_engine(
+            let ml = run_multilevel_gsea_group(
                 n_total,
                 &scaled_scores,
                 ns_total,
@@ -598,7 +660,6 @@ pub fn run_gsea(
                 101,
                 multilevel_seed.unwrap_or(simple_seed),
                 eps_group,
-                MultilevelEngine::from_env(),
             );
 
             for (local_i, &global_i) in idxs.iter().enumerate() {
@@ -693,13 +754,14 @@ pub fn run_gsea(
         }
     }
 
+    final_results.sort_by(|a, b| a.pathway_name.cmp(&b.pathway_name));
     final_results
 }
 #[allow(clippy::too_many_arguments)]
 pub fn run_multilevel_gsea(
     n_total: usize,
     scaled_scores: &[i64],
-    ns_total: i64,
+    _ns_total: i64,
     k: usize,
     obs_es: GseaScore,
     score_type: ScoreType,
@@ -707,129 +769,64 @@ pub fn run_multilevel_gsea(
     seed: u64,
     eps: f64,
 ) -> (f64, Option<f64>) {
-    let (p, _cp_ge_half, err) = run_multilevel_gsea_with_engine_details(
+    let (p, _cp_ge_half, err) = run_multilevel_gsea_impl(
         n_total,
         scaled_scores,
-        ns_total,
         k,
         obs_es,
         score_type,
         sample_size,
         seed,
         eps,
-        MultilevelEngine::from_env(),
     );
     (p, err)
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_multilevel_gsea_with_engine(
+fn run_multilevel_gsea_impl(
     n_total: usize,
     scaled_scores: &[i64],
-    ns_total: i64,
     k: usize,
     obs_es: GseaScore,
     score_type: ScoreType,
     sample_size: usize,
     seed: u64,
     eps: f64,
-    engine: MultilevelEngine,
-) -> (f64, Option<f64>) {
-    let (p, _cp_ge_half, err) = run_multilevel_gsea_with_engine_details(
-        n_total,
-        scaled_scores,
-        ns_total,
-        k,
-        obs_es,
-        score_type,
-        sample_size,
-        seed,
-        eps,
-        engine,
-    );
-    (p, err)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_multilevel_gsea_with_engine_details(
-    n_total: usize,
-    scaled_scores: &[i64],
-    ns_total: i64,
-    k: usize,
-    obs_es: GseaScore,
-    score_type: ScoreType,
-    sample_size: usize,
-    seed: u64,
-    eps: f64,
-    engine: MultilevelEngine,
 ) -> (f64, bool, Option<f64>) {
-    match engine {
-        MultilevelEngine::EsRulerCompat => run_multilevel_gsea_esruler(
-            n_total,
-            scaled_scores,
-            k,
-            obs_es,
-            score_type,
-            sample_size,
-            seed,
-            eps,
-        ),
-        MultilevelEngine::Legacy => run_multilevel_gsea_legacy(
-            n_total,
-            scaled_scores,
-            ns_total,
-            k,
-            obs_es,
-            score_type,
-            sample_size,
-            seed,
-            eps,
-        ),
-    }
+    run_multilevel_gsea_esruler(
+        n_total,
+        scaled_scores,
+        k,
+        obs_es,
+        score_type,
+        sample_size,
+        seed,
+        eps,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_multilevel_gsea_group_with_engine(
+fn run_multilevel_gsea_group(
     n_total: usize,
     scaled_scores: &[i64],
-    ns_total: i64,
+    _ns_total: i64,
     k: usize,
     obs_es_list: &[GseaScore],
     score_type: ScoreType,
     sample_size: usize,
     seed: u64,
     eps: f64,
-    engine: MultilevelEngine,
 ) -> Vec<(f64, bool, Option<f64>)> {
-    match engine {
-        MultilevelEngine::EsRulerCompat => run_multilevel_gsea_esruler_group(
-            n_total,
-            scaled_scores,
-            k,
-            obs_es_list,
-            score_type,
-            sample_size,
-            seed,
-            eps,
-        ),
-        MultilevelEngine::Legacy => obs_es_list
-            .iter()
-            .copied()
-            .map(|obs_es| {
-                run_multilevel_gsea_legacy(
-                    n_total,
-                    scaled_scores,
-                    ns_total,
-                    k,
-                    obs_es,
-                    score_type,
-                    sample_size,
-                    seed,
-                    eps,
-                )
-            })
-            .collect(),
-    }
+    run_multilevel_gsea_esruler_group(
+        n_total,
+        scaled_scores,
+        k,
+        obs_es_list,
+        score_type,
+        sample_size,
+        seed,
+        eps,
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -933,129 +930,6 @@ fn run_multilevel_gsea_esruler_group(
             }
         })
         .collect()
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_multilevel_gsea_legacy(
-    n_total: usize,
-    scaled_scores: &[i64],
-    ns_total: i64,
-    k: usize,
-    obs_es: GseaScore,
-    score_type: ScoreType,
-    sample_size: usize,
-    seed: u64,
-    _eps: f64,
-) -> (f64, bool, Option<f64>) {
-    let mut rng = Mt19937Compat::new(seed as u32);
-
-    // Initial samples (simple permutation)
-    let mut current_samples: Vec<Vec<usize>> = (0..sample_size)
-        .map(|_| {
-            let mut s = combination(0, n_total - 1, k, &mut rng);
-            s.sort_unstable();
-            s
-        })
-        .collect();
-
-    let mut log_p: f64 = 0.0;
-
-    // We only care about matching the obs_es tail
-    let is_pos = obs_es.get_double() >= 0.0;
-
-    for _level in 0..100 {
-        let mut scores: Vec<((GseaScore, usize), usize)> = current_samples
-            .iter()
-            .enumerate()
-            .map(|(i, s)| {
-                (
-                    calculate_gsea_score(s, scaled_scores, ns_total, n_total, score_type),
-                    i,
-                )
-            })
-            .collect();
-
-        // Sort by ES. If obs_es is negative, we want to look at the lower tail (more negative)
-        if is_pos {
-            scores.sort_by(|a, b| a.0.0.compare(&b.0.0));
-        } else {
-            scores.sort_by(|a, b| b.0.0.compare(&a.0.0));
-        }
-
-        let mid = sample_size / 2;
-        let threshold = scores[mid].0.0;
-
-        // Termination condition
-        let reached = if is_pos {
-            threshold.compare(&obs_es) != std::cmp::Ordering::Less
-        } else {
-            threshold.compare(&obs_es) != std::cmp::Ordering::Greater
-        };
-
-        if reached {
-            let count = scores
-                .iter()
-                .filter(|s| {
-                    if is_pos {
-                        s.0.0.compare(&obs_es) != std::cmp::Ordering::Less
-                    } else {
-                        s.0.0.compare(&obs_es) != std::cmp::Ordering::Greater
-                    }
-                })
-                .count();
-            log_p += ((count + 1) as f64 / (sample_size + 1) as f64).ln();
-            break;
-        }
-
-        log_p += ((sample_size - mid + 1) as f64 / (sample_size + 1) as f64).ln();
-
-        // Resample via MCMC
-        let top_indices: Vec<usize> = scores[mid..].iter().map(|s| s.1).collect();
-        let mut next_samples = Vec::with_capacity(sample_size);
-        for _ in 0..sample_size {
-            let src_idx = top_indices[uid_wrapper(0, top_indices.len() - 1, &mut rng)];
-            let mut sample = current_samples[src_idx].clone();
-
-            // Perturbate
-            let n_swaps = (k as f64 * 0.1).ceil() as usize;
-            for _ in 0..n_swaps {
-                let hit_pos = uid_wrapper(0, k - 1, &mut rng);
-                let old_gene = sample[hit_pos];
-                let mut new_gene = uid_wrapper(0, n_total - 1, &mut rng);
-                while sample.binary_search(&new_gene).is_ok() {
-                    new_gene = uid_wrapper(0, n_total - 1, &mut rng);
-                }
-
-                sample[hit_pos] = new_gene;
-                sample.sort_unstable();
-                let (new_s, _) =
-                    calculate_gsea_score(&sample, scaled_scores, ns_total, n_total, score_type);
-
-                let reject = if is_pos {
-                    new_s.compare(&threshold) == std::cmp::Ordering::Less
-                } else {
-                    new_s.compare(&threshold) == std::cmp::Ordering::Greater
-                };
-
-                if reject {
-                    let idx = sample.binary_search(&new_gene).unwrap();
-                    sample[idx] = old_gene;
-                    sample.sort_unstable();
-                }
-            }
-            next_samples.push(sample);
-        }
-        current_samples = next_samples;
-    }
-
-    let p_val = log_p.exp().min(1.0);
-    // Statistical error estimation (matching fgsea formula)
-    let log2err = (((log_p / 2.0_f64.ln()).abs().floor() + 1.0)
-        * (((sample_size as f64 + 1.0) / 2.0).trigamma() - (sample_size as f64 + 1.0).trigamma()))
-    .sqrt()
-        / 2.0_f64.ln();
-
-    (p_val, true, Some(log2err))
 }
 
 #[cfg(feature = "gpu")]

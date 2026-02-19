@@ -152,41 +152,57 @@ PATHWAY_B  description  GENE4  GENE5
 
 ## Performance Comparison (Computation Only)
 
-Benchmarked on **AMD Ryzen 9 7950X3D**. Times exclude I/O and are **median of 3 runs**.
+Benchmarked on **AMD Ryzen 9 7950X3D**. Times are **median of 3 runs**.
 
-Inputs:
+**Benchmark setup**:
 - Ranked list: `data/pearson_symbols.rnk` (356 genes)
 - Small pathways: `data/h.all.v2025.1.Hs.symbols.gmt` (50 total, 37 passing size filters)
 - Large pathways: `data/Human_GO_AllPathways_noPFOCR_with_GO_iea_March_01_2024_symbol_renamed.gmt` (29,705 total, 5,582 passing size filters)
 - Size filters: `minSize=1`, `maxSize=5000`
+- R multicore mode: `BiocParallel::MulticoreParam(workers=16)` passed as `BPPARAM`
 
-### 1. Multilevel GSEA
-*Parameters: `eps=1e-50`, `sampleSize=101` (R), `nPermSimple=1000` (rsfgsea simple stage).*
+### Modes (Important)
 
-| Pathways | Implementation | Time (ms) | Speedup vs R |
-| :--- | :--- | :--- | :--- |
-| **50** (Small) | **rsfgsea** | **2** | **78.0x** |
-| | R `fgseaMultilevel` | 156 | 1.0x |
-| **29,705** (Large) | **rsfgsea** | **258** | **3.7x** |
-| | R `fgseaMultilevel` | 963 | 1.0x |
+- **Multilevel mode** (`run_gsea` / R `fgseaMultilevel`): adaptive multilevel Monte Carlo for very small p-values.
+- **Simple mode** (`run_gsea_simple` / R `fgseaSimple`): fixed permutation sampling (`nPermSimple`).
+- These modes have different compute structure, so multicore scaling is expected to differ between them.
 
-### 2. Simple GSEA
-*Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).*
+### Benchmark Results
 
-| Pathways | Variant | Implementation | Time (ms) | Speedup vs R |
-| :--- | :--- | :--- | :--- | :--- |
-| **50** | 1M Perms | **rsfgsea** | **822** | **4.7x** |
-| | | R `fgseaSimple` | 3,827 | 1.0x |
-| **29,705** | 10k Perms | **rsfgsea** | **979** | **3.2x** |
-| | | R `fgseaSimple` | 3,086 | 1.0x |
+#### Multilevel Mode
+Parameters: `eps=1e-50`, `sampleSize=101` (R), `nPermSimple=1000` (rsfgsea simple stage).
 
-**Note**: these are current repo results on this machine/configuration.
+| Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust vs R (1w) | Rust vs R (16w) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Small (50 pathways) | 2 | 30 | 4 | 50 | 15.0x | 12.5x |
+| Large (29,705 pathways) | 267 | 778 | 224 | 769 | 2.9x | 3.4x |
+
+#### Simple Mode
+Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).
+
+| Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust vs R (1w) | Rust vs R (16w) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Small (50 pathways) | 814 | 2,549 | 813 | 449 | 3.1x | 0.6x |
+| Large (29,705 pathways) | 966 | 2,783 | 933 | 749 | 2.9x | 0.8x |
+
+### Reading the Table
+
+- Compare rows **within the same mode** first (Multilevel vs Multilevel, Simple vs Simple).
+- R shows clear multicore gains in **Simple** mode on this dataset, but little gain in **Multilevel** mode.
+- Results are machine- and configuration-dependent.
 
 ## Precision vs R
 
 `rsfgsea` aims for feature and numerical parity with R's `fgsea` package.
 - **Enrichment Scores (ES)**: Matches R `fgsea` behavior within floating-point tolerances.
-- **P-values / NES**: validated against R reference outputs with the parity tests in `crates/rsfgsea/tests/r_validation.rs`.
+- **P-values / NES**: validated against R reference outputs with parity tests in `crates/rsfgsea/tests/r_validation.rs`.
+- **Current parity snapshot** (`n_perm=5000`, test dataset): mean relative p-value difference is about `3.10%` (distribution mostly `<10%`).
+- **Important**: statistical parity is strong, but results are not guaranteed to be bitwise-identical to R in all cases.
+
+### Parity Mode
+
+Default execution favors R-aligned behavior in the simple permutation batch path (sequential RNG/order compatibility).  
+Optimized parallel kernels are kept in the codebase as alternatives for speed-oriented modes.
 
 ## Contributing
 

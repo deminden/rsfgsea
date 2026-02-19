@@ -5,7 +5,7 @@ use std::collections::HashMap;
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=42, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, multilevel_engine="esruler"))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=42, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
@@ -18,7 +18,6 @@ fn run_gsea_py(
     eps: f64,
     scoreType: &str,
     gseaParam: f64,
-    multilevel_engine: &str,
 ) -> PyResult<Vec<HashMap<String, PyObject>>> {
     if nproc > 0 {
         let _ = rayon::ThreadPoolBuilder::new()
@@ -38,17 +37,16 @@ fn run_gsea_py(
         read_gmt(&gmt_path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     let st = match scoreType.to_lowercase().as_str() {
+        "std" => ScoreType::Std,
         "pos" => ScoreType::Pos,
         "neg" => ScoreType::Neg,
-        _ => ScoreType::Std,
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid scoreType '{}'. Expected one of: std, pos, neg.",
+                other
+            )));
+        }
     };
-
-    unsafe {
-        std::env::set_var(
-            "RSFGSEA_MULTILEVEL_ENGINE",
-            multilevel_engine.to_lowercase(),
-        );
-    }
 
     let max_size = maxSize.unwrap_or_else(|| rs_ranks.len().saturating_sub(1));
     let results = run_gsea(

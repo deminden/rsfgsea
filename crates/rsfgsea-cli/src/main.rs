@@ -1,4 +1,4 @@
-use anyhow::Result;
+use anyhow::{Result, bail};
 use clap::Parser;
 use rsfgsea::prelude::*;
 use std::fs::File;
@@ -61,10 +61,6 @@ struct Args {
     )]
     gsea_param: f64,
 
-    /// Multilevel engine: esruler (default) or legacy
-    #[arg(long, default_value = "esruler")]
-    multilevel_engine: String,
-
     /// Number of workers (0 = default threadpool behavior)
     #[arg(long, default_value_t = 0)]
     nproc: usize,
@@ -106,17 +102,14 @@ fn main() -> Result<()> {
     }
 
     let score_type = match args.score_type.to_lowercase().as_str() {
+        "std" => ScoreType::Std,
         "pos" => ScoreType::Pos,
         "neg" => ScoreType::Neg,
-        _ => ScoreType::Std,
+        other => bail!(
+            "Invalid scoreType '{}'. Expected one of: std, pos, neg.",
+            other
+        ),
     };
-
-    unsafe {
-        std::env::set_var(
-            "RSFGSEA_MULTILEVEL_ENGINE",
-            args.multilevel_engine.to_lowercase(),
-        );
-    }
 
     let start = Instant::now();
     let max_size = args
