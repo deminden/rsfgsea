@@ -1,5 +1,6 @@
 use crate::core::{Pathway, PathwayDb, RankedList};
 use anyhow::{Context, Result};
+use std::collections::HashSet;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 
@@ -9,6 +10,7 @@ pub fn read_ranked_list(path: &str) -> Result<RankedList> {
 
     let mut genes = Vec::new();
     let mut scores = Vec::new();
+    let mut seen_genes = HashSet::new();
 
     for (line_idx, line) in reader.lines().enumerate() {
         let line = line?;
@@ -25,6 +27,14 @@ pub fn read_ranked_list(path: &str) -> Result<RankedList> {
         let score: f64 = parts[1]
             .parse()
             .with_context(|| format!("Failed to parse score on line {}", line_idx + 1))?;
+
+        if !seen_genes.insert(gene.clone()) {
+            anyhow::bail!(
+                "Duplicate gene '{}' found on line {}. Ranked lists must contain unique gene IDs.",
+                gene,
+                line_idx + 1
+            );
+        }
 
         genes.push(gene);
         scores.push(score);

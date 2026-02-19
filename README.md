@@ -134,49 +134,41 @@ PATHWAY_B  description  GENE4  GENE5
 
 ## Performance Comparison (Computation Only)
 
-Benchmarked on **AMD Ryzen 9 7950X3D (16 cores, 32 threads)**. Times exclude I/O.
+Benchmarked on **AMD Ryzen 9 7950X3D (16 cores, 32 threads)**. Times exclude I/O and are **median of 3 runs**.
+
+Inputs:
+- Ranked list: `data/pearson_symbols.rnk` (356 genes)
+- Small pathways: `data/h.all.v2025.1.Hs.symbols.gmt` (50 total, 37 passing size filters)
+- Large pathways: `data/Human_GO_AllPathways_noPFOCR_with_GO_iea_March_01_2024_symbol_renamed.gmt` (29,705 total, 5,582 passing size filters)
+- Size filters: `minSize=1`, `maxSize=5000`
 
 ### 1. Multilevel GSEA
-*Parameters: `eps=1e-50`, `nPermSimple=1000`. Dataset: 356 genes.*
+*Parameters: `eps=1e-50`, `sampleSize=101` (R), `nperm=1000` (rsfgsea simple stage).*
 
 | Pathways | Implementation | 1 Thread (ms) | 32 Threads (ms) | Speedup (32T) |
 | :--- | :--- | :--- | :--- | :--- |
-| **50** (Small) | **rsfgsea** | **8.5 ms** | **1.97 ms** | **30.9x** |
-| | R `fgsea` | 45.2 ms | 60.90 ms | 1.0x |
-| **29,705** (Large) | **rsfgsea** | **358.2 ms** | **21.3 ms** | **49.8x** |
-| | R `fgsea` | 1,080.8 ms | 1,060.9 ms | 1.0x |
+| **50** (Small) | **rsfgsea** | **2** | **2** | **1.0x** |
+| | R `fgseaMultilevel` | 156 | 168 | 0.9x |
+| **29,705** (Large) | **rsfgsea** | **258** | **268** | **1.0x** |
+| | R `fgseaMultilevel` | 963 | 966 | 1.0x |
 
 ### 2. Simple GSEA
-*Parameters: Fixed permutations. Dataset: 356 genes.*
+*Parameters: `nperm=1,000,000` (small), `nperm=10,000` (large).*
 
 | Pathways | Variant | Implementation | 1 Thread (ms) | 32 Threads (ms) | Speedup (32T) |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| **50** | 1M Perms | **rsfgsea** | **560.4 ms** | **85.09 ms** | **7.9x** |
-| | | R `fgseaSimple` | 4,205.0 ms | 670.11 ms | 1.0x |
-| **29,705** | 10k Perms | **rsfgsea** | **2,850.1 ms** | **143.6 ms** | **6.8x** |
-| | | R `fgseaSimple` | 3,920.5 ms | 982.7 ms | 1.0x |
+| **50** | 1M Perms | **rsfgsea** | **822** | **819** | **1.0x** |
+| | | R `fgseaSimple` | 3,827 | 1,476 | 2.6x |
+| **29,705** | 10k Perms | **rsfgsea** | **979** | **1,013** | **1.0x** |
+| | | R `fgseaSimple` | 3,086 | 884 | 3.5x |
 
-### 3. GPU Acceleration (Simple GSEA)
-Benchmarked on **GTEx Muscle - Skeletal data (59,033 genes, 818 samples)**. Comparing CPU (32 threads) vs NVIDIA RTX 4080 and Integrated GPU.
-
-| Implementation | Compute Device | Permutations | Total Time | Pure Comp Time | Speedup |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **rsfgsea (CPU)** | Ryzen 9 7950X3D (32T) | 10,000,000 | 10,803 ms | 10,803 ms | 1.0x |
-| **rsfgsea (GPU)** | **Integrated AMD Graphics** | 1,000,000 | 876 ms | - | 1.2x |
-| **rsfgsea (GPU)** | **NVIDIA RTX 4080** | 10,000,000 | **3,243 ms** | **1,062 ms** | **3.3x** |
-
-**Performance Analysis**:
-- The **RTX 4080** is **~10x faster** than a 32-thread high-end CPU at the actual GSEA computation (without permutation generation).
-- The total speedup is currently limited by CPU-side permutation generation (Fisher-Yates shuffling).
-
-**Note**: `rsfgsea` scales efficiently with thread count, whereas R's `fgsea` (using `BiocParallel`) hits scaling limits and high overhead, particularly with large pathway collections.
+**Note**: these are current repo results on this machine/configuration; thread scaling behavior depends on the active execution path and workload shape.
 
 ## Precision vs R
 
 `rsfgsea` aims for feature and numerical parity with R's `fgsea` package.
-- **Enrichment Scores (ES)**: Exact match (within floating point tolerances). `rsfgsea` uses 128-bit integer accumulators for intermediate sums to prevent catastrophic cancellation.
-- **P-values & NES**: Statistically consistent. Differences purely due to random seed variation (Monte Carlo simulations).
-- **Validation**: Verified against `fgsea` reference outputs across multiple datasets using `tests/r_validation.rs`.
+- **Enrichment Scores (ES)**: Matches R `fgsea` behavior within floating-point tolerances.
+- **P-values / NES**: validated against R reference outputs with the parity tests in `crates/rsfgsea/tests/r_validation.rs`.
 
 ## Contributing
 

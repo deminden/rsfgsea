@@ -48,6 +48,10 @@ struct Args {
     #[arg(long, default_value_t = 1.0)]
     gsea_param: f64,
 
+    /// Multilevel engine: esruler (default) or legacy
+    #[arg(long, default_value = "esruler")]
+    multilevel_engine: String,
+
     /// Number of threads (default: all cores)
     #[arg(short, long)]
     threads: Option<usize>,
@@ -90,6 +94,13 @@ fn main() -> Result<()> {
         "neg" => ScoreType::Neg,
         _ => ScoreType::Std,
     };
+
+    unsafe {
+        std::env::set_var(
+            "RSFGSEA_MULTILEVEL_ENGINE",
+            args.multilevel_engine.to_lowercase(),
+        );
+    }
 
     let start = Instant::now();
     let results = run_gsea(

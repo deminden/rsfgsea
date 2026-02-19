@@ -55,7 +55,7 @@ impl RankedList {
         }
         let scaled_scores: Vec<i64> = abs_scores
             .iter()
-            .map(|&s| (s * scale_coeff).round() as i64)
+            .map(|&s| (s * scale_coeff).round_ties_even() as i64)
             .collect();
         let actual_sum: i64 = scaled_scores.iter().sum();
         (abs_scores, scaled_scores, actual_sum)

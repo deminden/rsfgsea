@@ -1,6 +1,6 @@
 [package]
 name = "rsfgsea"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["Denis Demin"]
 description = "Fast Gene Set Enrichment Analysis in Rust"
@@ -16,6 +16,7 @@ rand_chacha = "0.3"
 rayon = "1.10"
 serde = { version = "1.0", features = ["derive"] }
 special = "0.10"
+statrs = "0.18"
 thiserror = "1.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"], optional = true }
 

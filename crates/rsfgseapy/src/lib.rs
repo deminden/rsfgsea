@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, n_perm=1000, seed=42, threads=None, min_size=15, max_size=500, eps=1e-10, score_type="Std", gsea_param=1.0))]
+#[pyo3(signature = (ranks, gmt_path, n_perm=1000, seed=42, threads=None, min_size=15, max_size=500, eps=1e-10, score_type="Std", gsea_param=1.0, multilevel_engine="esruler"))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
@@ -17,6 +17,7 @@ fn run_gsea_py(
     eps: f64,
     score_type: &str,
     gsea_param: f64,
+    multilevel_engine: &str,
 ) -> PyResult<Vec<HashMap<String, PyObject>>> {
     if let Some(t) = threads {
         let _ = rayon::ThreadPoolBuilder::new()
@@ -40,6 +41,13 @@ fn run_gsea_py(
         "neg" => ScoreType::Neg,
         _ => ScoreType::Std,
     };
+
+    unsafe {
+        std::env::set_var(
+            "RSFGSEA_MULTILEVEL_ENGINE",
+            multilevel_engine.to_lowercase(),
+        );
+    }
 
     let results = run_gsea(
         &rs_ranks,

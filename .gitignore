@@ -37,6 +37,11 @@ Thumbs.db
 *.tmp
 *.temp
 .cache/
+__pycache__/
+
+# Local benchmarking/debug scripts
+scripts/compare_folder_examples.py
+scripts/check_batch_kernel_parity.py
 
 # Log files
 *.log
