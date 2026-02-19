@@ -25,10 +25,7 @@ mod tests {
         let mut ref_map: HashMap<String, HashMap<String, (f64, f64)>> = HashMap::new();
 
         for (gene, pathway, es, pval) in ref_data {
-            ref_map
-                .entry(gene)
-                .or_default()
-                .insert(pathway, (es, pval));
+            ref_map.entry(gene).or_default().insert(pathway, (es, pval));
         }
 
         println!("Loaded R results for {} genes.", ref_map.len());
