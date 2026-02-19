@@ -134,7 +134,7 @@ PATHWAY_B  description  GENE4  GENE5
 
 ## Performance Comparison (Computation Only)
 
-Benchmarked on **AMD Ryzen 9 7950X3D (16 cores, 32 threads)**. Times exclude I/O and are **median of 3 runs**.
+Benchmarked on **AMD Ryzen 9 7950X3D**. Times exclude I/O and are **median of 3 runs**.
 
 Inputs:
 - Ranked list: `data/pearson_symbols.rnk` (356 genes)
@@ -145,24 +145,24 @@ Inputs:
 ### 1. Multilevel GSEA
 *Parameters: `eps=1e-50`, `sampleSize=101` (R), `nperm=1000` (rsfgsea simple stage).*
 
-| Pathways | Implementation | 1 Thread (ms) | 32 Threads (ms) | Speedup (32T) |
-| :--- | :--- | :--- | :--- | :--- |
-| **50** (Small) | **rsfgsea** | **2** | **2** | **1.0x** |
-| | R `fgseaMultilevel` | 156 | 168 | 0.9x |
-| **29,705** (Large) | **rsfgsea** | **258** | **268** | **1.0x** |
-| | R `fgseaMultilevel` | 963 | 966 | 1.0x |
+| Pathways | Implementation | Time (ms) | Speedup vs R |
+| :--- | :--- | :--- | :--- |
+| **50** (Small) | **rsfgsea** | **2** | **78.0x** |
+| | R `fgseaMultilevel` | 156 | 1.0x |
+| **29,705** (Large) | **rsfgsea** | **258** | **3.7x** |
+| | R `fgseaMultilevel` | 963 | 1.0x |
 
 ### 2. Simple GSEA
 *Parameters: `nperm=1,000,000` (small), `nperm=10,000` (large).*
 
-| Pathways | Variant | Implementation | 1 Thread (ms) | 32 Threads (ms) | Speedup (32T) |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| **50** | 1M Perms | **rsfgsea** | **822** | **819** | **1.0x** |
-| | | R `fgseaSimple` | 3,827 | 1,476 | 2.6x |
-| **29,705** | 10k Perms | **rsfgsea** | **979** | **1,013** | **1.0x** |
-| | | R `fgseaSimple` | 3,086 | 884 | 3.5x |
+| Pathways | Variant | Implementation | Time (ms) | Speedup vs R |
+| :--- | :--- | :--- | :--- | :--- |
+| **50** | 1M Perms | **rsfgsea** | **822** | **4.7x** |
+| | | R `fgseaSimple` | 3,827 | 1.0x |
+| **29,705** | 10k Perms | **rsfgsea** | **979** | **3.2x** |
+| | | R `fgseaSimple` | 3,086 | 1.0x |
 
-**Note**: these are current repo results on this machine/configuration; thread scaling behavior depends on the active execution path and workload shape.
+**Note**: these are current repo results on this machine/configuration.
 
 ## Precision vs R
 
