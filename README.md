@@ -199,7 +199,6 @@ Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).
 `rsfgsea` aims for feature and numerical parity with R's `fgsea` package.
 - **Validation protocol**: parity tests against R reference outputs are implemented in `crates/rsfgsea/tests/r_validation.rs`.
 - **Primary metrics**: max/mean absolute differences for ES, NES, p-value, and adjusted p-value on matched pathways.
-- **Current snapshot** (test dataset, `n_perm=5000`): mean relative p-value difference is about `3.10%`, with most pathways below `10%` relative error.
 - **Examples-folder snapshot** (`data/Folder_with_examples`, 23 files, seed `42`, `nPermSimple=1000`):
   - Multilevel mode vs R `fgseaMultilevel`: max `|ES|` diff `4.998e-09`, max `|NES|` diff `4.995e-09`, max `|pval|` diff `1.195e-02`, max `|padj|` diff `2.331e-01`.
   - Simple mode vs R `fgseaSimple`: max `|ES|` diff `4.998e-09`, max `|NES|` diff `4.995e-09`, max `|pval|` diff `4.985e-09`, max `|padj|` diff `4.965e-09`.
