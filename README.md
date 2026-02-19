@@ -23,7 +23,10 @@ cargo build --workspace --release
 ./target/release/rsfgsea \
     --ranks data/ranks.rnk \
     --gmt data/pathways.gmt \
+    --mode fgsea \
     --nPermSimple 1000 \
+    # optionally force simple mode like original fgsea(..., nperm=...)
+    # --nperm 10000 \
     --minSize 1 \
     --maxSize 355 \
     --scoreType std \
@@ -126,7 +129,9 @@ for res in results:
 ```
 
 Default fgsea-style parameters in this project interfaces:
+- `mode=fgsea`
 - `nPermSimple=1000`
+- `nperm=None` (if set, wrapper mode switches to simple permutations)
 - `minSize=1`
 - `maxSize=length(stats)-1` (computed automatically if omitted)
 - `eps=1e-50`
@@ -152,14 +157,14 @@ PATHWAY_B  description  GENE4  GENE5
 
 ## Performance Comparison (Computation Only)
 
-Benchmarked on **AMD Ryzen 9 7950X3D**. Times are **median of 3 runs**.
+Benchmarked on **AMD Ryzen 9 7950X3D**. Times are **median of 3 runs** (after one warmup run).
 
 **Benchmark setup**:
 - Ranked list: `data/pearson_symbols.rnk` (356 genes)
 - Small pathways: `data/h.all.v2025.1.Hs.symbols.gmt` (50 total, 37 passing size filters)
 - Large pathways: `data/Human_GO_AllPathways_noPFOCR_with_GO_iea_March_01_2024_symbol_renamed.gmt` (29,705 total, 5,582 passing size filters)
 - Size filters: `minSize=1`, `maxSize=5000`
-- R multicore mode: `BiocParallel::MulticoreParam(workers=16)` passed as `BPPARAM`
+- R multicore modes: `BiocParallel::MulticoreParam(workers=16|32)` passed as `BPPARAM`
 
 ### Modes (Important)
 
@@ -172,18 +177,18 @@ Benchmarked on **AMD Ryzen 9 7950X3D**. Times are **median of 3 runs**.
 #### Multilevel Mode
 Parameters: `eps=1e-50`, `sampleSize=101` (R), `nPermSimple=1000` (rsfgsea simple stage).
 
-| Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust vs R (1w) | Rust vs R (16w) |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Small (50 pathways) | 2 | 30 | 4 | 50 | 15.0x | 12.5x |
-| Large (29,705 pathways) | 267 | 778 | 224 | 769 | 2.9x | 3.4x |
+| Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
+| Small (50 pathways) | 6 | 1,233 | 8 | 1,340 | 10 | 1,345 | 16w: 0.75x, 32w: 0.60x | 16w: 0.92x, 32w: 0.92x | 205.5x | 167.5x | 134.5x |
+| Large (29,705 pathways) | 574 | 3,216 | 560 | 3,585 | 549 | 3,455 | 16w: 1.03x, 32w: 1.05x | 16w: 0.90x, 32w: 0.93x | 5.6x | 6.4x | 6.3x |
 
 #### Simple Mode
 Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).
 
-| Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust vs R (1w) | Rust vs R (16w) |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Small (50 pathways) | 814 | 2,549 | 813 | 449 | 3.1x | 0.6x |
-| Large (29,705 pathways) | 966 | 2,783 | 933 | 749 | 2.9x | 0.8x |
+| Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
+| Small (50 pathways) | 856 | 3,798 | 817 | 1,670 | 843 | 1,780 | 16w: 1.05x, 32w: 1.02x | 16w: 2.27x, 32w: 2.13x | 4.4x | 2.0x | 2.1x |
+| Large (29,705 pathways) | 1,289 | 5,249 | 1,229 | 3,408 | 1,227 | 3,313 | 16w: 1.05x, 32w: 1.05x | 16w: 1.54x, 32w: 1.58x | 4.1x | 2.8x | 2.7x |
 
 ### Reading the Table
 

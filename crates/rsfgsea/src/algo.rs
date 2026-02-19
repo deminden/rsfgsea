@@ -467,7 +467,7 @@ fn run_gsea_internal(
         .flatten()
         .collect();
 
-    if allow_multilevel && n_perm > 0 && !work.is_empty() {
+    if n_perm > 0 && !work.is_empty() {
         if work.len() == 1 {
             let mut rng = Mt19937Compat::new(simple_seed as u32);
             let k = work[0].size;
@@ -601,11 +601,11 @@ fn run_gsea_internal(
             None
         };
 
-        if mode_fraction < 10 {
+        if allow_multilevel && mode_fraction < 10 {
             w.p_value = f64::NAN;
             w.nes = None;
             w.log2err = None;
-        } else if n_perm > 0 && w.p_value.is_finite() {
+        } else if allow_multilevel && n_perm > 0 && w.p_value.is_finite() {
             let n_more = n_more_extreme as f64;
             let n_perm_f = n_perm as f64;
             let left = log2_qbeta(0.025, n_more, n_perm_f - n_more + 1.0);
@@ -618,7 +618,7 @@ fn run_gsea_internal(
         }
     }
 
-    if n_perm > 0 && !work.is_empty() {
+    if allow_multilevel && n_perm > 0 && !work.is_empty() {
         let mut multilevel_groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for i in 0..work.len() {
             if work[i].p_value.is_finite()

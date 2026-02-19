@@ -1,5 +1,5 @@
 use anyhow::{Result, bail};
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use rsfgsea::prelude::*;
 use std::fs::File;
 use std::io::Write;
@@ -17,13 +17,12 @@ struct Args {
     gmt: String,
 
     /// Number of permutations in simple fgsea stage
-    #[arg(
-        short = 'n',
-        long = "nPermSimple",
-        visible_alias = "nperm",
-        default_value_t = 1000
-    )]
+    #[arg(short = 'n', long = "nPermSimple", default_value_t = 1000)]
     n_perm_simple: usize,
+
+    /// Optional fgsea-style simple-mode permutations (forces simple mode in fgsea wrapper mode)
+    #[arg(long = "nperm")]
+    nperm: Option<usize>,
 
     /// Random seed
     #[arg(short, long, default_value_t = 42)]
@@ -61,6 +60,10 @@ struct Args {
     )]
     gsea_param: f64,
 
+    /// Execution mode: fgsea (wrapper semantics), multilevel, or simple
+    #[arg(long, value_enum, default_value_t = CliMode::Fgsea)]
+    mode: CliMode,
+
     /// Number of workers (0 = default threadpool behavior)
     #[arg(long, default_value_t = 0)]
     nproc: usize,
@@ -68,6 +71,13 @@ struct Args {
     /// Enable GPU (requires gpu feature)
     #[arg(long)]
     gpu: bool,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum CliMode {
+    Fgsea,
+    Multilevel,
+    Simple,
 }
 
 fn main() -> Result<()> {
@@ -88,8 +98,14 @@ fn main() -> Result<()> {
     println!("Loaded {} pathways.", pd.pathways.len());
 
     println!(
-        "Running GSEA with {} simple permutations...",
-        args.n_perm_simple
+        "Running mode={} (nPermSimple={}, nperm={:?})...",
+        match args.mode {
+            CliMode::Fgsea => "fgsea",
+            CliMode::Multilevel => "multilevel",
+            CliMode::Simple => "simple",
+        },
+        args.n_perm_simple,
+        args.nperm
     );
 
     // In the future, check if args.gpu and feature is enabled
@@ -115,17 +131,47 @@ fn main() -> Result<()> {
     let max_size = args
         .max_size
         .unwrap_or_else(|| ranks.len().saturating_sub(1));
-    let results = run_gsea(
-        &ranks,
-        &pd.pathways,
-        args.n_perm_simple,
-        args.seed,
-        args.min_size,
-        max_size,
-        args.eps,
-        score_type,
-        args.gsea_param,
-    );
+    let results = match args.mode {
+        CliMode::Fgsea => fgsea(
+            &ranks,
+            &pd.pathways,
+            args.nperm,
+            args.n_perm_simple,
+            args.seed,
+            args.min_size,
+            max_size,
+            args.eps,
+            score_type,
+            args.gsea_param,
+        ),
+        CliMode::Multilevel => {
+            if args.nperm.is_some() {
+                bail!("--nperm is only valid with --mode fgsea or --mode simple.");
+            }
+            run_gsea(
+                &ranks,
+                &pd.pathways,
+                args.n_perm_simple,
+                args.seed,
+                args.min_size,
+                max_size,
+                args.eps,
+                score_type,
+                args.gsea_param,
+            )
+        }
+        CliMode::Simple => run_gsea_simple(
+            &ranks,
+            &pd.pathways,
+            args.nperm.unwrap_or(args.n_perm_simple),
+            args.seed,
+            args.min_size,
+            max_size,
+            args.eps,
+            score_type,
+            args.gsea_param,
+        ),
+    };
     let duration = start.elapsed();
     println!("GSEA computation took: {:.2?}", duration);
     println!("GSEA_COMP_TIME_MS: {}", duration.as_millis());
