@@ -2,6 +2,8 @@ use crate::core::{EnrichmentResult, Pathway, RankedList, ScoreType};
 use crate::esruler_compat::EsRulerCompat;
 use crate::fastgsea_compat::{calc_gsea_stat_cumulative_batch_f64, calc_gsea_stat_cumulative_f64};
 use crate::rng_compat::{Mt19937Compat, RMt19937SeedCompat, combination, uid_wrapper};
+#[cfg(feature = "gpu")]
+use rayon::prelude::*;
 use special::Gamma;
 use statrs::distribution::{Beta, ContinuousCDF};
 use std::collections::{BTreeMap, HashMap};
@@ -299,7 +301,6 @@ pub fn calculate_gsea_score(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 #[allow(clippy::too_many_arguments)]
 pub fn run_gsea(
     ranks: &RankedList,
