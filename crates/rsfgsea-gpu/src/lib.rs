@@ -18,11 +18,39 @@ pub struct GpuEngine {
 
 impl GpuEngine {
     pub async fn new() -> Result<Self> {
-        let instance = wgpu::Instance::default();
+        let allow_gl_backend = std::env::var("RSFGSEA_GPU_ALLOW_GL")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false);
+        let mesa_adapter_override = std::env::var("MESA_D3D12_DEFAULT_ADAPTER_NAME")
+            .ok()
+            .map(|v| !v.trim().is_empty())
+            .unwrap_or(false);
+        let gl_fallback_enabled = allow_gl_backend || mesa_adapter_override;
 
-        // List all adapters to pick the best one (prefer NVIDIA)
+        let backends = if let Ok(raw) = std::env::var("WGPU_BACKEND") {
+            match raw.to_lowercase().as_str() {
+                "vulkan" => wgpu::Backends::VULKAN,
+                "dx12" => wgpu::Backends::DX12,
+                "metal" => wgpu::Backends::METAL,
+                "gl" => wgpu::Backends::GL,
+                "all" => wgpu::Backends::all(),
+                _ => wgpu::Backends::PRIMARY,
+            }
+        } else if gl_fallback_enabled {
+            // On some WSL stacks, the discrete GPU is only exposed via GL/D3D12 translation.
+            wgpu::Backends::all()
+        } else {
+            wgpu::Backends::PRIMARY
+        };
+        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+            backends,
+            ..Default::default()
+        });
+
+        // List adapters and pick the most stable/high-performance one.
         let adapters = instance.enumerate_adapters(wgpu::Backends::all());
         let mut selected_adapter = None;
+        let mut selected_score = i32::MIN;
 
         println!("Available GPUs:");
         for adapter in adapters {
@@ -31,13 +59,40 @@ impl GpuEngine {
                 "  - Name: {:?}, Type: {:?}, Backend: {:?}, Vendor: 0x{:04x}",
                 info.name, info.device_type, info.backend, info.vendor
             );
-            if info.name.to_lowercase().contains("nvidia") || info.vendor == 0x10de {
+
+            // GL-on-D3D paths are unstable in some WSL/Mesa setups.
+            if !gl_fallback_enabled && info.backend == wgpu::Backend::Gl {
+                continue;
+            }
+
+            let mut score = 0i32;
+            let name_lower = info.name.to_lowercase();
+
+            if info.vendor == 0x10de || name_lower.contains("nvidia") {
+                score += 100;
+            }
+            if matches!(
+                info.backend,
+                wgpu::Backend::Vulkan | wgpu::Backend::Dx12 | wgpu::Backend::Metal
+            ) {
+                score += 40;
+            }
+            if matches!(info.device_type, wgpu::DeviceType::DiscreteGpu) {
+                score += 30;
+            }
+            if matches!(info.device_type, wgpu::DeviceType::Cpu) || name_lower.contains("llvmpipe")
+            {
+                score -= 100;
+            }
+
+            if score > selected_score {
+                selected_score = score;
                 selected_adapter = Some(adapter);
             }
         }
 
         let adapter = if let Some(a) = selected_adapter {
-            println!("Selecting NVIDIA GPU.");
+            println!("Selected adapter score: {}", selected_score);
             a
         } else {
             instance
@@ -49,7 +104,21 @@ impl GpuEngine {
                 .ok_or_else(|| anyhow::anyhow!("No GPU adapter found"))?
         };
 
-        println!("Selected GPU: {:?}", adapter.get_info().name);
+        let selected_info = adapter.get_info();
+        println!("Selected GPU: {:?}", selected_info.name);
+        let selected_name = selected_info.name.to_lowercase();
+        let unsuitable = matches!(selected_info.device_type, wgpu::DeviceType::Cpu)
+            || selected_name.contains("llvmpipe")
+            || (!gl_fallback_enabled && selected_info.backend == wgpu::Backend::Gl);
+        if unsuitable {
+            return Err(anyhow::anyhow!(
+                "No suitable non-CPU GPU adapter found. Selected adapter was '{}', backend={:?}. \
+Set WGPU_BACKEND=vulkan and, on WSL2, ensure NVIDIA Vulkan is visible (optionally set MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA). \
+If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MESA_D3D12_DEFAULT_ADAPTER_NAME).",
+                selected_info.name,
+                selected_info.backend
+            ));
+        }
 
         let (device, queue) = adapter
             .request_device(

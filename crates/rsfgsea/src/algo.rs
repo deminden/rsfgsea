@@ -1188,9 +1188,11 @@ pub fn run_gsea_gpu(
     }
 
     // Ensure padj is monotonic
-    for i in (0..m - 1).rev() {
-        let next_padj = final_results[i + 1].padj.unwrap_or(1.0);
-        final_results[i].padj = Some(final_results[i].padj.unwrap_or(1.0).min(next_padj));
+    if m > 1 {
+        for i in (0..m - 1).rev() {
+            let next_padj = final_results[i + 1].padj.unwrap_or(1.0);
+            final_results[i].padj = Some(final_results[i].padj.unwrap_or(1.0).min(next_padj));
+        }
     }
 
     Ok(final_results)

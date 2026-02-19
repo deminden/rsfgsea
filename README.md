@@ -84,7 +84,9 @@ let results = rsfgsea::algo::run_gsea_gpu(
 ```
 
 **Hardware Selection (Environment Variables):**
-- `MESA_D3D12_DEFAULT_ADAPTER_NAME`: On WSL2, use `NVIDIA` to force selection of your discrete GPU over integrated graphics.
+- `WGPU_BACKEND=vulkan`: recommended first on Linux/WSL2 to prefer stable native Vulkan adapters.
+- `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`: on WSL2, helps pick the discrete GPU when D3D12 translation is used.
+- `RSFGSEA_GPU_ALLOW_GL=1`: opt-in fallback only; GL-translated adapters can be unstable on some Mesa/WSL stacks.
 
 ### Python Extension
 
@@ -166,7 +168,7 @@ Benchmarked on **AMD Ryzen 9 7950X3D**. Times are **median of 3 runs** (after on
 - Size filters: `minSize=1`, `maxSize=5000`
 - R multicore modes: `BiocParallel::MulticoreParam(workers=16|32)` passed as `BPPARAM`
 
-### Modes (Important)
+### Modes
 
 - **Multilevel mode** (`run_gsea` / R `fgseaMultilevel`): adaptive multilevel Monte Carlo for very small p-values.
 - **Simple mode** (`run_gsea_simple` / R `fgseaSimple`): fixed permutation sampling (`nPermSimple`).
@@ -190,24 +192,82 @@ Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).
 | Small (50 pathways) | 856 | 3,798 | 817 | 1,670 | 843 | 1,780 | 16w: 1.05x, 32w: 1.02x | 16w: 2.27x, 32w: 2.13x | 4.4x | 2.0x | 2.1x |
 | Large (29,705 pathways) | 1,289 | 5,249 | 1,229 | 3,408 | 1,227 | 3,313 | 16w: 1.05x, 32w: 1.05x | 16w: 1.54x, 32w: 1.58x | 4.1x | 2.8x | 2.7x |
 
-### Reading the Table
-
-- Compare rows **within the same mode** first (Multilevel vs Multilevel, Simple vs Simple).
-- R shows clear multicore gains in **Simple** mode on this dataset, but little gain in **Multilevel** mode.
-- Results are machine- and configuration-dependent.
+- R shows clear multicore gains in **Simple** mode on this dataset, but no gain in **Multilevel** mode.
 
 ## Precision vs R
 
 `rsfgsea` aims for feature and numerical parity with R's `fgsea` package.
-- **Enrichment Scores (ES)**: Matches R `fgsea` behavior within floating-point tolerances.
-- **P-values / NES**: validated against R reference outputs with parity tests in `crates/rsfgsea/tests/r_validation.rs`.
-- **Current parity snapshot** (`n_perm=5000`, test dataset): mean relative p-value difference is about `3.10%` (distribution mostly `<10%`).
-- **Important**: statistical parity is strong, but results are not guaranteed to be bitwise-identical to R in all cases.
+- **Validation protocol**: parity tests against R reference outputs are implemented in `crates/rsfgsea/tests/r_validation.rs`.
+- **Primary metrics**: max/mean absolute differences for ES, NES, p-value, and adjusted p-value on matched pathways.
+- **Current snapshot** (test dataset, `n_perm=5000`): mean relative p-value difference is about `3.10%`, with most pathways below `10%` relative error.
+- **Examples-folder snapshot** (`data/Folder_with_examples`, 23 files, seed `42`, `nPermSimple=1000`):
+  - Multilevel mode vs R `fgseaMultilevel`: max `|ES|` diff `4.998e-09`, max `|NES|` diff `4.995e-09`, max `|pval|` diff `1.195e-02`, max `|padj|` diff `2.331e-01`.
+  - Simple mode vs R `fgseaSimple`: max `|ES|` diff `4.998e-09`, max `|NES|` diff `4.995e-09`, max `|pval|` diff `4.985e-09`, max `|padj|` diff `4.965e-09`.
+- **Distribution-level parity stats** (examples folder, seed `42`, matched pathways `n=746` across `22` files, absolute differences):
+
+| Mode | Metric | Mean | Median | P95 | Max |
+| :--- | :--- | ---: | ---: | ---: | ---: |
+| Multilevel | `|ES|` | `2.535e-09` | `2.531e-09` | `4.735e-09` | `4.998e-09` |
+| Multilevel | `|NES|` | `2.473e-09` | `2.483e-09` | `4.693e-09` | `4.995e-09` |
+| Multilevel | `|pval|` | `3.270e-05` | `2.682e-09` | `4.785e-09` | `1.195e-02` |
+| Multilevel | `|padj|` | `9.252e-04` | `2.183e-09` | `4.316e-09` | `2.331e-01` |
+| Simple | `|ES|` | `2.535e-09` | `2.531e-09` | `4.735e-09` | `4.998e-09` |
+| Simple | `|NES|` | `2.473e-09` | `2.483e-09` | `4.693e-09` | `4.995e-09` |
+| Simple | `|pval|` | `2.551e-09` | `2.662e-09` | `4.755e-09` | `4.985e-09` |
+| Simple | `|padj|` | `2.535e-09` | `2.183e-09` | `4.316e-09` | `4.965e-09` |
+
+- **Finite-value coverage**: p-value NaN mismatch count was `0` in both modes on this run.
+- **Interpretation**: ES/NES agreement is typically near floating-point precision; p-value differences are expected to remain stochastic because both implementations use Monte Carlo sampling.
+- **Scope**: parity here means statistical agreement under the same method/settings, not bitwise identity of every output field.
 
 ### Parity Mode
 
-Default execution favors R-aligned behavior in the simple permutation batch path (sequential RNG/order compatibility).  
-Optimized parallel kernels are kept in the codebase as alternatives for speed-oriented modes.
+Use these settings when you want the closest behavior to R `fgsea`:
+
+- CLI:
+  - `--mode fgsea` (default): fgsea-style wrapper behavior.
+  - `--nPermSimple 1000`: simple stage size used before multilevel refinement.
+  - `--seed <int>`: fix seed for reproducible Monte Carlo runs.
+  - `--scoreType std|pos|neg`: match the R score mode.
+- To force simple-only comparison (like `fgseaSimple`), use:
+  - `--mode simple --nperm <N>`
+
+Speed-oriented paths:
+- CPU throughput: increase workers with `--nproc <N>`.
+- GPU throughput: use the GPU API (`run_gsea_gpu`) or GPU benchmark/verify binaries built with `--features gpu`.
+
+Examples:
+```bash
+# R-aligned default (wrapper mode)
+./target/release/rsfgsea --mode fgsea --nPermSimple 1000 --seed 42 ...
+
+# Force simple-only mode for direct fgseaSimple-style comparison
+./target/release/rsfgsea --mode simple --nperm 100000 --seed 42 ...
+```
+
+### GPU Accuracy vs R
+
+GPU parity was evaluated on `data/Folder_with_examples` (23 files) against R `fgseaMultilevel` using seeds `[11, 23, 42]`, `nPermSimple=1000`, `sampleSize=101`, `eps=1e-50` (66 file-seed runs, 2,238 matched pathways total).
+
+| Metric | Mean | Median | P95 | Max |
+| :--- | ---: | ---: | ---: | ---: |
+| `|ES|` | `2.535e-09` | `2.531e-09` | `4.736e-09` | `4.998e-09` |
+| `|NES|` | `1.842e-02` | `1.245e-02` | `5.827e-02` | `1.238e-01` |
+| `|pval|` | `1.548e-02` | `1.199e-02` | `3.996e-02` | `5.007e-01` |
+| `|padj|` | `1.248e-02` | `5.101e-03` | `5.784e-02` | `2.458e-01` |
+
+Relative p-value difference (`|p_r - p_gpu| / max(|p_r|, 1e-12)`):
+- mean: `4.15%`
+- median: `2.37%`
+- p95: `13.36%`
+- max: `67.39%`
+- `<1%`: `26.4%` of pathways
+- `<10%`: `90.9%` of pathways
+
+Artifacts:
+- `reports/gpu_vs_r/gpu_vs_r_report.md`
+- `reports/gpu_vs_r/gpu_vs_r_summary.json`
+- `reports/gpu_vs_r/gpu_vs_r_raw.csv`
 
 ## Contributing
 
