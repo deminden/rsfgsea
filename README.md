@@ -207,14 +207,14 @@ Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).
 
 | Mode | Metric | Mean | Median | P95 | Max |
 | :--- | :--- | ---: | ---: | ---: | ---: |
-| Multilevel | `|ES|` | `2.535e-09` | `2.531e-09` | `4.735e-09` | `4.998e-09` |
-| Multilevel | `|NES|` | `2.473e-09` | `2.483e-09` | `4.693e-09` | `4.995e-09` |
-| Multilevel | `|pval|` | `3.270e-05` | `2.682e-09` | `4.785e-09` | `1.195e-02` |
-| Multilevel | `|padj|` | `9.252e-04` | `2.183e-09` | `4.316e-09` | `2.331e-01` |
-| Simple | `|ES|` | `2.535e-09` | `2.531e-09` | `4.735e-09` | `4.998e-09` |
-| Simple | `|NES|` | `2.473e-09` | `2.483e-09` | `4.693e-09` | `4.995e-09` |
-| Simple | `|pval|` | `2.551e-09` | `2.662e-09` | `4.755e-09` | `4.985e-09` |
-| Simple | `|padj|` | `2.535e-09` | `2.183e-09` | `4.316e-09` | `4.965e-09` |
+| Multilevel | `abs(ES)` | `2.535e-09` | `2.531e-09` | `4.735e-09` | `4.998e-09` |
+| Multilevel | `abs(NES)` | `2.473e-09` | `2.483e-09` | `4.693e-09` | `4.995e-09` |
+| Multilevel | `abs(pval)` | `3.270e-05` | `2.682e-09` | `4.785e-09` | `1.195e-02` |
+| Multilevel | `abs(padj)` | `9.252e-04` | `2.183e-09` | `4.316e-09` | `2.331e-01` |
+| Simple | `abs(ES)` | `2.535e-09` | `2.531e-09` | `4.735e-09` | `4.998e-09` |
+| Simple | `abs(NES)` | `2.473e-09` | `2.483e-09` | `4.693e-09` | `4.995e-09` |
+| Simple | `abs(pval)` | `2.551e-09` | `2.662e-09` | `4.755e-09` | `4.985e-09` |
+| Simple | `abs(padj)` | `2.535e-09` | `2.183e-09` | `4.316e-09` | `4.965e-09` |
 
 - **Finite-value coverage**: p-value NaN mismatch count was `0` in both modes on this run.
 - **Interpretation**: ES/NES agreement is typically near floating-point precision; p-value differences are expected to remain stochastic because both implementations use Monte Carlo sampling.
@@ -251,10 +251,10 @@ GPU parity was evaluated on `data/Folder_with_examples` (23 files) against R `fg
 
 | Metric | Mean | Median | P95 | Max |
 | :--- | ---: | ---: | ---: | ---: |
-| `|ES|` | `2.535e-09` | `2.531e-09` | `4.736e-09` | `4.998e-09` |
-| `|NES|` | `1.842e-02` | `1.245e-02` | `5.827e-02` | `1.238e-01` |
-| `|pval|` | `1.548e-02` | `1.199e-02` | `3.996e-02` | `5.007e-01` |
-| `|padj|` | `1.248e-02` | `5.101e-03` | `5.784e-02` | `2.458e-01` |
+| `abs(ES)` | `2.535e-09` | `2.531e-09` | `4.736e-09` | `4.998e-09` |
+| `abs(NES)` | `1.842e-02` | `1.245e-02` | `5.827e-02` | `1.238e-01` |
+| `abs(pval)` | `1.548e-02` | `1.199e-02` | `3.996e-02` | `5.007e-01` |
+| `abs(padj)` | `1.248e-02` | `5.101e-03` | `5.784e-02` | `2.458e-01` |
 
 Relative p-value difference (`|p_r - p_gpu| / max(|p_r|, 1e-12)`):
 - mean: `4.15%`
@@ -267,7 +267,6 @@ Relative p-value difference (`|p_r - p_gpu| / max(|p_r|, 1e-12)`):
 Artifacts:
 - `reports/gpu_vs_r/gpu_vs_r_report.md`
 - `reports/gpu_vs_r/gpu_vs_r_summary.json`
-- `reports/gpu_vs_r/gpu_vs_r_raw.csv`
 
 ## Contributing
 
