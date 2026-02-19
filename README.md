@@ -23,7 +23,13 @@ cargo build --workspace --release
 ./target/release/rsfgsea \
     --ranks data/ranks.rnk \
     --gmt data/pathways.gmt \
-    --nperm 1000 \
+    --nPermSimple 1000 \
+    --minSize 1 \
+    --maxSize 355 \
+    --scoreType std \
+    --gseaParam 1 \
+    --eps 1e-50 \
+    --nproc 0 \
     --output results.tsv
 ```
 
@@ -45,13 +51,13 @@ let pathways = read_gmt("pathways.gmt")?;
 let results = run_gsea(
     &ranks, 
     &pathways.pathways, 
-    1000,   // permutations
+    1000,   // nPermSimple
     42,     // seed
-    15,     // min_size
-    500,    // max_size
-    1e-10,  // eps
+    1,      // minSize
+    ranks.len() - 1, // maxSize
+    1e-50,  // eps
     ScoreType::Std, 
-    1.0     // gsea_param
+    1.0     // gseaParam
 );
 ```
 
@@ -105,16 +111,28 @@ gmt_path = "pathways.gmt"
 results = rsfgseapy.run_gsea_py(
     ranks=ranks,
     gmt_path=gmt_path,
-    n_perm=1000,
-    min_size=15,
-    max_size=500,
-    eps=1e-10
+    nPermSimple=1000,
+    nproc=0,
+    minSize=1,
+    maxSize=None,
+    eps=1e-50,
+    scoreType="std",
+    gseaParam=1.0
 )
 
 # Access results
 for res in results:
     print(f"Pathway: {res['pathway']}, NES: {res['nes']}, p-val: {res['pval']}")
 ```
+
+Default fgsea-style parameters in this project interfaces:
+- `nPermSimple=1000`
+- `minSize=1`
+- `maxSize=length(stats)-1` (computed automatically if omitted)
+- `eps=1e-50`
+- `scoreType="std"`
+- `gseaParam=1.0`
+- `nproc=0`
 
 ## Input Format
 
@@ -143,7 +161,7 @@ Inputs:
 - Size filters: `minSize=1`, `maxSize=5000`
 
 ### 1. Multilevel GSEA
-*Parameters: `eps=1e-50`, `sampleSize=101` (R), `nperm=1000` (rsfgsea simple stage).*
+*Parameters: `eps=1e-50`, `sampleSize=101` (R), `nPermSimple=1000` (rsfgsea simple stage).*
 
 | Pathways | Implementation | Time (ms) | Speedup vs R |
 | :--- | :--- | :--- | :--- |
@@ -153,7 +171,7 @@ Inputs:
 | | R `fgseaMultilevel` | 963 | 1.0x |
 
 ### 2. Simple GSEA
-*Parameters: `nperm=1,000,000` (small), `nperm=10,000` (large).*
+*Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).*
 
 | Pathways | Variant | Implementation | Time (ms) | Speedup vs R |
 | :--- | :--- | :--- | :--- | :--- |

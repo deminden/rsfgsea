@@ -3,25 +3,26 @@ use rsfgsea::prelude::*;
 use std::collections::HashMap;
 
 #[allow(clippy::too_many_arguments)]
+#[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, n_perm=1000, seed=42, threads=None, min_size=15, max_size=500, eps=1e-10, score_type="Std", gsea_param=1.0, multilevel_engine="esruler"))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=42, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, multilevel_engine="esruler"))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
     gmt_path: String,
-    n_perm: usize,
+    nPermSimple: usize,
     seed: u64,
-    threads: Option<usize>,
-    min_size: usize,
-    max_size: usize,
+    nproc: usize,
+    minSize: usize,
+    maxSize: Option<usize>,
     eps: f64,
-    score_type: &str,
-    gsea_param: f64,
+    scoreType: &str,
+    gseaParam: f64,
     multilevel_engine: &str,
 ) -> PyResult<Vec<HashMap<String, PyObject>>> {
-    if let Some(t) = threads {
+    if nproc > 0 {
         let _ = rayon::ThreadPoolBuilder::new()
-            .num_threads(t)
+            .num_threads(nproc)
             .build_global();
     }
 
@@ -36,7 +37,7 @@ fn run_gsea_py(
     let pd =
         read_gmt(&gmt_path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
-    let st = match score_type.to_lowercase().as_str() {
+    let st = match scoreType.to_lowercase().as_str() {
         "pos" => ScoreType::Pos,
         "neg" => ScoreType::Neg,
         _ => ScoreType::Std,
@@ -49,16 +50,17 @@ fn run_gsea_py(
         );
     }
 
+    let max_size = maxSize.unwrap_or_else(|| rs_ranks.len().saturating_sub(1));
     let results = run_gsea(
         &rs_ranks,
         &pd.pathways,
-        n_perm,
+        nPermSimple,
         seed,
-        min_size,
+        minSize,
         max_size,
         eps,
         st,
-        gsea_param,
+        gseaParam,
     );
 
     let mut py_results = Vec::new();

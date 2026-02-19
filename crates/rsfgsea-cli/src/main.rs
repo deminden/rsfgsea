@@ -16,9 +16,14 @@ struct Args {
     #[arg(short, long)]
     gmt: String,
 
-    /// Number of permutations
-    #[arg(short, long, default_value_t = 1000)]
-    nperm: usize,
+    /// Number of permutations in simple fgsea stage
+    #[arg(
+        short = 'n',
+        long = "nPermSimple",
+        visible_alias = "nperm",
+        default_value_t = 1000
+    )]
+    n_perm_simple: usize,
 
     /// Random seed
     #[arg(short, long, default_value_t = 42)]
@@ -28,33 +33,41 @@ struct Args {
     #[arg(short, long)]
     output: String,
 
-    /// Minimum pathway size
-    #[arg(long, default_value_t = 15)]
+    /// Minimal size of a gene set to test
+    #[arg(long = "minSize", visible_alias = "min-size", default_value_t = 1)]
     min_size: usize,
 
-    /// Maximum pathway size
-    #[arg(long, default_value_t = 500)]
-    max_size: usize,
+    /// Maximal size of a gene set to test (defaults to ranks length - 1)
+    #[arg(long = "maxSize")]
+    max_size: Option<usize>,
 
     /// Eps parameter for multilevel GSEA
-    #[arg(long, default_value_t = 1e-10)]
+    #[arg(long, default_value_t = 1e-50)]
     eps: f64,
 
-    /// Score type (Std, Pos, Neg)
-    #[arg(long, default_value = "Std")]
+    /// Score type (std, pos, neg)
+    #[arg(
+        long = "scoreType",
+        visible_alias = "score-type",
+        default_value = "std"
+    )]
     score_type: String,
 
-    /// GSEA parameter (p)
-    #[arg(long, default_value_t = 1.0)]
+    /// GSEA parameter value
+    #[arg(
+        long = "gseaParam",
+        visible_alias = "gsea-param",
+        default_value_t = 1.0
+    )]
     gsea_param: f64,
 
     /// Multilevel engine: esruler (default) or legacy
     #[arg(long, default_value = "esruler")]
     multilevel_engine: String,
 
-    /// Number of threads (default: all cores)
-    #[arg(short, long)]
-    threads: Option<usize>,
+    /// Number of workers (0 = default threadpool behavior)
+    #[arg(long, default_value_t = 0)]
+    nproc: usize,
 
     /// Enable GPU (requires gpu feature)
     #[arg(long)]
@@ -64,9 +77,9 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
-    if let Some(t) = args.threads {
+    if args.nproc > 0 {
         rayon::ThreadPoolBuilder::new()
-            .num_threads(t)
+            .num_threads(args.nproc)
             .build_global()?;
     }
 
@@ -78,7 +91,10 @@ fn main() -> Result<()> {
     let pd = read_gmt(&args.gmt)?;
     println!("Loaded {} pathways.", pd.pathways.len());
 
-    println!("Running GSEA with {} permutations...", args.nperm);
+    println!(
+        "Running GSEA with {} simple permutations...",
+        args.n_perm_simple
+    );
 
     // In the future, check if args.gpu and feature is enabled
     #[cfg(feature = "gpu")]
@@ -103,13 +119,16 @@ fn main() -> Result<()> {
     }
 
     let start = Instant::now();
+    let max_size = args
+        .max_size
+        .unwrap_or_else(|| ranks.len().saturating_sub(1));
     let results = run_gsea(
         &ranks,
         &pd.pathways,
-        args.nperm,
+        args.n_perm_simple,
         args.seed,
         args.min_size,
-        args.max_size,
+        max_size,
         args.eps,
         score_type,
         args.gsea_param,

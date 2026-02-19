@@ -6,7 +6,7 @@ use crate::rng_compat::{Mt19937Compat, RMt19937SeedCompat, combination, uid_wrap
 use rayon::prelude::*;
 use special::Gamma;
 use statrs::distribution::{Beta, ContinuousCDF};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 #[cfg(feature = "gpu")]
 use std::sync::Arc;
 #[cfg(feature = "gpu")]
@@ -339,6 +339,33 @@ pub fn run_gsea(
         .map(|(i, g)| (g.clone(), i))
         .collect();
     let n_total = ranks.len();
+
+    // Match fgsea prepareStats warnings (improved wording).
+    let mut seen_nonzero = HashSet::new();
+    let mut tie_count = 0usize;
+    for &s in &ranks.scores {
+        if s != 0.0 && !seen_nonzero.insert(s.to_bits()) {
+            tie_count += 1;
+        }
+    }
+    if tie_count > 0 && n_total > 0 {
+        let tie_pct = (tie_count as f64) * 100.0 / (n_total as f64);
+        eprintln!(
+            "Warning: detected {} tied non-zero ranking scores ({:.2}% of genes). Ties are resolved by input order and can slightly affect enrichment outcomes.",
+            tie_count, tie_pct
+        );
+    }
+    if matches!(score_type, ScoreType::Std) && ranks.scores.iter().all(|&s| s > 0.0) {
+        eprintln!(
+            "Warning: all ranking scores are positive while scoreType='std'. For one-tailed enrichment, consider scoreType='pos'."
+        );
+    }
+
+    // Match fgsea::preparePathways() bounds behavior:
+    // minSize <- max(minSize, 1)
+    // maxSize <- min(maxSize, length(universe) - 1)
+    let min_size = min_size.max(1);
+    let max_size = max_size.min(n_total.saturating_sub(1));
     let (abs_weights, scaled_scores, ns_total) = ranks.prepare(gsea_param);
     let (simple_seed, mut r_seed_rng) = derive_fgsea_simple_seed(seed);
 
@@ -349,11 +376,11 @@ pub fn run_gsea(
             .iter()
             .filter_map(|g| gene_to_idx.get(g).copied())
             .collect();
+        hits.sort_unstable();
+        hits.dedup();
         if hits.len() < min_size || hits.len() > max_size {
             continue;
         }
-        hits.sort_unstable();
-        hits.dedup();
         let (obs_es, _) =
             calculate_gsea_score(&hits, &scaled_scores, ns_total, n_total, score_type);
         let (es, peak_idx) = calculate_es_fgsea(&abs_weights, &hits, n_total, score_type);
