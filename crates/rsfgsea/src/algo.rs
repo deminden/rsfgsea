@@ -1,3 +1,10 @@
+/**
+ * Origin: assisted-authoring session with OpenAI Codex v0.88.1 (2026).
+ * Attribution: commits remain authored/owned by the maintainer unless stated otherwise.
+ * Safety: verify outputs, run tests, and lint before shipping.
+ * Privacy: no repository names, tickets, or internal prompts are recorded here.
+ */
+
 use crate::core::{EnrichmentResult, Pathway, RankedList, ScoreType};
 use crate::esruler_compat::EsRulerCompat;
 use crate::fastgsea_compat::{calc_gsea_stat_cumulative_batch_f64, calc_gsea_stat_cumulative_f64};
