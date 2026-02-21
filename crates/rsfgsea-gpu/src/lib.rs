@@ -17,6 +17,24 @@ pub struct GpuEngine {
 }
 
 impl GpuEngine {
+    fn max_storage_binding_size(&self) -> usize {
+        self.device.limits().max_storage_buffer_binding_size as usize
+    }
+
+    fn capped_batch_size(&self, k: usize, requested_batch: usize) -> Result<usize> {
+        if k == 0 {
+            return Err(anyhow::anyhow!("Pathway size (k) must be > 0"));
+        }
+        let max_binding = self.max_storage_binding_size();
+        let bytes_per_subset = k
+            .checked_mul(std::mem::size_of::<u32>())
+            .ok_or_else(|| anyhow::anyhow!("Subset size overflow for k={k}"))?;
+        let max_by_subsets = max_binding / bytes_per_subset;
+        let max_by_results = max_binding / std::mem::size_of::<GpuResult>();
+        let cap = max_by_subsets.min(max_by_results).max(1);
+        Ok(requested_batch.min(cap))
+    }
+
     pub async fn new() -> Result<Self> {
         let allow_gl_backend = std::env::var("RSFGSEA_GPU_ALLOW_GL")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
@@ -191,6 +209,22 @@ If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MES
         batch_size: u32,
         score_type: u32,
     ) -> Result<Vec<GpuResult>> {
+        let max_binding = self.max_storage_binding_size();
+        let subsets_bytes = subsets_indices
+            .len()
+            .checked_mul(std::mem::size_of::<u32>())
+            .ok_or_else(|| anyhow::anyhow!("subsets buffer size overflow"))?;
+        let results_bytes = batch_size as usize * std::mem::size_of::<GpuResult>();
+        if subsets_bytes > max_binding || results_bytes > max_binding {
+            return Err(anyhow::anyhow!(
+                "GPU batch exceeds storage binding limit: subsets={} bytes, results={} bytes, limit={} bytes. \
+Reduce batch size.",
+                subsets_bytes,
+                results_bytes,
+                max_binding
+            ));
+        }
+
         let subsets_buffer = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -317,7 +351,8 @@ If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MES
         score_type: u32,
     ) -> Result<FgseaSimpleResult> {
         use rand::prelude::*;
-        use rand::rngs::StdRng;
+        use rand::rngs::SmallRng;
+        use rand::seq::index::sample;
 
         let n_total = abs_scores.len();
         let k = pathway_indices.len();
@@ -330,8 +365,8 @@ If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MES
         sorted_pathway.sort_unstable();
         let obs_es = self.calculate_es_cpu(&sorted_pathway, abs_scores, score_type)?;
 
-        let _rng = StdRng::seed_from_u64(seed);
-        let batch_size = 200000; // Increased for better throughput on high-end GPUs
+        let target_batch_size = 200000; // Throughput target; capped by adapter limits below.
+        let batch_size = self.capped_batch_size(k, target_batch_size)?;
         let num_batches = n_perm.div_ceil(batch_size);
 
         let mut n_le_es = 0u64;
@@ -344,8 +379,6 @@ If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MES
         let mut total_perm_gen_time = std::time::Duration::from_secs(0);
         let mut total_gpu_comp_time = std::time::Duration::from_secs(0);
 
-        let pool: Vec<usize> = (0..n_total).collect();
-
         for batch_idx in 0..num_batches {
             let current_batch_size = if batch_idx == num_batches - 1 {
                 n_perm - batch_idx * batch_size
@@ -356,16 +389,17 @@ If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MES
             let gen_start = std::time::Instant::now();
             let mut subsets = vec![0u32; current_batch_size as usize * k];
 
-            use rand::rngs::SmallRng;
-
             subsets
                 .par_chunks_mut(k)
-                .for_each_with(pool.clone(), |local_pool, chunk| {
-                    let mut local_rng = SmallRng::from_entropy();
-                    for i in 0..k {
-                        let j = local_rng.gen_range(i..n_total);
-                        local_pool.swap(i, j);
-                        chunk[i] = local_pool[i] as u32;
+                .enumerate()
+                .for_each(|(i, chunk)| {
+                    let sample_seed = seed
+                        .wrapping_add((batch_idx * batch_size) as u64)
+                        .wrapping_add(i as u64);
+                    let mut local_rng = SmallRng::seed_from_u64(sample_seed);
+                    let picks = sample(&mut local_rng, n_total, k);
+                    for (dst, idx) in picks.into_iter().enumerate() {
+                        chunk[dst] = idx as u32;
                     }
                     chunk.sort_unstable();
                 });
@@ -450,12 +484,12 @@ If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MES
         score_type: u32,
     ) -> Result<Vec<f32>> {
         use rand::SeedableRng;
-        use rand::prelude::*;
         use rand::rngs::SmallRng;
+        use rand::seq::index::sample;
 
-        let batch_size = 200000;
+        let target_batch_size = 200000;
+        let batch_size = self.capped_batch_size(k, target_batch_size)?;
         let num_batches = n_perm.div_ceil(batch_size);
-        let pool: Vec<usize> = (0..n_total).collect();
         let mut all_es = Vec::with_capacity(n_perm);
 
         for batch_idx in 0..num_batches {
@@ -467,20 +501,20 @@ If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MES
 
             let mut subsets = vec![0u32; current_batch_size as usize * k];
 
-            subsets.par_chunks_mut(k).enumerate().for_each_with(
-                pool.clone(),
-                |local_pool, (i, chunk)| {
-                    let mut local_rng = SmallRng::seed_from_u64(
-                        seed + batch_idx as u64 * batch_size as u64 + i as u64,
-                    );
-                    for i in 0..k {
-                        let j = local_rng.gen_range(i..n_total);
-                        local_pool.swap(i, j);
-                        chunk[i] = local_pool[i] as u32;
+            subsets
+                .par_chunks_mut(k)
+                .enumerate()
+                .for_each(|(i, chunk)| {
+                    let sample_seed = seed
+                        .wrapping_add((batch_idx * batch_size) as u64)
+                        .wrapping_add(i as u64);
+                    let mut local_rng = SmallRng::seed_from_u64(sample_seed);
+                    let picks = sample(&mut local_rng, n_total, k);
+                    for (dst, idx) in picks.into_iter().enumerate() {
+                        chunk[dst] = idx as u32;
                     }
                     chunk.sort_unstable();
-                },
-            );
+                });
 
             let batch_results = self.compute_es_batch_with_buffer(
                 scores_buffer,

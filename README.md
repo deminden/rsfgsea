@@ -4,10 +4,10 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 
 ## Features
 
-- **Full fgsea logic**: Implements multilevel splitting Monte Carlo for accurate p-value estimation (down to `1e-100` and beyond), Normalized Enrichment Scores (NES), and `log2err`.
-- **GPU Acceleration**: WebGPU implementation that combines fast screening with high-precision multilevel refinement.
-- **High Efficiency**: Uses $O(k)$ algorithms for Enrichment Score calculation, avoiding redundant scans. **5x faster** than R `fgsea` (multilevel) at scale on CPU, and significantly faster on GPU.
-- **Optimized sampling**: Simulates permutations using high-speed non-crypto random number generators (`SmallRng`) and Fisher-Yates shuffling.
+- **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`, including R-aligned defaults for practical parity.
+- **Hybrid CPU/GPU Engine**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
+- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on large 1-worker benchmark workloads, `rsfgsea` is about **3.0x-4.2x faster** than R `fgsea` in this repo's current benchmark setup.
+- **Deterministic + High-Throughput RNG Paths**: R-compatible MT19937-based paths are used for parity-sensitive execution, with optimized RNG/shuffle paths available in GPU-oriented flows.
 
 ## Usage
 
@@ -159,13 +159,15 @@ PATHWAY_B  description  GENE4  GENE5
 
 ## Performance Comparison (Computation Only)
 
-Benchmarked on **AMD Ryzen 9 7950X3D**. Times are **median of 3 runs** (after one warmup run).
+Benchmarked on **AMD Ryzen 9 7950X3D**. Times are **median of 5 runs** (after one warmup run).
 
 **Benchmark setup**:
 - Ranked list: `data/pearson_symbols.rnk` (356 genes)
 - Small pathways: `data/h.all.v2025.1.Hs.symbols.gmt` (50 total, 37 passing size filters)
 - Large pathways: `data/Human_GO_AllPathways_noPFOCR_with_GO_iea_March_01_2024_symbol_renamed.gmt` (29,705 total, 5,582 passing size filters)
 - Size filters: `minSize=1`, `maxSize=5000`
+- Rust timing source: CLI compute timer (`GSEA_COMP_TIME_MS`) in release mode
+- R timing source: `system.time(...)["elapsed"]` around `fgsea` calls
 - R multicore modes: `BiocParallel::MulticoreParam(workers=16|32)` passed as `BPPARAM`
 
 ### Modes
@@ -181,18 +183,29 @@ Parameters: `eps=1e-50`, `sampleSize=101` (R), `nPermSimple=1000` (rsfgsea simpl
 
 | Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
-| Small (50 pathways) | 6 | 1,233 | 8 | 1,340 | 10 | 1,345 | 16w: 0.75x, 32w: 0.60x | 16w: 0.92x, 32w: 0.92x | 205.5x | 167.5x | 134.5x |
-| Large (29,705 pathways) | 574 | 3,216 | 560 | 3,585 | 549 | 3,455 | 16w: 1.03x, 32w: 1.05x | 16w: 0.90x, 32w: 0.93x | 5.6x | 6.4x | 6.3x |
+| Small (50 pathways) | 2 | 44 | 3 | 72 | 4 | 68 | 16w: 0.67x, 32w: 0.50x | 16w: 0.61x, 32w: 0.65x | 22.0x | 24.0x | 17.0x |
+| Large (29,705 pathways) | 292 | 1,236 | 255 | 1,013 | 253 | 1,134 | 16w: 1.15x, 32w: 1.15x | 16w: 1.22x, 32w: 1.09x | 4.23x | 3.97x | 4.48x |
 
 #### Simple Mode
 Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).
 
 | Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
-| Small (50 pathways) | 856 | 3,798 | 817 | 1,670 | 843 | 1,780 | 16w: 1.05x, 32w: 1.02x | 16w: 2.27x, 32w: 2.13x | 4.4x | 2.0x | 2.1x |
-| Large (29,705 pathways) | 1,289 | 5,249 | 1,229 | 3,408 | 1,227 | 3,313 | 16w: 1.05x, 32w: 1.05x | 16w: 1.54x, 32w: 1.58x | 4.1x | 2.8x | 2.7x |
+| Small (50 pathways, 1M perms) | 867 | 2,725 | 872 | 416 | 868 | 482 | 16w: 0.99x, 32w: 1.00x | 16w: 6.55x, 32w: 5.65x | 3.14x | 0.48x | 0.56x |
+| Large (29,705 pathways, 10k perms) | 1,020 | 3,100 | 976 | 827 | 978 | 862 | 16w: 1.05x, 32w: 1.04x | 16w: 3.75x, 32w: 3.60x | 3.04x | 0.85x | 0.88x |
 
-- R shows clear multicore gains in **Simple** mode on this dataset, but no gain in **Multilevel** mode.
+#### Rust Thread-Scaling Sweep (Many-Variant View)
+Additional Rust-only sweep (same workloads/settings) across `1/2/4/8/16/32` workers:
+
+| Workload | 1w (ms) | 2w (ms) | 4w (ms) | 8w (ms) | 16w (ms) | 32w (ms) | Best scaling vs 1w |
+| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
+| Multilevel / Small | 3 | 3 | 2 | 3 | 4 | 4 | 1.50x (4w) |
+| Multilevel / Large | 291 | 269 | 260 | 261 | 255 | 254 | 1.15x (32w) |
+| Simple / Small (1M perms) | 876 | 876 | 883 | 880 | 879 | 873 | 1.00x (32w) |
+| Simple / Large (10k perms) | 1,021 | 994 | 971 | 974 | 975 | 956 | 1.07x (32w) |
+
+- On this machine and workload shape, `rsfgsea` gains multicore speed mostly in **large multilevel** runs.
+- In **simple mode**, R's multicore path scales much more aggressively and can be faster than Rust at 16/32 workers.
 
 ## Precision vs R
 
@@ -200,23 +213,23 @@ Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).
 - **Validation protocol**: parity tests against R reference outputs are implemented in `crates/rsfgsea/tests/r_validation.rs`.
 - **Primary metrics**: max/mean absolute differences for ES, NES, p-value, and adjusted p-value on matched pathways.
 - **Examples-folder snapshot** (`data/Folder_with_examples`, 23 files, seed `42`, `nPermSimple=1000`):
-  - Multilevel mode vs R `fgseaMultilevel`: max `|ES|` diff `4.998e-09`, max `|NES|` diff `4.995e-09`, max `|pval|` diff `1.195e-02`, max `|padj|` diff `2.331e-01`.
-  - Simple mode vs R `fgseaSimple`: max `|ES|` diff `4.998e-09`, max `|NES|` diff `4.995e-09`, max `|pval|` diff `4.985e-09`, max `|padj|` diff `4.965e-09`.
+  - Multilevel mode vs R `fgseaMultilevel`: max `|ES|` diff `4.988e-09`, max `|NES|` diff `4.983e-09`, max `|pval|` diff `4.975e-09`, max `|padj|` diff `4.965e-09`.
+  - Simple mode vs R `fgseaSimple`: max `|ES|` diff `4.988e-09`, max `|NES|` diff `4.983e-09`, max `|pval|` diff `4.975e-09`, max `|padj|` diff `4.965e-09`.
 - **Distribution-level parity stats** (examples folder, seed `42`, matched pathways `n=746` across `22` files, absolute differences):
 
 | Mode | Metric | Mean | Median | P95 | Max |
 | :--- | :--- | ---: | ---: | ---: | ---: |
-| Multilevel | `abs(ES)` | `2.535e-09` | `2.531e-09` | `4.735e-09` | `4.998e-09` |
-| Multilevel | `abs(NES)` | `2.473e-09` | `2.483e-09` | `4.693e-09` | `4.995e-09` |
-| Multilevel | `abs(pval)` | `3.270e-05` | `2.682e-09` | `4.785e-09` | `1.195e-02` |
-| Multilevel | `abs(padj)` | `9.252e-04` | `2.183e-09` | `4.316e-09` | `2.331e-01` |
-| Simple | `abs(ES)` | `2.535e-09` | `2.531e-09` | `4.735e-09` | `4.998e-09` |
-| Simple | `abs(NES)` | `2.473e-09` | `2.483e-09` | `4.693e-09` | `4.995e-09` |
-| Simple | `abs(pval)` | `2.551e-09` | `2.662e-09` | `4.755e-09` | `4.985e-09` |
-| Simple | `abs(padj)` | `2.535e-09` | `2.183e-09` | `4.316e-09` | `4.965e-09` |
+| Multilevel | `abs(ES)` | `2.535e-09` | `2.583e-09` | `4.723e-09` | `4.988e-09` |
+| Multilevel | `abs(NES)` | `2.555e-09` | `2.619e-09` | `4.707e-09` | `4.983e-09` |
+| Multilevel | `abs(pval)` | `2.543e-09` | `2.602e-09` | `4.745e-09` | `4.975e-09` |
+| Multilevel | `abs(padj)` | `2.607e-09` | `2.183e-09` | `4.542e-09` | `4.965e-09` |
+| Simple | `abs(ES)` | `2.535e-09` | `2.583e-09` | `4.723e-09` | `4.988e-09` |
+| Simple | `abs(NES)` | `2.555e-09` | `2.619e-09` | `4.707e-09` | `4.983e-09` |
+| Simple | `abs(pval)` | `2.534e-09` | `2.577e-09` | `4.745e-09` | `4.975e-09` |
+| Simple | `abs(padj)` | `2.605e-09` | `2.183e-09` | `4.542e-09` | `4.965e-09` |
 
 - **Finite-value coverage**: p-value NaN mismatch count was `0` in both modes on this run.
-- **Interpretation**: ES/NES agreement is typically near floating-point precision; p-value differences are expected to remain stochastic because both implementations use Monte Carlo sampling.
+- **Interpretation**: in this parity configuration and snapshot, ES/NES/p-value agreement is at floating-point-noise scale.
 - **Scope**: parity here means statistical agreement under the same method/settings, not bitwise identity of every output field.
 
 ### Parity Mode
@@ -285,6 +298,7 @@ Pull requests are encouraged — especially for:
   cargo fmt --all
   cargo clippy --workspace --all-targets --all-features
   cargo test --workspace --all-features
+  ```
 
 ## License
 
