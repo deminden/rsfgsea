@@ -6,7 +6,14 @@ use crate::rng_compat::{Mt19937Compat, combination, uid_wrapper};
 use special::Gamma;
 
 pub fn beta_mean_log(a: usize, b: usize) -> f64 {
-    (a as f64).digamma() - ((b + 1) as f64).digamma()
+    if a > b {
+        return 0.0;
+    }
+    let mut s = 0.0_f64;
+    for i in a..=b {
+        s -= 1.0 / (i as f64);
+    }
+    s
 }
 
 pub fn multilevel_error_level(level: usize, sample_size: usize) -> f64 {
@@ -30,6 +37,30 @@ impl Score {
 
     pub fn numerator(self) -> i64 {
         self.coef_ns * self.diff - self.coef_const * self.ns
+    }
+
+    pub fn compare_raw(self, other: Self) -> i128 {
+        let p1 = self.coef_ns * self.diff + self.ns * (other.coef_const - self.coef_const);
+        let q1 = self.ns * self.diff;
+        let p2 = other.coef_ns;
+        let q2 = other.ns;
+        (p1 as i128) * (q2 as i128) - (p2 as i128) * (q1 as i128)
+    }
+
+    pub fn lt_cpp(self, other: Self) -> bool {
+        self.compare_raw(other) < 0
+    }
+
+    pub fn le_cpp(self, other: Self) -> bool {
+        self.compare_raw(other) <= 0
+    }
+
+    pub fn gt_cpp(self, other: Self) -> bool {
+        self.compare_raw(other) > 0
+    }
+
+    pub fn ge_cpp(self, other: Self) -> bool {
+        self.compare_raw(other) >= 0
     }
 
     pub fn max_ns() -> i64 {
@@ -56,13 +87,7 @@ impl std::ops::Neg for Score {
 
 impl Ord for Score {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        let p1 = self.coef_ns * self.diff + self.ns * (other.coef_const - self.coef_const);
-        let q1 = self.ns * self.diff;
-        let p2 = other.coef_ns;
-        let q2 = other.ns;
-        let lhs = (p1 as i128) * (q2 as i128);
-        let rhs = (p2 as i128) * (q1 as i128);
-        lhs.cmp(&rhs)
+        self.compare_raw(*other).cmp(&0)
     }
 }
 
@@ -72,10 +97,42 @@ impl PartialOrd for Score {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Gsea {
     pub score: Score,
     pub hash: u64,
+}
+
+impl Gsea {
+    // Match std::pair<score_t, hash_t> comparison semantics from C++:
+    // a < b iff (a.score < b.score) || (!(b.score < a.score) && a.hash < b.hash)
+    pub fn lt_cpp(self, other: Self) -> bool {
+        if self.score.lt_cpp(other.score) {
+            true
+        } else if other.score.lt_cpp(self.score) {
+            false
+        } else {
+            self.hash < other.hash
+        }
+    }
+
+    pub fn ge_cpp(self, other: Self) -> bool {
+        !self.lt_cpp(other)
+    }
+
+    pub fn le_cpp(self, other: Self) -> bool {
+        !other.lt_cpp(self)
+    }
+
+    pub fn cmp_cpp(self, other: Self) -> std::cmp::Ordering {
+        if self.lt_cpp(other) {
+            std::cmp::Ordering::Less
+        } else if other.lt_cpp(self) {
+            std::cmp::Ordering::Greater
+        } else {
+            std::cmp::Ordering::Equal
+        }
+    }
 }
 
 pub fn calc_es(ranks: &[i64], p: &[usize], ns_opt: Option<i64>) -> Score {
@@ -216,19 +273,21 @@ impl EsRulerCompat {
         for sample_id in 0..self.sample_size {
             let sample_es_pos =
                 calc_positive_es(&self.ranks, &self.current_samples[sample_id], None);
-            let sample_es = calc_es(&self.ranks, &self.current_samples[sample_id], None);
             let sample_hash = self.calc_hash(&self.current_samples[sample_id]);
+            // Match fgsea C++ exactly: positivity flag comes from calcES().getNumerator() >= 0.
+            let sample_es = calc_es(&self.ranks, &self.current_samples[sample_id], None);
+            let sample_is_positive = sample_es.numerator() >= 0;
             stats.push((
                 Gsea {
                     score: sample_es_pos,
                     hash: sample_hash,
                 },
-                sample_es.numerator() >= 0,
+                sample_is_positive,
                 sample_id,
             ));
         }
         stats.sort_by(|a, b| {
-            a.0.cmp(&b.0)
+            a.0.cmp_cpp(b.0)
                 .then_with(|| a.1.cmp(&b.1))
                 .then_with(|| a.2.cmp(&b.2))
         });
@@ -236,14 +295,16 @@ impl EsRulerCompat {
         let central_value = stats[self.sample_size / 2].0;
         let mut start_from = 0usize;
         for (i, s) in stats.iter().enumerate() {
-            if s.0 >= central_value {
+            if s.0.ge_cpp(central_value) {
                 start_from = i;
                 break;
             }
         }
 
         if start_from == 0 {
-            while start_from < self.sample_size && stats[start_from].0 == stats[0].0 {
+            while start_from < self.sample_size
+                && stats[start_from].0.cmp_cpp(stats[0].0) == std::cmp::Ordering::Equal
+            {
                 start_from += 1;
             }
         }
@@ -414,7 +475,7 @@ impl EsRulerCompat {
         let mut lvls_var = 0.0;
 
         for lvl in &self.levels {
-            if es <= lvl.bound {
+            if es.le_cpp(lvl.bound) {
                 let mut cnt_last = 0usize;
                 let mut cnt_positive = 0usize;
                 for &(_, is_positive) in &lvl.high_scores {
@@ -422,7 +483,7 @@ impl EsRulerCompat {
                     cnt_positive += is_positive as usize;
                 }
                 for &(x, is_positive) in &lvl.low_scores {
-                    if x >= es {
+                    if x.ge_cpp(es) {
                         cnt_last += 1;
                         cnt_positive += is_positive as usize;
                     }
@@ -454,7 +515,7 @@ impl EsRulerCompat {
         let mut cnt_last = 0usize;
         let mut cnt_positive = 0usize;
         for &(x, is_positive) in &last.high_scores {
-            if x >= es {
+            if x.ge_cpp(es) {
                 cnt_last += 1;
                 cnt_positive += is_positive as usize;
             }

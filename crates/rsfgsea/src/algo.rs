@@ -1,7 +1,7 @@
 use crate::core::{EnrichmentResult, Pathway, RankedList, ScoreType};
 use crate::esruler_compat::EsRulerCompat;
-use crate::fastgsea_compat::{calc_gsea_stat_cumulative_batch_f64, calc_gsea_stat_cumulative_f64};
-use crate::rng_compat::{Mt19937Compat, RMt19937SeedCompat, combination};
+use crate::fastgsea_compat::calc_gsea_stat_cumulative_batch_f64;
+use crate::rng_compat::{RLecuyerCmrgSeedCompat, RMt19937SeedCompat};
 use rayon::prelude::*;
 use special::Gamma;
 use statrs::distribution::{Beta, ContinuousCDF};
@@ -373,7 +373,7 @@ fn run_gsea_internal(
         size: usize,
         hits: Vec<usize>,
         es: f64,
-        obs_es: GseaScore,
+        obs_es: f64,
         peak_idx: usize,
         n_le_es: usize,
         n_ge_es: usize,
@@ -422,7 +422,10 @@ fn run_gsea_internal(
     let min_size = min_size.max(1);
     let max_size = max_size.min(n_total.saturating_sub(1));
     let eps = eps.clamp(0.0, 1.0);
-    let (abs_weights, scaled_scores, ns_total) = ranks.prepare(gsea_param);
+    let (_abs_weights, scaled_scores, ns_total) = ranks.prepare(gsea_param);
+    // fgsea simple/multilevel wrapper path operates on prepareStats()-scaled integer stats.
+    // Use the same scaled values (as f64) for observed ES and simple permutation stage.
+    let simple_stats: Vec<f64> = scaled_scores.iter().map(|&v| v as f64).collect();
     let (simple_seed, mut r_seed_rng) = derive_fgsea_simple_seed(seed);
 
     // Heavy pathway preprocessing is independent per pathway; use parallel map
@@ -440,15 +443,13 @@ fn run_gsea_internal(
             if hits.len() < min_size || hits.len() > max_size {
                 return None;
             }
-            let (obs_es, _) =
-                calculate_gsea_score(&hits, &scaled_scores, ns_total, n_total, score_type);
-            let (es, peak_idx) = calculate_es_fgsea(&abs_weights, &hits, n_total, score_type);
+            let (es, peak_idx) = calculate_es_fgsea(&simple_stats, &hits, n_total, score_type);
             Some(Working {
                 pathway_name: pw.name.clone(),
                 size: hits.len(),
                 hits,
                 es,
-                obs_es,
+                obs_es: es,
                 peak_idx,
                 n_le_es: 0,
                 n_ge_es: 0,
@@ -469,34 +470,67 @@ fn run_gsea_internal(
 
     if n_perm > 0 && !work.is_empty() {
         if work.len() == 1 {
-            let mut rng = Mt19937Compat::new(simple_seed as u32);
+            // Match fgseaSimpleImpl(toKeepLength == 1) semantics:
+            // - In fgseaSimple: draw seeds vector from MT, then inside bplapply
+            //   `set.seed(seeds[i])` under SerialParam (L'Ecuyer-CMRG RNG kind).
+            // - In fgseaMultilevel simple stage: one seed draw and one chunk.
+            let (perm_chunks, chunk_seeds): (Vec<usize>, Vec<u64>) = if allow_multilevel {
+                (vec![n_perm], vec![simple_seed])
+            } else {
+                let granularity = 1000usize.max(n_perm.div_ceil(128));
+                let mut rem = n_perm;
+                let mut chunks = Vec::new();
+                while rem >= granularity {
+                    chunks.push(granularity);
+                    rem -= granularity;
+                }
+                if rem > 0 {
+                    chunks.push(rem);
+                }
+                let mut seeds = Vec::with_capacity(chunks.len());
+                if !chunks.is_empty() {
+                    seeds.push(simple_seed);
+                    for _ in 1..chunks.len() {
+                        seeds.push(r_seed_rng.sample_int_one(1_000_000_000) as u64);
+                    }
+                }
+                (chunks, seeds)
+            };
+
             let k = work[0].size;
             let pathway_score = work[0].es;
-            for _ in 0..n_perm {
-                let rand_sample = combination(1, n_total, k, &mut rng);
-                let rand_es =
-                    calc_gsea_stat_cumulative_f64(&abs_weights, &rand_sample, 1.0, score_type)
-                        [k - 1];
-                if rand_es <= pathway_score {
-                    work[0].n_le_es += 1;
-                }
-                if rand_es >= pathway_score {
-                    work[0].n_ge_es += 1;
-                }
-                if rand_es <= 0.0 {
-                    work[0].n_le_zero += 1;
-                    work[0].le_zero_sum += rand_es;
-                }
-                if rand_es >= 0.0 {
-                    work[0].n_ge_zero += 1;
-                    work[0].ge_zero_sum += rand_es;
+            for (chunk_iters, chunk_seed) in perm_chunks.into_iter().zip(chunk_seeds.into_iter()) {
+                let mut r_rng = RLecuyerCmrgSeedCompat::from_r_set_seed(chunk_seed as u32);
+                for _ in 0..chunk_iters {
+                    let mut rand_hits: Vec<usize> = r_rng
+                        .sample_int_no_replace(n_total, k)
+                        .into_iter()
+                        .map(|x| x - 1)
+                        .collect();
+                    rand_hits.sort_unstable();
+                    let (rand_es, _) =
+                        calculate_es_fgsea(&simple_stats, &rand_hits, n_total, score_type);
+                    if rand_es <= pathway_score {
+                        work[0].n_le_es += 1;
+                    }
+                    if rand_es >= pathway_score {
+                        work[0].n_ge_es += 1;
+                    }
+                    if rand_es <= 0.0 {
+                        work[0].n_le_zero += 1;
+                        work[0].le_zero_sum += rand_es;
+                    }
+                    if rand_es >= 0.0 {
+                        work[0].n_ge_zero += 1;
+                        work[0].ge_zero_sum += rand_es;
+                    }
                 }
             }
         } else {
             let pathway_scores: Vec<f64> = work.iter().map(|w| w.es).collect();
             let pathways_sizes: Vec<usize> = work.iter().map(|w| w.size).collect();
             let counts = calc_gsea_stat_cumulative_batch_f64(
-                &abs_weights,
+                &simple_stats,
                 1.0,
                 &pathway_scores,
                 &pathways_sizes,
@@ -624,7 +658,6 @@ fn run_gsea_internal(
             if work[i].p_value.is_finite()
                 && mode_fraction_vec[i] >= 10
                 && mult_error_vec[i].is_finite()
-                && simple_error_vec[i].is_finite()
                 && mult_error_vec[i] < simple_error_vec[i]
             {
                 multilevel_groups.entry(work[i].size).or_default().push(i);
@@ -649,7 +682,7 @@ fn run_gsea_internal(
                 .fold(f64::INFINITY, f64::min);
             let eps_group = eps * denom_prob_min;
 
-            let obs_es: Vec<GseaScore> = idxs.iter().map(|&i| work[i].obs_es).collect();
+            let obs_es: Vec<f64> = idxs.iter().map(|&i| work[i].obs_es).collect();
             let ml = run_multilevel_gsea_group(
                 n_total,
                 &scaled_scores,
@@ -763,7 +796,7 @@ pub fn run_multilevel_gsea(
     scaled_scores: &[i64],
     _ns_total: i64,
     k: usize,
-    obs_es: GseaScore,
+    obs_es: f64,
     score_type: ScoreType,
     sample_size: usize,
     seed: u64,
@@ -787,7 +820,7 @@ fn run_multilevel_gsea_impl(
     n_total: usize,
     scaled_scores: &[i64],
     k: usize,
-    obs_es: GseaScore,
+    obs_es: f64,
     score_type: ScoreType,
     sample_size: usize,
     seed: u64,
@@ -811,7 +844,7 @@ fn run_multilevel_gsea_group(
     scaled_scores: &[i64],
     _ns_total: i64,
     k: usize,
-    obs_es_list: &[GseaScore],
+    obs_es_list: &[f64],
     score_type: ScoreType,
     sample_size: usize,
     seed: u64,
@@ -834,7 +867,7 @@ fn run_multilevel_gsea_esruler(
     n_total: usize,
     scaled_scores: &[i64],
     k: usize,
-    obs_es: GseaScore,
+    obs_es: f64,
     score_type: ScoreType,
     sample_size: usize,
     seed: u64,
@@ -850,7 +883,7 @@ fn run_multilevel_gsea_esruler(
     let mut es_pos = EsRulerCompat::new(pos_ranks, sample_size, k, 1.0, false);
     let mut es_neg = EsRulerCompat::new(neg_ranks, sample_size, k, 1.0, false);
 
-    let cur_es = obs_es.get_double();
+    let cur_es = obs_es;
     if cur_es >= 0.0 {
         es_pos.extend(cur_es.abs(), seed, eps);
     } else {
@@ -865,9 +898,9 @@ fn run_multilevel_gsea_esruler(
     };
 
     if err.is_finite() {
-        (p, true, Some(err))
+        (p, _is_cp_ge_half, Some(err))
     } else {
-        (p, true, None)
+        (p, _is_cp_ge_half, None)
     }
 }
 
@@ -876,7 +909,7 @@ fn run_multilevel_gsea_esruler_group(
     n_total: usize,
     scaled_scores: &[i64],
     k: usize,
-    obs_es_list: &[GseaScore],
+    obs_es_list: &[f64],
     score_type: ScoreType,
     sample_size: usize,
     seed: u64,
@@ -895,8 +928,7 @@ fn run_multilevel_gsea_esruler_group(
 
     let mut max_es = f64::NEG_INFINITY;
     let mut min_es = f64::INFINITY;
-    for &obs in obs_es_list {
-        let es = obs.get_double();
+    for &es in obs_es_list {
         if es > max_es {
             max_es = es;
         }
@@ -916,17 +948,16 @@ fn run_multilevel_gsea_esruler_group(
     obs_es_list
         .iter()
         .copied()
-        .map(|obs| {
-            let cur_es = obs.get_double();
+        .map(|cur_es| {
             let (p, _is_cp_ge_half, err) = if cur_es >= 0.0 {
                 es_pos.get_pvalue(cur_es.abs(), eps, sign)
             } else {
                 es_neg.get_pvalue(cur_es.abs(), eps, sign)
             };
             if err.is_finite() {
-                (p, true, Some(err))
+                (p, _is_cp_ge_half, Some(err))
             } else {
-                (p, true, None)
+                (p, _is_cp_ge_half, None)
             }
         })
         .collect()
@@ -981,17 +1012,31 @@ pub fn run_gsea_gpu(
     };
 
     let mut results = vec![None; pathways.len()];
+    let gpu_verbose = std::env::var("RSFGSEA_GPU_VERBOSE")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
+    let total_groups = by_size.len();
+    let mut group_idx = 0usize;
 
     let total_null_gen_time = Arc::new(AtomicU64::new(0));
     let total_pure_screening_time = Arc::new(AtomicU64::new(0));
     let total_multilevel_time = Arc::new(AtomicU64::new(0));
 
     for (k, group) in by_size {
-        println!(
-            "Processing {} pathways of size k={} using shared null distribution...",
-            group.len(),
-            k
-        );
+        group_idx += 1;
+        if gpu_verbose
+            || group_idx == 1
+            || group_idx == total_groups
+            || group_idx.is_multiple_of(25)
+        {
+            println!(
+                "GPU null group {}/{}: {} pathways (k={})",
+                group_idx,
+                total_groups,
+                group.len(),
+                k
+            );
+        }
 
         let gen_start = std::time::Instant::now();
         let mut null_distribution = engine.generate_null_distribution(
@@ -1102,25 +1147,12 @@ pub fn run_gsea_gpu(
                     // High precision pass for significant pathways
                     // Using CPU for multilevel pass as it is faster for small batches/pathways
 
-                    // Actually we need the real obs_es as GseaScore for CPU multilevel
-                    let s_hits = {
-                        let mut h = hits.clone();
-                        h.sort_unstable();
-                        h
-                    };
-                    let (obs_gsea_score, _) = calculate_gsea_score(
-                        &s_hits,
-                        &scaled_scores,
-                        ns_total,
-                        ranks.len(),
-                        score_type,
-                    );
                     let (m_p, m_err) = run_multilevel_gsea(
                         ranks.len(),
                         &scaled_scores,
                         ns_total,
                         k,
-                        obs_gsea_score,
+                        obs_es,
                         score_type,
                         1000,
                         seed + *orig_idx as u64,
