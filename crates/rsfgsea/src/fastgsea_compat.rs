@@ -717,6 +717,89 @@ pub fn calc_gsea_stat_cumulative_batch_f64(
     out
 }
 
+pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
+    stats: &[f64],
+    gsea_param: f64,
+    pathway_scores: &[f64],
+    pathways_sizes: &[usize], // 1-based indices into cumulative vector
+    iterations: usize,
+    seed: u64,
+    score_type: ScoreType,
+) -> BatchCounts {
+    #[derive(Clone, Copy, Default)]
+    struct PathwayAcc {
+        le_es: usize,
+        ge_es: usize,
+        le_zero: usize,
+        ge_zero: usize,
+        le_zero_sum: f64,
+        ge_zero_sum: f64,
+    }
+
+    let n = stats.len();
+    let k = *pathways_sizes.iter().max().unwrap_or(&0);
+    let m = pathways_sizes.len();
+    if iterations == 0 || m == 0 || k == 0 {
+        return empty_batch_counts(m);
+    }
+
+    let score_indices: Vec<usize> = pathways_sizes.iter().map(|&x| x - 1).collect();
+    let mut accs = vec![PathwayAcc::default(); m];
+    let mut rng = Mt19937Compat::new(seed as u32);
+    const BLOCK_ITERS: usize = 128;
+    let mut done = 0usize;
+    let mut rand_es_block: Vec<Vec<f64>> = Vec::with_capacity(BLOCK_ITERS);
+
+    // Thread-invariant strategy:
+    // - keep RNG and iteration order exactly serial
+    // - parallelize pathway updates over blocks of iterations
+    // This preserves single-core numerical behavior while using multiple cores.
+    while done < iterations {
+        rand_es_block.clear();
+        let block_end = (done + BLOCK_ITERS).min(iterations);
+        for _ in done..block_end {
+            let selected = combination(1, n, k, &mut rng); // 1-based
+            rand_es_block.push(calc_gsea_stat_cumulative_f64(
+                stats, &selected, gsea_param, score_type,
+            ));
+        }
+
+        accs.par_iter_mut().enumerate().for_each(|(i, acc)| {
+            let idx = score_indices[i];
+            let pathway_score = pathway_scores[i];
+            for rand_es in &rand_es_block {
+                let v = rand_es[idx];
+                if v <= pathway_score {
+                    acc.le_es += 1;
+                }
+                if v >= pathway_score {
+                    acc.ge_es += 1;
+                }
+                if v <= 0.0 {
+                    acc.le_zero += 1;
+                    acc.le_zero_sum += v;
+                }
+                if v >= 0.0 {
+                    acc.ge_zero += 1;
+                    acc.ge_zero_sum += v;
+                }
+            }
+        });
+        done = block_end;
+    }
+
+    let mut out = empty_batch_counts(m);
+    for (i, acc) in accs.into_iter().enumerate() {
+        out.le_es[i] = acc.le_es;
+        out.ge_es[i] = acc.ge_es;
+        out.le_zero[i] = acc.le_zero;
+        out.ge_zero[i] = acc.ge_zero;
+        out.le_zero_sum[i] = acc.le_zero_sum;
+        out.ge_zero_sum[i] = acc.ge_zero_sum;
+    }
+    out
+}
+
 pub fn calc_gsea_stat_cumulative_batch_f64_parallel(
     stats: &[f64],
     gsea_param: f64,

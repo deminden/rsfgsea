@@ -6,7 +6,7 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 
 - **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`, including R-aligned defaults for practical parity.
 - **Hybrid CPU/GPU Engine**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
-- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on large 1-worker benchmark workloads, `rsfgsea` is about **3.0x-4.2x faster** than R `fgsea` in this repo's current benchmark setup.
+- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on large 1-worker benchmark workloads, `rsfgsea` is about **3.0x-4.3x faster** than R `fgsea` in this repo's current benchmark setup.
 - **Deterministic + High-Throughput RNG Paths**: R-compatible MT19937-based paths are used for parity-sensitive execution, with optimized RNG/shuffle paths available in GPU-oriented flows.
 
 ## Usage
@@ -19,16 +19,20 @@ git clone https://github.com/deminden/rsfgsea
 cd rsfgsea
 cargo build --workspace --release
 
-# Run GSEA
+# Minimal run (defaults: mode=fgsea, nPermSimple=1000, seed=42)
 ./target/release/rsfgsea \
-    --ranks data/ranks.rnk \
-    --gmt data/pathways.gmt \
+    --ranks data/pearson_symbols.rnk \
+    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
+    --output results.tsv
+
+# Full parameter example
+./target/release/rsfgsea \
+    --ranks data/pearson_symbols.rnk \
+    --gmt data/Human_GO_AllPathways_noPFOCR_with_GO_iea_March_01_2024_symbol_renamed.gmt \
     --mode fgsea \
     --nPermSimple 1000 \
-    # optionally force simple mode like original fgsea(..., nperm=...)
-    # --nperm 10000 \
     --minSize 1 \
-    --maxSize 355 \
+    --maxSize 5000 \
     --scoreType std \
     --gseaParam 1 \
     --eps 1e-50 \
@@ -183,29 +187,31 @@ Parameters: `eps=1e-50`, `sampleSize=101` (R), `nPermSimple=1000` (rsfgsea simpl
 
 | Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
-| Small (50 pathways) | 2 | 44 | 3 | 72 | 4 | 68 | 16w: 0.67x, 32w: 0.50x | 16w: 0.61x, 32w: 0.65x | 22.0x | 24.0x | 17.0x |
-| Large (29,705 pathways) | 292 | 1,236 | 255 | 1,013 | 253 | 1,134 | 16w: 1.15x, 32w: 1.15x | 16w: 1.22x, 32w: 1.09x | 4.23x | 3.97x | 4.48x |
+| Small (50 pathways) | 2 | 43 | 3 | 69 | 4 | 72 | 16w: 0.67x, 32w: 0.50x | 16w: 0.62x, 32w: 0.60x | 21.50x | 23.00x | 18.00x |
+| Large (29,705 pathways) | 276 | 1,190 | 104 | 939 | 116 | 1,030 | 16w: 2.65x, 32w: 2.38x | 16w: 1.27x, 32w: 1.16x | 4.31x | 9.03x | 8.88x |
 
 #### Simple Mode
 Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).
 
 | Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
-| Small (50 pathways, 1M perms) | 867 | 2,725 | 872 | 416 | 868 | 482 | 16w: 0.99x, 32w: 1.00x | 16w: 6.55x, 32w: 5.65x | 3.14x | 0.48x | 0.56x |
-| Large (29,705 pathways, 10k perms) | 1,020 | 3,100 | 976 | 827 | 978 | 862 | 16w: 1.05x, 32w: 1.04x | 16w: 3.75x, 32w: 3.60x | 3.04x | 0.85x | 0.88x |
+| Small (50 pathways, 1M perms) | 814 | 2,544 | 829 | 406 | 847 | 468 | 16w: 0.98x, 32w: 0.96x | 16w: 6.27x, 32w: 5.44x | 3.13x | 0.49x | 0.55x |
+| Large (29,705 pathways, 10k perms) | 948 | 2,875 | 687 | 774 | 797 | 829 | 16w: 1.38x, 32w: 1.19x | 16w: 3.71x, 32w: 3.47x | 3.03x | 1.13x | 1.04x |
 
 #### Rust Thread-Scaling Sweep (Many-Variant View)
-Additional Rust-only sweep (same workloads/settings) across `1/2/4/8/16/32` workers:
+Additional Rust-only sweep (same workloads/settings) across `1/2/4/8/16/32` workers (median of 3 runs after warmup):
 
 | Workload | 1w (ms) | 2w (ms) | 4w (ms) | 8w (ms) | 16w (ms) | 32w (ms) | Best scaling vs 1w |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
-| Multilevel / Small | 3 | 3 | 2 | 3 | 4 | 4 | 1.50x (4w) |
-| Multilevel / Large | 291 | 269 | 260 | 261 | 255 | 254 | 1.15x (32w) |
-| Simple / Small (1M perms) | 876 | 876 | 883 | 880 | 879 | 873 | 1.00x (32w) |
-| Simple / Large (10k perms) | 1,021 | 994 | 971 | 974 | 975 | 956 | 1.07x (32w) |
+| Multilevel / Small | 2 | 2 | 2 | 2 | 3 | 4 | 1.00x (2w) |
+| Multilevel / Large | 280 | 175 | 126 | 108 | 106 | 118 | 2.64x (16w) |
+| Simple / Small (1M perms) | 850 | 845 | 827 | 849 | 826 | 808 | 1.05x (32w) |
+| Simple / Large (10k perms) | 959 | 698 | 686 | 728 | 715 | 800 | 1.40x (4w) |
 
-- On this machine and workload shape, `rsfgsea` gains multicore speed mostly in **large multilevel** runs.
-- In **simple mode**, R's multicore path scales much more aggressively and can be faster than Rust at 16/32 workers.
+- This parity-preserving engine keeps outputs aligned across thread counts (`nproc`-invariant).
+- Multicore gain is strongest in large multilevel and large simple workloads; small workloads remain overhead-dominated.
+- Rust remains faster than R in multilevel mode at all measured worker counts.
+- In simple mode, Rust is faster at 1 worker and on the large workload at 16/32 workers; R remains faster on the small 1M-permutation case at 16/32 workers.
 
 ## Precision vs R
 
@@ -230,6 +236,7 @@ Additional Rust-only sweep (same workloads/settings) across `1/2/4/8/16/32` work
 
 - **Finite-value coverage**: p-value NaN mismatch count was `0` in both modes on this run.
 - **Interpretation**: in this parity configuration and snapshot, ES/NES/p-value agreement is at floating-point-noise scale.
+- **Thread invariance**: with fixed seed/settings, outputs are invariant across `nproc` values in the current CPU parity path.
 - **Scope**: parity here means statistical agreement under the same method/settings, not bitwise identity of every output field.
 
 ### Parity Mode
@@ -241,6 +248,7 @@ Use these settings when you want the closest behavior to R `fgsea`:
   - `--nPermSimple 1000`: simple stage size used before multilevel refinement.
   - `--seed <int>`: fix seed for reproducible Monte Carlo runs.
   - `--scoreType std|pos|neg`: match the R score mode.
+  - `--nproc <N>`: allowed; parity path is thread-count invariant in current implementation.
 - To force simple-only comparison (like `fgseaSimple`), use:
   - `--mode simple --nperm <N>`
 

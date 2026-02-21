@@ -1,6 +1,9 @@
 use crate::core::{EnrichmentResult, Pathway, RankedList, ScoreType};
 use crate::esruler_compat::EsRulerCompat;
-use crate::fastgsea_compat::calc_gsea_stat_cumulative_batch_f64;
+use crate::fastgsea_compat::{
+    calc_gsea_stat_cumulative_batch_f64,
+    calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel,
+};
 use crate::rng_compat::{RLecuyerCmrgSeedCompat, RMt19937SeedCompat};
 use rayon::prelude::*;
 use special::Gamma;
@@ -529,15 +532,27 @@ fn run_gsea_internal(
         } else {
             let pathway_scores: Vec<f64> = work.iter().map(|w| w.es).collect();
             let pathways_sizes: Vec<usize> = work.iter().map(|w| w.size).collect();
-            let counts = calc_gsea_stat_cumulative_batch_f64(
-                &simple_stats,
-                1.0,
-                &pathway_scores,
-                &pathways_sizes,
-                n_perm,
-                simple_seed,
-                score_type,
-            );
+            let counts = if rayon::current_num_threads() > 1 && work.len() >= 128 {
+                calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
+                    &simple_stats,
+                    1.0,
+                    &pathway_scores,
+                    &pathways_sizes,
+                    n_perm,
+                    simple_seed,
+                    score_type,
+                )
+            } else {
+                calc_gsea_stat_cumulative_batch_f64(
+                    &simple_stats,
+                    1.0,
+                    &pathway_scores,
+                    &pathways_sizes,
+                    n_perm,
+                    simple_seed,
+                    score_type,
+                )
+            };
             for (i, w) in work.iter_mut().enumerate() {
                 w.n_le_es = counts.le_es[i];
                 w.n_ge_es = counts.ge_es[i];
@@ -674,14 +689,15 @@ fn run_gsea_internal(
             Some(r_seed_rng.sample_int_one(1_000_000_000) as u64)
         };
 
-        for (_size, idxs) in multilevel_groups {
+        let multilevel_groups_vec: Vec<Vec<usize>> = multilevel_groups.into_values().collect();
+        let group_seed = multilevel_seed.unwrap_or(simple_seed);
+        let run_group = |idxs: Vec<usize>| {
             let k = work[idxs[0]].size;
             let denom_prob_min = idxs
                 .iter()
                 .map(|&i| (mode_fraction_vec[i] + 1) as f64 / (n_perm + 1) as f64)
                 .fold(f64::INFINITY, f64::min);
             let eps_group = eps * denom_prob_min;
-
             let obs_es: Vec<f64> = idxs.iter().map(|&i| work[i].obs_es).collect();
             let ml = run_multilevel_gsea_group(
                 n_total,
@@ -691,10 +707,24 @@ fn run_gsea_internal(
                 &obs_es,
                 score_type,
                 101,
-                multilevel_seed.unwrap_or(simple_seed),
+                group_seed,
                 eps_group,
             );
+            (idxs, ml)
+        };
 
+        type MultilevelGroupResult = (Vec<usize>, Vec<(f64, bool, Option<f64>)>);
+        let multilevel_results: Vec<MultilevelGroupResult> =
+            if rayon::current_num_threads() > 1 && multilevel_groups_vec.len() > 1 {
+                multilevel_groups_vec
+                    .into_par_iter()
+                    .map(run_group)
+                    .collect()
+            } else {
+                multilevel_groups_vec.into_iter().map(run_group).collect()
+            };
+
+        for (idxs, ml) in multilevel_results {
             for (local_i, &global_i) in idxs.iter().enumerate() {
                 let (m_p, is_cp_ge_half, _m_err) = ml[local_i];
                 let denom_prob = (mode_fraction_vec[global_i] + 1) as f64 / (n_perm + 1) as f64;
