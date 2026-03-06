@@ -4,7 +4,7 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 
 ## Features
 
-- **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`, including R-aligned defaults for practical parity.
+- **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
 - **Hybrid CPU/GPU Engine**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 - **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on large 1-worker benchmark workloads, `rsfgsea` is about **3.0x-4.3x faster** than R `fgsea` in this repo's current benchmark setup.
 - **Deterministic + High-Throughput RNG Paths**: R-compatible MT19937-based paths are used for parity-sensitive execution, with optimized RNG/shuffle paths available in GPU-oriented flows.
@@ -13,7 +13,7 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 
 ### As a Binary
 
-Note: the main `rsfgsea` CLI currently runs the CPU path only. The `--gpu` flag is present but not yet wired to the hybrid GPU runner.
+Note: the main `rsfgsea` CLI can use the hybrid GPU runner with `--gpu` when built with `--features gpu`. The hybrid GPU path currently supports wrapper-style `--mode fgsea` only.
 
 ```bash
 # Build
@@ -123,7 +123,8 @@ cargo build --release --features gpu
 
 Current status:
 - `run_gsea_gpu(...)` is a hybrid path: GPU is used for simple-stage null generation / ES screening, and CPU is still used for multilevel refinement.
-- The main `rsfgsea` CLI does not yet switch to the GPU path; the current `--gpu` flag is not wired to `run_gsea_gpu(...)`.
+- The main `rsfgsea` CLI can call the hybrid GPU path with `--gpu` when built with `--features gpu`.
+- The current CLI GPU path supports wrapper-style `--mode fgsea` only. It does not yet support `--nperm`, custom `--sampleSize`, or custom `--eps`.
 - `run_gsea_gpu(...)` requires a usable non-CPU WebGPU adapter. Software adapters such as `llvmpipe` are rejected.
 
 Use the hybrid GPU runner in Rust code:

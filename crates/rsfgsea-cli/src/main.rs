@@ -143,27 +143,14 @@ fn main() -> Result<()> {
     let max_size = args
         .max_size
         .unwrap_or_else(|| ranks.len().saturating_sub(1));
-    let results = match args.mode {
-        CliMode::Fgsea => fgsea_with_sample_size(
-            &ranks,
-            &pd.pathways,
-            args.nperm,
-            args.n_perm_simple,
-            args.seed,
-            args.min_size,
-            max_size,
-            args.eps,
-            score_type,
-            args.gsea_param,
-            args.sample_size,
-        ),
-        CliMode::Multilevel => {
-            if args.nperm.is_some() {
-                bail!("--nperm is only valid with --mode fgsea or --mode simple.");
-            }
-            run_gsea_with_sample_size(
+    let results = if args.gpu {
+        run_gpu_mode(&args, &ranks, &pd.pathways, score_type, max_size)?
+    } else {
+        match args.mode {
+            CliMode::Fgsea => fgsea_with_sample_size(
                 &ranks,
                 &pd.pathways,
+                args.nperm,
                 args.n_perm_simple,
                 args.seed,
                 args.min_size,
@@ -172,20 +159,37 @@ fn main() -> Result<()> {
                 score_type,
                 args.gsea_param,
                 args.sample_size,
-            )
+            ),
+            CliMode::Multilevel => {
+                if args.nperm.is_some() {
+                    bail!("--nperm is only valid with --mode fgsea or --mode simple.");
+                }
+                run_gsea_with_sample_size(
+                    &ranks,
+                    &pd.pathways,
+                    args.n_perm_simple,
+                    args.seed,
+                    args.min_size,
+                    max_size,
+                    args.eps,
+                    score_type,
+                    args.gsea_param,
+                    args.sample_size,
+                )
+            }
+            CliMode::Simple => run_gsea_simple_with_sample_size(
+                &ranks,
+                &pd.pathways,
+                args.nperm.unwrap_or(args.n_perm_simple),
+                args.seed,
+                args.min_size,
+                max_size,
+                args.eps,
+                score_type,
+                args.gsea_param,
+                args.sample_size,
+            ),
         }
-        CliMode::Simple => run_gsea_simple_with_sample_size(
-            &ranks,
-            &pd.pathways,
-            args.nperm.unwrap_or(args.n_perm_simple),
-            args.seed,
-            args.min_size,
-            max_size,
-            args.eps,
-            score_type,
-            args.gsea_param,
-            args.sample_size,
-        ),
     };
     let duration = start.elapsed();
     println!("GSEA computation took: {:.2?}", duration);
@@ -214,4 +218,53 @@ fn main() -> Result<()> {
 
     println!("Done.");
     Ok(())
+}
+
+#[cfg(feature = "gpu")]
+fn run_gpu_mode(
+    args: &Args,
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    score_type: ScoreType,
+    max_size: usize,
+) -> Result<Vec<EnrichmentResult>> {
+    if args.mode != CliMode::Fgsea {
+        bail!("--gpu currently supports only --mode fgsea.");
+    }
+    if args.nperm.is_some() {
+        bail!("--gpu does not support --nperm/simple-only forcing yet.");
+    }
+    if args.sample_size != 101 {
+        bail!(
+            "--gpu currently uses sampleSize=101 internally; custom --sampleSize is not supported."
+        );
+    }
+    if args.eps != 1e-50 {
+        bail!("--gpu currently uses eps=1e-50 internally; custom --eps is not supported.");
+    }
+
+    println!(
+        "GPU hybrid path enabled: simple-stage screening on GPU, multilevel refinement on CPU."
+    );
+    rsfgsea::algo::run_gsea_gpu(
+        ranks,
+        pathways,
+        args.n_perm_simple,
+        args.seed,
+        args.min_size,
+        max_size,
+        score_type,
+        args.gsea_param,
+    )
+}
+
+#[cfg(not(feature = "gpu"))]
+fn run_gpu_mode(
+    _args: &Args,
+    _ranks: &RankedList,
+    _pathways: &[Pathway],
+    _score_type: ScoreType,
+    _max_size: usize,
+) -> Result<Vec<EnrichmentResult>> {
+    bail!("--gpu requires building the CLI with --features gpu.");
 }
