@@ -13,6 +13,8 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 
 ### As a Binary
 
+Note: the main `rsfgsea` CLI currently runs the CPU path only. The `--gpu` flag is present but not yet wired to the hybrid GPU runner.
+
 ```bash
 # Build
 git clone https://github.com/deminden/rsfgsea
@@ -36,6 +38,7 @@ cargo build --workspace --release
     --scoreType std \
     --gseaParam 1 \
     --eps 1e-50 \
+    --sampleSize 101 \
     --nproc 0 \
     --output results.tsv
 ```
@@ -55,6 +58,36 @@ use rsfgsea::prelude::*;
 let ranks = RankedList::new(genes, scores);
 let pathways = read_gmt("pathways.gmt")?;
 
+// Wrapper-style API (closest to R fgsea semantics).
+let results = fgsea(
+    &ranks,
+    &pathways.pathways,
+    None,   // nperm; Some(N) forces simple mode
+    1000,   // nPermSimple
+    42,     // seed
+    1,      // minSize
+    ranks.len() - 1,
+    1e-50,  // eps
+    ScoreType::Std,
+    1.0,    // gseaParam
+);
+
+// Explicit wrapper sampleSize configuration.
+let results = fgsea_with_sample_size(
+    &ranks,
+    &pathways.pathways,
+    None,
+    1000,
+    42,
+    1,
+    ranks.len() - 1,
+    1e-50,
+    ScoreType::Std,
+    1.0,
+    101,
+);
+
+// Direct multilevel API.
 let results = run_gsea(
     &ranks, 
     &pathways.pathways, 
@@ -66,6 +99,20 @@ let results = run_gsea(
     ScoreType::Std, 
     1.0     // gseaParam
 );
+
+// Or configure the multilevel sample size explicitly.
+let results = run_gsea_with_sample_size(
+    &ranks,
+    &pathways.pathways,
+    1000,
+    42,
+    1,
+    ranks.len() - 1,
+    1e-50,
+    ScoreType::Std,
+    1.0,
+    101,
+);
 ```
 
 #### GPU Support
@@ -74,7 +121,12 @@ To enable GPU acceleration, build with the `gpu` feature:
 cargo build --release --features gpu
 ```
 
-Use the GPU-specific runner in your code:
+Current status:
+- `run_gsea_gpu(...)` is a hybrid path: GPU is used for simple-stage null generation / ES screening, and CPU is still used for multilevel refinement.
+- The main `rsfgsea` CLI does not yet switch to the GPU path; the current `--gpu` flag is not wired to `run_gsea_gpu(...)`.
+- `run_gsea_gpu(...)` requires a usable non-CPU WebGPU adapter. Software adapters such as `llvmpipe` are rejected.
+
+Use the hybrid GPU runner in Rust code:
 ```rust
 let results = rsfgsea::algo::run_gsea_gpu(
     &ranks, 
@@ -95,6 +147,11 @@ let results = rsfgsea::algo::run_gsea_gpu(
 ### Python Extension
 
 The Python extension lives in `crates/rsfgseapy` and is built with `maturin`.
+
+Current status:
+- `run_gsea_py(...)` exposes CPU `fgsea`, `multilevel`, and `simple` modes.
+- The Python binding does not currently expose the hybrid GPU runner.
+- The Python API is fgsea-oriented, but it is not a full drop-in mirror of every R-side interface/parallel backend option.
 
 ```bash
 # Build
@@ -120,11 +177,14 @@ gmt_path = "pathways.gmt"
 results = rsfgseapy.run_gsea_py(
     ranks=ranks,
     gmt_path=gmt_path,
+    mode="fgsea",
     nPermSimple=1000,
+    nperm=None,
     nproc=0,
     minSize=1,
     maxSize=None,
     eps=1e-50,
+    sampleSize=101,
     scoreType="std",
     gseaParam=1.0
 )
@@ -141,6 +201,7 @@ Default fgsea-style parameters in this project interfaces:
 - `minSize=1`
 - `maxSize=length(stats)-1` (computed automatically if omitted)
 - `eps=1e-50`
+- `sampleSize=101`
 - `scoreType="std"`
 - `gseaParam=1.0`
 - `nproc=0`
@@ -237,7 +298,8 @@ Additional Rust-only sweep (same workloads/settings) across `1/2/4/8/16/32` work
 - **Finite-value coverage**: p-value NaN mismatch count was `0` in both modes on this run.
 - **Interpretation**: in this parity configuration and snapshot, ES/NES/p-value agreement is at floating-point-noise scale.
 - **Thread invariance**: with fixed seed/settings, outputs are invariant across `nproc` values in the current CPU parity path.
-- **Scope**: parity here means statistical agreement under the same method/settings, not bitwise identity of every output field.
+
+This section describes the CPU parity path. GPU parity is materially looser at present and is summarized separately in [GPU Accuracy vs R](#gpu-accuracy-vs-r).
 
 ### Parity Mode
 
@@ -266,6 +328,8 @@ Examples:
 ```
 
 ### GPU Accuracy vs R
+
+Unlike the CPU parity path above, the current hybrid GPU path does not match R at floating-point-noise scale. It uses GPU simple-stage screening/null generation plus CPU multilevel refinement, and its parity characteristics should be interpreted separately from the CPU results.
 
 GPU parity was evaluated on `data/Folder_with_examples` (23 files) against R `fgseaMultilevel` using seeds `[11, 23, 42]`, `nPermSimple=1000`, `sampleSize=101`, `eps=1e-50` (66 file-seed runs, 2,238 matched pathways total).
 
@@ -301,10 +365,10 @@ Pull requests are encouraged — especially for:
 
 ### Development notes
 
-- Please run formatting and linting before submitting:
+- Please run the full required verification sequence before submitting:
   ```bash
-  cargo fmt --all
-  cargo clippy --workspace --all-targets --all-features
+  cargo fmt --all -- --check
+  cargo clippy --workspace --all-targets --all-features -- -D warnings
   cargo test --workspace --all-features
   ```
 

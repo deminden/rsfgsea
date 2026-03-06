@@ -296,8 +296,36 @@ pub fn run_gsea(
     score_type: ScoreType,
     gsea_param: f64,
 ) -> Vec<EnrichmentResult> {
+    run_gsea_with_sample_size(
+        ranks, pathways, n_perm, seed, min_size, max_size, eps, score_type, gsea_param, 101,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_gsea_with_sample_size(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    n_perm: usize,
+    seed: u64,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+) -> Vec<EnrichmentResult> {
     run_gsea_internal(
-        ranks, pathways, n_perm, seed, min_size, max_size, eps, score_type, gsea_param, true,
+        ranks,
+        pathways,
+        n_perm,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        true,
+        sample_size,
     )
 }
 
@@ -313,8 +341,36 @@ pub fn run_gsea_simple(
     score_type: ScoreType,
     gsea_param: f64,
 ) -> Vec<EnrichmentResult> {
+    run_gsea_simple_with_sample_size(
+        ranks, pathways, n_perm, seed, min_size, max_size, eps, score_type, gsea_param, 101,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn run_gsea_simple_with_sample_size(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    n_perm: usize,
+    seed: u64,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+) -> Vec<EnrichmentResult> {
     run_gsea_internal(
-        ranks, pathways, n_perm, seed, min_size, max_size, eps, score_type, gsea_param, false,
+        ranks,
+        pathways,
+        n_perm,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        false,
+        sample_size,
     )
 }
 
@@ -331,8 +387,37 @@ pub fn fgsea(
     score_type: ScoreType,
     gsea_param: f64,
 ) -> Vec<EnrichmentResult> {
+    fgsea_with_sample_size(
+        ranks,
+        pathways,
+        nperm,
+        n_perm_simple,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        101,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_with_sample_size(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    nperm: Option<usize>,
+    n_perm_simple: usize,
+    seed: u64,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+) -> Vec<EnrichmentResult> {
     if let Some(nperm_simple_mode) = nperm {
-        run_gsea_simple(
+        run_gsea_simple_with_sample_size(
             ranks,
             pathways,
             nperm_simple_mode,
@@ -342,9 +427,10 @@ pub fn fgsea(
             eps,
             score_type,
             gsea_param,
+            sample_size,
         )
     } else {
-        run_gsea(
+        run_gsea_with_sample_size(
             ranks,
             pathways,
             n_perm_simple,
@@ -354,6 +440,7 @@ pub fn fgsea(
             eps,
             score_type,
             gsea_param,
+            sample_size,
         )
     }
 }
@@ -370,6 +457,7 @@ fn run_gsea_internal(
     score_type: ScoreType,
     gsea_param: f64,
     allow_multilevel: bool,
+    sample_size: usize,
 ) -> Vec<EnrichmentResult> {
     struct Working {
         pathway_name: String,
@@ -423,6 +511,7 @@ fn run_gsea_internal(
     // minSize <- max(minSize, 1)
     // maxSize <- min(maxSize, length(universe) - 1)
     let min_size = min_size.max(1);
+    let sample_size = sample_size.max(1);
     let max_size = max_size.min(n_total.saturating_sub(1));
     let eps = eps.clamp(0.0, 1.0);
     let (_abs_weights, scaled_scores, ns_total) = ranks.prepare(gsea_param);
@@ -661,7 +750,7 @@ fn run_gsea_internal(
             let right = log2_qbeta(0.975, n_more + 1.0, n_perm_f - n_more);
             let crude = ((n_more + 1.0) / (n_perm_f + 1.0)).log2();
             let simple_error = 0.5 * (crude - left).max(right - crude);
-            let mult_error = multilevel_error((n_more + 1.0) / (n_perm_f + 1.0), 101);
+            let mult_error = multilevel_error((n_more + 1.0) / (n_perm_f + 1.0), sample_size);
             simple_error_vec[wi] = simple_error;
             mult_error_vec[wi] = mult_error;
         }
@@ -706,7 +795,7 @@ fn run_gsea_internal(
                 k,
                 &obs_es,
                 score_type,
-                101,
+                sample_size,
                 group_seed,
                 eps_group,
             );
@@ -733,7 +822,8 @@ fn run_gsea_internal(
                     work[global_i].p_value = eps;
                     work[global_i].log2err = None;
                 } else if is_cp_ge_half {
-                    work[global_i].log2err = Some(multilevel_error(work[global_i].p_value, 101));
+                    work[global_i].log2err =
+                        Some(multilevel_error(work[global_i].p_value, sample_size));
                 } else {
                     work[global_i].log2err = None;
                 }
@@ -1008,7 +1098,10 @@ pub fn run_gsea_gpu(
     use rsfgsea_gpu::GpuEngine;
     use std::collections::BTreeMap;
 
-    let (abs_weights, scaled_scores, ns_total) = ranks.prepare(gsea_param);
+    let sample_size = 101usize;
+    let eps = 1e-50_f64;
+
+    let (abs_weights, scaled_scores, _ns_total) = ranks.prepare(gsea_param);
     let abs_weights_f32: Vec<f32> = abs_weights.iter().map(|&w| w as f32).collect();
 
     let gene_to_idx: HashMap<String, usize> = ranks
@@ -1135,10 +1228,12 @@ pub fn run_gsea_gpu(
                     (idx_le as u64, (null_distribution.len() - idx_ge) as u64)
                 };
 
-                let p_value_simple = if obs_es > 0.0 {
-                    (n_ge_es + 1) as f64 / (n_perm + 1) as f64
-                } else {
-                    (n_le_es + 1) as f64 / (n_perm + 1) as f64
+                let p_le = (n_le_es + 1) as f64 / (n_le_zero + 1) as f64;
+                let p_ge = (n_ge_es + 1) as f64 / (n_ge_zero + 1) as f64;
+                let p_value_simple = match score_type {
+                    ScoreType::Std => p_le.min(p_ge),
+                    ScoreType::Pos => p_ge,
+                    ScoreType::Neg => p_le,
                 };
                 total_pure_screening_time.fetch_add(
                     screening_start.elapsed().as_micros() as u64,
@@ -1157,42 +1252,113 @@ pub fn run_gsea_gpu(
                     None
                 };
 
-                let leading_edge: Vec<String> = if obs_es >= 0.0 {
-                    sorted_hits
+                let leading_edge: Vec<String> = match score_type {
+                    ScoreType::Pos => sorted_hits
                         .iter()
                         .filter(|&&idx| idx <= peak_idx)
                         .map(|&idx| ranks.genes[idx].clone())
-                        .collect()
-                } else {
-                    sorted_hits
-                        .iter()
-                        .filter(|&&idx| idx >= peak_idx)
-                        .map(|&idx| ranks.genes[idx].clone())
-                        .collect()
+                        .collect(),
+                    ScoreType::Neg => {
+                        let mut le: Vec<String> = sorted_hits
+                            .iter()
+                            .filter(|&&idx| idx >= peak_idx)
+                            .map(|&idx| ranks.genes[idx].clone())
+                            .collect();
+                        le.reverse();
+                        le
+                    }
+                    ScoreType::Std => {
+                        if obs_es > 0.0 {
+                            sorted_hits
+                                .iter()
+                                .filter(|&&idx| idx <= peak_idx)
+                                .map(|&idx| ranks.genes[idx].clone())
+                                .collect()
+                        } else if obs_es < 0.0 {
+                            let mut le: Vec<String> = sorted_hits
+                                .iter()
+                                .filter(|&&idx| idx >= peak_idx)
+                                .map(|&idx| ranks.genes[idx].clone())
+                                .collect();
+                            le.reverse();
+                            le
+                        } else {
+                            Vec::new()
+                        }
+                    }
                 };
 
-                let n_more_extreme = if obs_es > 0.0 { n_ge_es } else { n_le_es };
-                if n_more_extreme < 10 {
+                let n_more_extreme = match score_type {
+                    ScoreType::Std => {
+                        if obs_es > 0.0 {
+                            n_ge_es
+                        } else {
+                            n_le_es
+                        }
+                    }
+                    ScoreType::Pos => n_ge_es,
+                    ScoreType::Neg => n_le_es,
+                };
+                let mode_fraction = match score_type {
+                    ScoreType::Std => {
+                        if obs_es >= 0.0 {
+                            n_ge_zero
+                        } else {
+                            n_le_zero
+                        }
+                    }
+                    ScoreType::Pos => n_ge_zero,
+                    ScoreType::Neg => n_le_zero,
+                };
+                let simple_log2err = if p_value_simple.is_finite() {
+                    Some(
+                        1.0 / 2.0_f64.ln()
+                            * (((n_more_extreme + 1) as f64).trigamma()
+                                - ((n_perm + 1) as f64).trigamma())
+                            .sqrt(),
+                    )
+                } else {
+                    None
+                };
+                let should_run_multilevel = if mode_fraction < 10 || !p_value_simple.is_finite() {
+                    false
+                } else {
+                    let n_more = n_more_extreme as f64;
+                    let n_perm_f = n_perm as f64;
+                    let left = log2_qbeta(0.025, n_more, n_perm_f - n_more + 1.0);
+                    let right = log2_qbeta(0.975, n_more + 1.0, n_perm_f - n_more);
+                    let crude = ((n_more + 1.0) / (n_perm_f + 1.0)).log2();
+                    let simple_error = 0.5 * (crude - left).max(right - crude);
+                    let mult_error =
+                        multilevel_error((n_more + 1.0) / (n_perm_f + 1.0), sample_size);
+                    mult_error < simple_error
+                };
+                if should_run_multilevel {
                     let ml_start = std::time::Instant::now();
-                    // High precision pass for significant pathways
-                    // Using CPU for multilevel pass as it is faster for small batches/pathways
-
-                    let (m_p, m_err) = run_multilevel_gsea(
+                    let (m_p, is_cp_ge_half, _m_err) = run_multilevel_gsea_impl(
                         ranks.len(),
                         &scaled_scores,
-                        ns_total,
                         k,
                         obs_es,
                         score_type,
-                        1000,
+                        sample_size,
                         seed + *orig_idx as u64,
-                        1e-10,
+                        eps,
                     );
 
                     total_multilevel_time
                         .fetch_add(ml_start.elapsed().as_micros() as u64, Ordering::Relaxed);
 
-                    let p_value_ml = m_p;
+                    let denom_prob = (mode_fraction + 1) as f64 / (n_perm + 1) as f64;
+                    let mut p_value_ml = (m_p / denom_prob).min(1.0);
+                    let log2err = if p_value_ml < eps {
+                        p_value_ml = eps;
+                        None
+                    } else if is_cp_ge_half {
+                        Some(multilevel_error(p_value_ml, sample_size))
+                    } else {
+                        None
+                    };
 
                     Some(EnrichmentResult {
                         pathway_name: pathways[*orig_idx].name.clone(),
@@ -1200,7 +1366,7 @@ pub fn run_gsea_gpu(
                         padj: None,
                         es: obs_es,
                         nes,
-                        log2err: m_err,
+                        log2err,
                         size: k,
                         leading_edge,
                     })
@@ -1211,7 +1377,7 @@ pub fn run_gsea_gpu(
                         padj: None,
                         es: obs_es,
                         nes,
-                        log2err: None,
+                        log2err: simple_log2err,
                         size: k,
                         leading_edge,
                     })
@@ -1242,20 +1408,28 @@ pub fn run_gsea_gpu(
 
     let mut final_results: Vec<EnrichmentResult> = results.into_iter().flatten().collect();
 
-    // Sort and calculate padj
-    final_results.sort_by(|a, b| a.p_value.partial_cmp(&b.p_value).unwrap());
-    let m = final_results.len();
-    for (i, res) in final_results.iter_mut().enumerate() {
-        res.padj = Some((res.p_value * m as f64 / (i + 1) as f64).min(1.0));
-    }
-
-    // Ensure padj is monotonic
-    if m > 1 {
-        for i in (0..m - 1).rev() {
-            let next_padj = final_results[i + 1].padj.unwrap_or(1.0);
-            final_results[i].padj = Some(final_results[i].padj.unwrap_or(1.0).min(next_padj));
+    if !final_results.is_empty() {
+        let mut indices: Vec<usize> = (0..final_results.len())
+            .filter(|&i| final_results[i].p_value.is_finite())
+            .collect();
+        indices.sort_by(|&a, &b| {
+            final_results[a]
+                .p_value
+                .partial_cmp(&final_results[b].p_value)
+                .unwrap()
+        });
+        let m = final_results.len() as f64;
+        let mut prev_padj = 1.0;
+        for i in (0..indices.len()).rev() {
+            let idx = indices[i];
+            let p = final_results[idx].p_value;
+            let padj = (p * m / (i + 1) as f64).min(prev_padj).min(1.0);
+            final_results[idx].padj = Some(padj);
+            prev_padj = padj;
         }
     }
+
+    final_results.sort_by(|a, b| a.pathway_name.cmp(&b.pathway_name));
 
     Ok(final_results)
 }

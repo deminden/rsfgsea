@@ -44,6 +44,14 @@ struct Args {
     #[arg(long, default_value_t = 1e-50)]
     eps: f64,
 
+    /// Multilevel sample size (R fgsea's sampleSize)
+    #[arg(
+        long = "sampleSize",
+        visible_alias = "sample-size",
+        default_value_t = 101
+    )]
+    sample_size: usize,
+
     /// Score type (std, pos, neg)
     #[arg(
         long = "scoreType",
@@ -82,6 +90,10 @@ enum CliMode {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.sample_size == 0 {
+        bail!("--sampleSize must be greater than 0.");
+    }
 
     if args.nproc > 0 {
         rayon::ThreadPoolBuilder::new()
@@ -132,7 +144,7 @@ fn main() -> Result<()> {
         .max_size
         .unwrap_or_else(|| ranks.len().saturating_sub(1));
     let results = match args.mode {
-        CliMode::Fgsea => fgsea(
+        CliMode::Fgsea => fgsea_with_sample_size(
             &ranks,
             &pd.pathways,
             args.nperm,
@@ -143,12 +155,13 @@ fn main() -> Result<()> {
             args.eps,
             score_type,
             args.gsea_param,
+            args.sample_size,
         ),
         CliMode::Multilevel => {
             if args.nperm.is_some() {
                 bail!("--nperm is only valid with --mode fgsea or --mode simple.");
             }
-            run_gsea(
+            run_gsea_with_sample_size(
                 &ranks,
                 &pd.pathways,
                 args.n_perm_simple,
@@ -158,9 +171,10 @@ fn main() -> Result<()> {
                 args.eps,
                 score_type,
                 args.gsea_param,
+                args.sample_size,
             )
         }
-        CliMode::Simple => run_gsea_simple(
+        CliMode::Simple => run_gsea_simple_with_sample_size(
             &ranks,
             &pd.pathways,
             args.nperm.unwrap_or(args.n_perm_simple),
@@ -170,6 +184,7 @@ fn main() -> Result<()> {
             args.eps,
             score_type,
             args.gsea_param,
+            args.sample_size,
         ),
     };
     let duration = start.elapsed();

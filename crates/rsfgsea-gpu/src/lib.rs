@@ -66,7 +66,7 @@ impl GpuEngine {
         });
 
         // List adapters and pick the most stable/high-performance one.
-        let adapters = instance.enumerate_adapters(wgpu::Backends::all());
+        let adapters = instance.enumerate_adapters(backends);
         let mut selected_adapter = None;
         let mut selected_score = i32::MIN;
 

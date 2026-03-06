@@ -5,7 +5,7 @@ use std::collections::HashMap;
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=42, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=42, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
@@ -18,7 +18,16 @@ fn run_gsea_py(
     eps: f64,
     scoreType: &str,
     gseaParam: f64,
+    mode: &str,
+    nperm: Option<usize>,
+    sampleSize: usize,
 ) -> PyResult<Vec<HashMap<String, PyObject>>> {
+    if sampleSize == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "sampleSize must be greater than 0.",
+        ));
+    }
+
     if nproc > 0 {
         let _ = rayon::ThreadPoolBuilder::new()
             .num_threads(nproc)
@@ -49,17 +58,58 @@ fn run_gsea_py(
     };
 
     let max_size = maxSize.unwrap_or_else(|| rs_ranks.len().saturating_sub(1));
-    let results = run_gsea(
-        &rs_ranks,
-        &pd.pathways,
-        nPermSimple,
-        seed,
-        minSize,
-        max_size,
-        eps,
-        st,
-        gseaParam,
-    );
+    let results = match mode.to_lowercase().as_str() {
+        "fgsea" => fgsea_with_sample_size(
+            &rs_ranks,
+            &pd.pathways,
+            nperm,
+            nPermSimple,
+            seed,
+            minSize,
+            max_size,
+            eps,
+            st,
+            gseaParam,
+            sampleSize,
+        ),
+        "multilevel" => {
+            if nperm.is_some() {
+                return Err(pyo3::exceptions::PyValueError::new_err(
+                    "nperm is only valid with mode='fgsea' or mode='simple'.",
+                ));
+            }
+            run_gsea_with_sample_size(
+                &rs_ranks,
+                &pd.pathways,
+                nPermSimple,
+                seed,
+                minSize,
+                max_size,
+                eps,
+                st,
+                gseaParam,
+                sampleSize,
+            )
+        }
+        "simple" => run_gsea_simple_with_sample_size(
+            &rs_ranks,
+            &pd.pathways,
+            nperm.unwrap_or(nPermSimple),
+            seed,
+            minSize,
+            max_size,
+            eps,
+            st,
+            gseaParam,
+            sampleSize,
+        ),
+        other => {
+            return Err(pyo3::exceptions::PyValueError::new_err(format!(
+                "Invalid mode '{}'. Expected one of: fgsea, multilevel, simple.",
+                other
+            )));
+        }
+    };
 
     let mut py_results = Vec::new();
     for res in results {
