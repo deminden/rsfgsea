@@ -1,3 +1,4 @@
+# Generates muscle-expression ranked lists by computing per-gene Spearman correlations and exporting top correlated genes.
 import pandas as pd
 import numpy as np
 from scipy.stats import spearmanr

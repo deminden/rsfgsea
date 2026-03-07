@@ -187,6 +187,16 @@ let results = rsfgsea::algo::run_gsea_gpu(
 - `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`: on WSL2, helps pick the discrete GPU when D3D12 translation is used.
 - `RSFGSEA_GPU_ALLOW_GL=1`: opt-in fallback only; GL-translated adapters can be unstable on some Mesa/WSL stacks.
 
+## Documentation
+
+Project documentation is split into compact guides in [`docs/`](./docs/README.md):
+
+- [`docs/cli.md`](./docs/cli.md)
+- [`docs/python.md`](./docs/python.md)
+- [`docs/algorithms.md`](./docs/algorithms.md)
+- [`docs/development.md`](./docs/development.md)
+- [`docs/reproducibility.md`](./docs/reproducibility.md)
+
 ## Input Format
 
 **Ranked List (`.rnk`)**:

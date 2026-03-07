@@ -1,3 +1,4 @@
+# Runs a single ranked-list fgsea check in R to inspect pathway overlap and verify the comparison setup manually.
 library(fgsea)
 library(data.table)
 

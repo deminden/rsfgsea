@@ -1,3 +1,4 @@
+# Extracts gene ID mappings from the bundled R data file and exports JSON lookup tables used by local data-prep scripts.
 # Load the RDA file
 load("data/Gene_to_id_mapping.rda")
 

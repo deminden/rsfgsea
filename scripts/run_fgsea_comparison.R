@@ -1,3 +1,4 @@
+# Runs R fgsea over all generated muscle comparison ranked lists and writes a combined reference result table.
 
 library(fgsea)
 library(data.table)

@@ -1,3 +1,4 @@
+# Builds sample ranked-list `.rnk` files from precomputed bladder correlation data for local fgsea comparisons.
 import pandas as pd
 import numpy as np
 import random
