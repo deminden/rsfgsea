@@ -235,22 +235,27 @@ Headline results:
 ## Precision vs R
 
 `rsfgsea` aims for feature and numerical parity with R's `fgsea` package.
-- **Validation protocol**: parity tests against R reference outputs are implemented in `crates/rsfgsea/tests/r_validation.rs`.
-- **Primary metrics**: max/mean absolute differences for ES, NES, p-value, and adjusted p-value on matched pathways.
-- **Examples-folder snapshot** (`data/Folder_with_examples`, 23 files, seed `42`, `nPermSimple=1000`):
-  - Multilevel mode vs R `fgseaMultilevel`: max `|ES|` diff `4.988e-09`, max `|NES|` diff `4.983e-09`, max `|pval|` diff `4.975e-09`, max `|padj|` diff `4.965e-09`.
-  - Simple mode vs R `fgseaSimple`: max `|ES|` diff `4.988e-09`, max `|NES|` diff `4.983e-09`, max `|pval|` diff `4.975e-09`, max `|padj|` diff `4.965e-09`.
-- Compact parity snapshot:
+
+Validation protocol:
+- parity tests against R reference outputs are implemented in `crates/rsfgsea/tests/r_validation.rs`
+- primary metrics are max and mean absolute differences for ES, NES, p-value, and adjusted p-value on matched pathways
+
+Examples-folder snapshot:
+- source: `data/Folder_with_examples`
+- files: `23`
+- seed: `42`
+- `nPermSimple=1000`
 
 | Mode | Max `|ES|` diff | Max `|NES|` diff | Max `|pval|` diff | Max `|padj|` diff |
 | :--- | ---: | ---: | ---: | ---: |
 | Multilevel | `4.988e-09` | `4.983e-09` | `4.975e-09` | `4.965e-09` |
 | Simple | `4.988e-09` | `4.983e-09` | `4.975e-09` | `4.965e-09` |
 
-- **Finite-value coverage**: p-value NaN mismatch count was `0` in both modes on this run.
-- **Interpretation**: in this parity configuration and snapshot, ES/NES/p-value agreement is at floating-point-noise scale.
-- **Thread invariance**: with fixed seed/settings, outputs are invariant across `nproc` values in the current CPU parity path.
-- Full parity distribution tables are in [`docs/reproducibility.md`](./docs/reproducibility.md).
+Notes:
+- p-value NaN mismatch count was `0` in both modes on this run
+- in this parity configuration and snapshot, ES/NES/p-value agreement is at floating-point-noise scale
+- with fixed seed and settings, outputs are invariant across `nproc` values in the current CPU parity path
+- full parity distribution tables are in [`docs/reproducibility.md`](./docs/reproducibility.md)
 
 This section describes the CPU parity path. GPU parity is materially looser at present and is summarized separately in [GPU Accuracy vs R](#gpu-accuracy-vs-r).
 

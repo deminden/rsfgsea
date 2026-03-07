@@ -29,9 +29,11 @@ From PyPI:
 pip install rsfgseapy
 ```
 
-From a local checkout:
+From a repository:
 
 ```bash
+git clone https://github.com/deminden/rsfgsea
+cd rsfgsea
 cd crates/rsfgseapy
 maturin develop --release
 ```
@@ -151,3 +153,4 @@ The package metadata currently targets Python 3.8 and newer.
 
 - Repository: https://github.com/deminden/rsfgsea
 - Main project docs: https://github.com/deminden/rsfgsea/tree/main/docs
+- Rust crate: https://crates.io/crates/rsfgsea

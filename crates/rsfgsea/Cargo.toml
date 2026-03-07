@@ -3,12 +3,13 @@ name = "rsfgsea"
 version = "0.2.4"
 edition = "2024"
 authors = ["Denis Demin"]
-description = "Fast Gene Set Enrichment Analysis in Rust"
+description = "High-performance fgsea-compatible preranked Gene Set Enrichment Analysis in Rust"
 license = "MIT"
 documentation = "https://github.com/deminden/rsfgsea/tree/main/docs"
 homepage = "https://github.com/deminden/rsfgsea"
 repository = "https://github.com/deminden/rsfgsea"
 autobins = false
+readme = "README.md"
 
 [[bin]]
 name = "rsfgsea"
