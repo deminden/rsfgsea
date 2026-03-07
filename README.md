@@ -246,10 +246,11 @@ Examples-folder snapshot:
 - seed: `42`
 - `nPermSimple=1000`
 
-| Mode | Max `|ES|` diff | Max `|NES|` diff | Max `|pval|` diff | Max `|padj|` diff |
-| :--- | ---: | ---: | ---: | ---: |
-| Multilevel | `4.988e-09` | `4.983e-09` | `4.975e-09` | `4.965e-09` |
-| Simple | `4.988e-09` | `4.983e-09` | `4.975e-09` | `4.965e-09` |
+Compact parity snapshot:
+- multilevel:
+  max `|ES|` diff `4.988e-09`, max `|NES|` diff `4.983e-09`, max `|pval|` diff `4.975e-09`, max `|padj|` diff `4.965e-09`
+- simple:
+  max `|ES|` diff `4.988e-09`, max `|NES|` diff `4.983e-09`, max `|pval|` diff `4.975e-09`, max `|padj|` diff `4.965e-09`
 
 Notes:
 - p-value NaN mismatch count was `0` in both modes on this run
