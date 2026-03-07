@@ -2,10 +2,22 @@ use pyo3::prelude::*;
 use rsfgsea::prelude::*;
 use std::collections::HashMap;
 
+fn parse_score_type(score_type: &str) -> PyResult<ScoreType> {
+    match score_type.to_lowercase().as_str() {
+        "std" => Ok(ScoreType::Std),
+        "pos" => Ok(ScoreType::Pos),
+        "neg" => Ok(ScoreType::Neg),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid scoreType '{}'. Expected one of: std, pos, neg.",
+            other
+        ))),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=42, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=42, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
@@ -21,6 +33,7 @@ fn run_gsea_py(
     mode: &str,
     nperm: Option<usize>,
     sampleSize: usize,
+    gpu: bool,
 ) -> PyResult<Vec<HashMap<String, PyObject>>> {
     if sampleSize == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -45,21 +58,28 @@ fn run_gsea_py(
     let pd =
         read_gmt(&gmt_path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
-    let st = match scoreType.to_lowercase().as_str() {
-        "std" => ScoreType::Std,
-        "pos" => ScoreType::Pos,
-        "neg" => ScoreType::Neg,
-        other => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Invalid scoreType '{}'. Expected one of: std, pos, neg.",
-                other
-            )));
+    let st = parse_score_type(scoreType)?;
+    let mode = parse_interface_mode(mode).map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let exec_mode = if gpu {
+        #[cfg(not(feature = "gpu"))]
+        {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "gpu=True requires building rsfgseapy with the 'gpu' feature.",
+            ));
         }
-    };
 
+        #[cfg(feature = "gpu")]
+        {
+            resolve_execution_plan(mode, true, nperm, nPermSimple)
+                .map_err(pyo3::exceptions::PyValueError::new_err)?
+        }
+    } else {
+        resolve_execution_plan(mode, false, nperm, nPermSimple)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?
+    };
     let max_size = maxSize.unwrap_or_else(|| rs_ranks.len().saturating_sub(1));
-    let results = match mode.to_lowercase().as_str() {
-        "fgsea" => fgsea_with_sample_size(
+    let results = match exec_mode {
+        ExecutionPlan::Cpu(InterfaceMode::Fgsea) => fgsea_with_sample_size(
             &rs_ranks,
             &pd.pathways,
             nperm,
@@ -72,26 +92,19 @@ fn run_gsea_py(
             gseaParam,
             sampleSize,
         ),
-        "multilevel" => {
-            if nperm.is_some() {
-                return Err(pyo3::exceptions::PyValueError::new_err(
-                    "nperm is only valid with mode='fgsea' or mode='simple'.",
-                ));
-            }
-            run_gsea_with_sample_size(
-                &rs_ranks,
-                &pd.pathways,
-                nPermSimple,
-                seed,
-                minSize,
-                max_size,
-                eps,
-                st,
-                gseaParam,
-                sampleSize,
-            )
-        }
-        "simple" => run_gsea_simple_with_sample_size(
+        ExecutionPlan::Cpu(InterfaceMode::Multilevel) => run_gsea_with_sample_size(
+            &rs_ranks,
+            &pd.pathways,
+            nPermSimple,
+            seed,
+            minSize,
+            max_size,
+            eps,
+            st,
+            gseaParam,
+            sampleSize,
+        ),
+        ExecutionPlan::Cpu(InterfaceMode::Simple) => run_gsea_simple_with_sample_size(
             &rs_ranks,
             &pd.pathways,
             nperm.unwrap_or(nPermSimple),
@@ -103,11 +116,30 @@ fn run_gsea_py(
             gseaParam,
             sampleSize,
         ),
-        other => {
-            return Err(pyo3::exceptions::PyValueError::new_err(format!(
-                "Invalid mode '{}'. Expected one of: fgsea, multilevel, simple.",
-                other
-            )));
+        #[cfg(feature = "gpu")]
+        ExecutionPlan::Gpu {
+            n_perm,
+            allow_multilevel,
+            ..
+        } => run_gsea_gpu_with_config(
+            &rs_ranks,
+            &pd.pathways,
+            n_perm,
+            seed,
+            minSize,
+            max_size,
+            eps,
+            st,
+            gseaParam,
+            sampleSize,
+            allow_multilevel,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?,
+        #[cfg(not(feature = "gpu"))]
+        ExecutionPlan::Gpu { .. } => {
+            return Err(pyo3::exceptions::PyRuntimeError::new_err(
+                "gpu=True requires building rsfgseapy with the 'gpu' feature.",
+            ));
         }
     };
 

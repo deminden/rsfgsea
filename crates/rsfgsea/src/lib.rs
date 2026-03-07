@@ -1,4 +1,5 @@
 pub mod algo;
+pub mod bindings;
 pub mod core;
 mod esruler_compat;
 mod fastgsea_compat;
@@ -15,4 +16,5 @@ pub mod gpu {
 pub use gpu::GpuEngine;
 
 pub use crate::algo::*;
+pub use crate::bindings::*;
 pub use crate::core::*;

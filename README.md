@@ -85,6 +85,76 @@ let results = fgsea_with_sample_size(
     101,
 );
 ```
+### Python Extension
+
+The Python extension lives in `crates/rsfgseapy` and is built with `maturin`.
+
+Current status:
+- `run_gsea_py(...)` exposes CPU and hybrid-GPU execution.
+- CPU mode supports `fgsea`, `multilevel`, and `simple`.
+- GPU mode supports:
+  - `mode="fgsea"` wrapper semantics
+  - `mode="simple"` for GPU simple-only execution
+  - `mode="multilevel"` for GPU screening with CPU multilevel refinement
+
+```bash
+# Build
+git clone https://github.com/deminden/rsfgsea
+cd rsfgsea
+cargo build --workspace --release
+
+# Install Python extension
+cd crates/rsfgseapy
+#pip install maturin # if you don't have maturin installed
+maturin develop --release
+
+# Optional: run Python binding tests
+pytest tests
+```
+
+Usage example:
+```python
+import rsfgseapy
+
+# Prepare inputs
+ranks = {"GENE_A": 10.5, "GENE_B": 8.4, ...}
+gmt_path = "pathways.gmt"
+
+# Run GSEA
+results = rsfgseapy.run_gsea_py(
+    ranks=ranks,
+    gmt_path=gmt_path,
+    mode="fgsea",
+    gpu=False,
+    nPermSimple=1000,
+    nperm=None,
+    nproc=0,
+    minSize=1,
+    maxSize=None,
+    eps=1e-50,
+    sampleSize=101,
+    scoreType="std",
+    gseaParam=1.0
+)
+
+# Access results
+for res in results:
+    print(f"Pathway: {res['pathway']}, NES: {res['nes']}, p-val: {res['pval']}")
+```
+
+Default fgsea-style parameters in this project interfaces:
+- `mode=fgsea`
+- `gpu=False`
+- `nPermSimple=1000`
+- `nperm=None` (if set, wrapper mode switches to simple permutations)
+- `minSize=1`
+- `maxSize=length(stats)-1` (computed automatically if omitted)
+- `eps=1e-50`
+- `sampleSize=101`
+- `scoreType="std"`
+- `gseaParam=1.0`
+- `nproc=0`
+
 
 #### GPU Support
 To enable GPU acceleration, build with the `gpu` feature:
@@ -116,68 +186,6 @@ let results = rsfgsea::algo::run_gsea_gpu(
 - `WGPU_BACKEND=vulkan`: recommended first on Linux/WSL2 to prefer stable native Vulkan adapters.
 - `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`: on WSL2, helps pick the discrete GPU when D3D12 translation is used.
 - `RSFGSEA_GPU_ALLOW_GL=1`: opt-in fallback only; GL-translated adapters can be unstable on some Mesa/WSL stacks.
-
-### Python Extension
-
-The Python extension lives in `crates/rsfgseapy` and is built with `maturin`.
-
-Current status:
-- `run_gsea_py(...)` exposes CPU `fgsea`, `multilevel`, and `simple` modes.
-- The Python binding does not currently expose the hybrid GPU runner.
-- The Python API is fgsea-oriented, but it is not a full drop-in mirror of every R-side interface/parallel backend option.
-
-```bash
-# Build
-git clone https://github.com/deminden/rsfgsea
-cd rsfgsea
-cargo build --workspace --release
-
-# Install Python extension
-cd crates/rsfgseapy
-#pip install maturin # if you don't have maturin installed
-maturin develop --release
-```
-
-Usage example:
-```python
-import rsfgseapy
-
-# Prepare inputs
-ranks = {"GENE_A": 10.5, "GENE_B": 8.4, ...}
-gmt_path = "pathways.gmt"
-
-# Run GSEA
-results = rsfgseapy.run_gsea_py(
-    ranks=ranks,
-    gmt_path=gmt_path,
-    mode="fgsea",
-    nPermSimple=1000,
-    nperm=None,
-    nproc=0,
-    minSize=1,
-    maxSize=None,
-    eps=1e-50,
-    sampleSize=101,
-    scoreType="std",
-    gseaParam=1.0
-)
-
-# Access results
-for res in results:
-    print(f"Pathway: {res['pathway']}, NES: {res['nes']}, p-val: {res['pval']}")
-```
-
-Default fgsea-style parameters in this project interfaces:
-- `mode=fgsea`
-- `nPermSimple=1000`
-- `nperm=None` (if set, wrapper mode switches to simple permutations)
-- `minSize=1`
-- `maxSize=length(stats)-1` (computed automatically if omitted)
-- `eps=1e-50`
-- `sampleSize=101`
-- `scoreType="std"`
-- `gseaParam=1.0`
-- `nproc=0`
 
 ## Input Format
 
