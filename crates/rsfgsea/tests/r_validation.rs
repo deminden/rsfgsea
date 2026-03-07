@@ -22,7 +22,7 @@ mod tests {
         let ranks = read_ranked_list(ranks_path.to_str().unwrap()).unwrap();
         let pd = read_gmt(gmt_path.to_str().unwrap()).unwrap();
 
-        let results = run_gsea(
+        let results = fgsea_multilevel_with_sample_size(
             &ranks,
             &pd.pathways,
             5000, // Matched to R reference granularity ~5000
@@ -32,6 +32,7 @@ mod tests {
             1e-10,
             ScoreType::Std,
             1.0,
+            101,
         );
         let rs_results: HashMap<String, (f64, f64)> = results
             .into_iter()

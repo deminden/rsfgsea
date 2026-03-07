@@ -58,7 +58,7 @@ fn calc_gsea_stat_leading_edge_matches_upstream_examples() {
         pathway_from_indices("zero", &[9, 10, 11], &ranks),
     ];
 
-    let res = run_gsea_simple(
+    let res = fgsea_simple_with_sample_size(
         &ranks,
         &pathways,
         10,
@@ -68,6 +68,7 @@ fn calc_gsea_stat_leading_edge_matches_upstream_examples() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
 
     let pos = res.iter().find(|r| r.pathway_name == "pos").unwrap();
@@ -110,7 +111,7 @@ fn simple_results_are_reproducible_for_fixed_seed() {
         pathway_from_indices("p2", &[5, 6, 7], &ranks),
     ];
 
-    let res1 = run_gsea_simple(
+    let res1 = fgsea_simple_with_sample_size(
         &ranks,
         &pathways,
         2000,
@@ -120,8 +121,9 @@ fn simple_results_are_reproducible_for_fixed_seed() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
-    let res2 = run_gsea_simple(
+    let res2 = fgsea_simple_with_sample_size(
         &ranks,
         &pathways,
         2000,
@@ -131,6 +133,7 @@ fn simple_results_are_reproducible_for_fixed_seed() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
 
     assert_eq!(res1.len(), res2.len());
@@ -151,7 +154,7 @@ fn multilevel_results_are_reproducible_for_fixed_seed() {
         genes: vec!["g1".to_string(), "g2".to_string(), "g5".to_string()],
     }];
 
-    let res1 = run_gsea_with_sample_size(
+    let res1 = fgsea_multilevel_with_sample_size(
         &ranks,
         &pathways,
         1000,
@@ -163,7 +166,7 @@ fn multilevel_results_are_reproducible_for_fixed_seed() {
         1.0,
         101,
     );
-    let res2 = run_gsea_with_sample_size(
+    let res2 = fgsea_multilevel_with_sample_size(
         &ranks,
         &pathways,
         1000,
@@ -193,7 +196,7 @@ fn leading_edge_is_consistent_under_sign_flip_and_positive_score_type() {
         genes: pathway.genes.clone(),
     };
 
-    let std_res = run_gsea_simple(
+    let std_res = fgsea_simple_with_sample_size(
         &ranks,
         std::slice::from_ref(&pathway),
         50,
@@ -203,8 +206,9 @@ fn leading_edge_is_consistent_under_sign_flip_and_positive_score_type() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
-    let neg_std_res = run_gsea_simple(
+    let neg_std_res = fgsea_simple_with_sample_size(
         &neg_ranks,
         std::slice::from_ref(&neg_pathway),
         50,
@@ -214,8 +218,9 @@ fn leading_edge_is_consistent_under_sign_flip_and_positive_score_type() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
-    let pos_res = run_gsea_simple(
+    let pos_res = fgsea_simple_with_sample_size(
         &ranks,
         std::slice::from_ref(&pathway),
         50,
@@ -225,6 +230,7 @@ fn leading_edge_is_consistent_under_sign_flip_and_positive_score_type() {
         1e-50,
         ScoreType::Pos,
         1.0,
+        101,
     );
 
     assert_eq!(std_res[0].leading_edge, neg_std_res[0].leading_edge);
@@ -252,7 +258,7 @@ fn duplicate_genes_in_gene_sets_are_deduplicated() {
         },
     ];
 
-    let simple = run_gsea_simple(
+    let simple = fgsea_simple_with_sample_size(
         &ranks,
         &pathways,
         500,
@@ -262,8 +268,9 @@ fn duplicate_genes_in_gene_sets_are_deduplicated() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
-    let multi = run_gsea(
+    let multi = fgsea_multilevel_with_sample_size(
         &ranks,
         &pathways,
         500,
@@ -273,6 +280,7 @@ fn duplicate_genes_in_gene_sets_are_deduplicated() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
 
     assert_eq!(simple[0].size, simple[1].size);
@@ -301,7 +309,7 @@ fn fgsea_wrapper_routes_to_simple_when_nperm_is_provided() {
         ScoreType::Std,
         1.0,
     );
-    let simple = run_gsea_simple(
+    let simple = fgsea_simple_with_sample_size(
         &ranks,
         &pathways,
         500,
@@ -311,6 +319,7 @@ fn fgsea_wrapper_routes_to_simple_when_nperm_is_provided() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
 
     assert_eq!(wrapper.len(), simple.len());
@@ -331,7 +340,7 @@ fn single_pathway_simple_matches_batched_result_for_that_pathway() {
         pathway_from_indices("p2", &[5, 6, 7], &ranks),
     ];
 
-    let batched = run_gsea_simple(
+    let batched = fgsea_simple_with_sample_size(
         &ranks,
         &pathways,
         500,
@@ -341,8 +350,9 @@ fn single_pathway_simple_matches_batched_result_for_that_pathway() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
-    let single = run_gsea_simple(
+    let single = fgsea_simple_with_sample_size(
         &ranks,
         &pathways[1..2],
         500,
@@ -352,6 +362,7 @@ fn single_pathway_simple_matches_batched_result_for_that_pathway() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
 
     let from_batch = batched
@@ -371,7 +382,7 @@ fn simple_and_multilevel_return_empty_for_zero_pathways() {
     let ranks = ranked_list_from_scores(&[4.0, 3.0, 2.0, 1.0, -1.0, -2.0]);
     let pathways = vec![pathway_from_indices("p", &[0, 1], &ranks)];
 
-    let simple = run_gsea_simple(
+    let simple = fgsea_simple_with_sample_size(
         &ranks,
         &pathways,
         100,
@@ -381,8 +392,9 @@ fn simple_and_multilevel_return_empty_for_zero_pathways() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
-    let multi = run_gsea(
+    let multi = fgsea_multilevel_with_sample_size(
         &ranks,
         &pathways,
         100,
@@ -392,6 +404,7 @@ fn simple_and_multilevel_return_empty_for_zero_pathways() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
 
     assert!(simple.is_empty());
@@ -407,7 +420,7 @@ fn full_universe_gene_set_is_skipped() {
         genes: ranks.genes.clone(),
     }];
 
-    let res = run_gsea_simple(
+    let res = fgsea_simple_with_sample_size(
         &ranks,
         &pathways,
         1,
@@ -417,6 +430,7 @@ fn full_universe_gene_set_is_skipped() {
         1e-50,
         ScoreType::Std,
         1.0,
+        101,
     );
 
     assert!(res.is_empty());
@@ -436,8 +450,30 @@ fn score_type_specific_zero_es_cases_do_not_break() {
         genes: ranks.genes[..5].to_vec(),
     }];
 
-    let pos = run_gsea_simple(&ranks, &tail, 1000, 1, 1, 9, 1e-50, ScoreType::Pos, 1.0);
-    let neg = run_gsea_simple(&ranks, &head, 1000, 1, 1, 9, 1e-50, ScoreType::Neg, 1.0);
+    let pos = fgsea_simple_with_sample_size(
+        &ranks,
+        &tail,
+        1000,
+        1,
+        1,
+        9,
+        1e-50,
+        ScoreType::Pos,
+        1.0,
+        101,
+    );
+    let neg = fgsea_simple_with_sample_size(
+        &ranks,
+        &head,
+        1000,
+        1,
+        1,
+        9,
+        1e-50,
+        ScoreType::Neg,
+        1.0,
+        101,
+    );
 
     assert_eq!(pos.len(), 1);
     assert_eq!(neg.len(), 1);
@@ -463,6 +499,15 @@ fn ranked_list_reader_rejects_duplicate_and_non_finite_scores() {
     fs::write(&inf_path, "g1\tinf\n").unwrap();
     let inf_err = read_ranked_list(inf_path.to_str().unwrap()).unwrap_err();
     assert!(inf_err.to_string().contains("Non-finite score"));
+
+    let malformed_path = dir.path().join("malformed.rnk");
+    fs::write(&malformed_path, "g1\n").unwrap();
+    let malformed_err = read_ranked_list(&malformed_path).unwrap_err();
+    assert!(
+        malformed_err
+            .to_string()
+            .contains("Malformed ranked-list line")
+    );
 }
 
 #[test]
@@ -478,4 +523,14 @@ fn gmt_reader_loads_pathways() {
     assert_eq!(db.pathways[0].genes, vec!["g1", "g2", "g3"]);
     assert_eq!(db.pathways[1].name, "p2");
     assert_eq!(db.pathways[1].description, None);
+}
+
+#[test]
+fn gmt_reader_rejects_malformed_lines() {
+    let dir = tempdir().unwrap();
+    let gmt = dir.path().join("bad.gmt");
+    fs::write(&gmt, "p1\tdesc\n").unwrap();
+
+    let err = read_gmt(&gmt).unwrap_err();
+    assert!(err.to_string().contains("Malformed GMT line"));
 }

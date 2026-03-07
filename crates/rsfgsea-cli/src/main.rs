@@ -3,6 +3,8 @@ use clap::{Parser, ValueEnum};
 use rsfgsea::prelude::*;
 use std::fs::File;
 use std::io::Write;
+use std::path::Path;
+use std::path::PathBuf;
 use std::time::Instant;
 
 #[derive(Parser, Debug)]
@@ -10,11 +12,11 @@ use std::time::Instant;
 struct Args {
     /// Path to the ranked list file (TSV/whitespace: gene, score)
     #[arg(short, long)]
-    ranks: String,
+    ranks: PathBuf,
 
     /// Path to the GMT file
     #[arg(short, long)]
-    gmt: String,
+    gmt: PathBuf,
 
     /// Number of permutations in simple fgsea stage
     #[arg(short = 'n', long = "nPermSimple", default_value_t = 1000)]
@@ -30,7 +32,7 @@ struct Args {
 
     /// Output TSV path
     #[arg(short, long)]
-    output: String,
+    output: PathBuf,
 
     /// Minimal size of a gene set to test
     #[arg(long = "minSize", visible_alias = "min-size", default_value_t = 1)]
@@ -56,9 +58,10 @@ struct Args {
     #[arg(
         long = "scoreType",
         visible_alias = "score-type",
-        default_value = "std"
+        value_enum,
+        default_value_t = ScoreTypeArg::Std
     )]
-    score_type: String,
+    score_type: ScoreTypeArg,
 
     /// GSEA parameter value
     #[arg(
@@ -86,6 +89,23 @@ enum CliMode {
     Fgsea,
     Multilevel,
     Simple,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum ScoreTypeArg {
+    Std,
+    Pos,
+    Neg,
+}
+
+impl From<ScoreTypeArg> for ScoreType {
+    fn from(value: ScoreTypeArg) -> Self {
+        match value {
+            ScoreTypeArg::Std => ScoreType::Std,
+            ScoreTypeArg::Pos => ScoreType::Pos,
+            ScoreTypeArg::Neg => ScoreType::Neg,
+        }
+    }
 }
 
 #[cfg(feature = "gpu")]
@@ -124,11 +144,11 @@ fn main() -> Result<()> {
             .build_global()?;
     }
 
-    println!("Loading ranks from {}...", args.ranks);
+    println!("Loading ranks from {}...", args.ranks.display());
     let ranks = read_ranked_list(&args.ranks)?;
     println!("Loaded {} genes.", ranks.len());
 
-    println!("Loading pathways from {}...", args.gmt);
+    println!("Loading pathways from {}...", args.gmt.display());
     let pd = read_gmt(&args.gmt)?;
     println!("Loaded {} pathways.", pd.pathways.len());
 
@@ -143,15 +163,7 @@ fn main() -> Result<()> {
         args.nperm
     );
 
-    let score_type = match args.score_type.to_lowercase().as_str() {
-        "std" => ScoreType::Std,
-        "pos" => ScoreType::Pos,
-        "neg" => ScoreType::Neg,
-        other => bail!(
-            "Invalid scoreType '{}'. Expected one of: std, pos, neg.",
-            other
-        ),
-    };
+    let score_type: ScoreType = args.score_type.into();
 
     let start = Instant::now();
     let max_size = args
@@ -178,7 +190,7 @@ fn main() -> Result<()> {
                 if args.nperm.is_some() {
                     bail!("--nperm is only valid with --mode fgsea or --mode simple.");
                 }
-                run_gsea_with_sample_size(
+                fgsea_multilevel_with_sample_size(
                     &ranks,
                     &pd.pathways,
                     args.n_perm_simple,
@@ -191,7 +203,7 @@ fn main() -> Result<()> {
                     args.sample_size,
                 )
             }
-            CliMode::Simple => run_gsea_simple_with_sample_size(
+            CliMode::Simple => fgsea_simple_with_sample_size(
                 &ranks,
                 &pd.pathways,
                 args.nperm.unwrap_or(args.n_perm_simple),
@@ -209,28 +221,34 @@ fn main() -> Result<()> {
     println!("GSEA computation took: {:.2?}", duration);
     println!("GSEA_COMP_TIME_MS: {}", duration.as_millis());
 
-    println!("Writing results to {}...", args.output);
-    let mut out = File::create(&args.output)?;
+    println!("Writing results to {}...", args.output.display());
+    write_results(&args.output, &results)?;
+
+    println!("Done.");
+    Ok(())
+}
+
+fn write_results(path: &Path, results: &[EnrichmentResult]) -> Result<()> {
+    let mut out = File::create(path)?;
     writeln!(
         out,
         "pathway\tsize\tes\tnes\tpval\tpadj\tlog2err\tleading_edge"
     )?;
     for res in results {
+        let export = res.export();
         writeln!(
             out,
             "{}\t{}\t{:.8}\t{:.8}\t{:.8}\t{:.8}\t{:.8}\t{}",
-            res.pathway_name,
-            res.size,
-            res.es,
-            res.nes.unwrap_or(0.0),
-            res.p_value,
-            res.padj.unwrap_or(1.0),
-            res.log2err.unwrap_or(0.0),
-            res.leading_edge.join(",")
+            export.pathway,
+            export.size,
+            export.es,
+            export.nes.unwrap_or(0.0),
+            export.pval,
+            export.padj.unwrap_or(1.0),
+            export.log2err.unwrap_or(0.0),
+            res.leading_edge_csv()
         )?;
     }
-
-    println!("Done.");
     Ok(())
 }
 
@@ -285,17 +303,17 @@ mod tests {
 
     fn base_args() -> Args {
         Args {
-            ranks: "ranks.tsv".to_string(),
-            gmt: "pathways.gmt".to_string(),
+            ranks: PathBuf::from("ranks.tsv"),
+            gmt: PathBuf::from("pathways.gmt"),
             n_perm_simple: 1000,
             nperm: None,
             seed: 42,
-            output: "out.tsv".to_string(),
+            output: PathBuf::from("out.tsv"),
             min_size: 1,
             max_size: None,
             eps: 1e-50,
             sample_size: 101,
-            score_type: "std".to_string(),
+            score_type: ScoreTypeArg::Std,
             gsea_param: 1.0,
             mode: CliMode::Fgsea,
             nproc: 0,

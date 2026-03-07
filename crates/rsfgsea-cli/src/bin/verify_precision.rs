@@ -26,7 +26,8 @@ async fn main() -> Result<()> {
 
     // 1. Calculate ES on CPU with f64
     let weights_f64: Vec<f64> = weights.iter().map(|&w| w as f64).collect();
-    let (cpu_es, _) = rsfgsea::algo::calculate_es(&hits, &weights_f64, n_total, ScoreType::Std);
+    let (cpu_es, _) =
+        rsfgsea::algo::calculate_es_fgsea(&weights_f64, &hits, n_total, ScoreType::Std);
 
     // 2. Calculate ES on GPU with f32
     let hits_u32: Vec<u32> = hits.iter().map(|&h| h as u32).collect();
@@ -72,7 +73,7 @@ async fn main() -> Result<()> {
             .map(|&h| h as usize)
             .collect();
         let (cpu_es_batch, _) =
-            rsfgsea::algo::calculate_es(&subset_usize, &weights_f64, n_total, ScoreType::Std);
+            rsfgsea::algo::calculate_es_fgsea(&weights_f64, &subset_usize, n_total, ScoreType::Std);
         let gpu_es_batch = gpu_res.es as f64;
 
         let diff = (cpu_es_batch - gpu_es_batch).abs();

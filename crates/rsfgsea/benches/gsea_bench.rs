@@ -12,9 +12,9 @@ fn benchmark_es(c: &mut Criterion) {
 
     c.bench_function("calculate_es_10k_100", |b| {
         b.iter(|| {
-            calculate_es(
-                black_box(&hits),
+            calculate_es_fgsea(
                 black_box(&abs_scores),
+                black_box(&hits),
                 black_box(n),
                 black_box(ScoreType::Std),
             )

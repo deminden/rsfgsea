@@ -68,7 +68,7 @@ mod tests {
 
             // Fallback for non-GPU env
             #[cfg(not(feature = "gpu"))]
-            let results = run_gsea(
+            let results = fgsea_multilevel_with_sample_size(
                 &ranks,
                 &pathway_db.pathways,
                 1000,

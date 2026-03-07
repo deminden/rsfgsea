@@ -16,13 +16,9 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Build
-      run: cargo build --release --verbose
-    - name: Run tests
-      run: cargo test --release --verbose
-    - name: Run synthetic tests
-      run: cargo test --test synthetic_test --release --verbose
     - name: Check formatting
-      run: cargo fmt -- --check
+      run: cargo fmt --all -- --check
     - name: Clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
+      run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+    - name: Run tests
+      run: cargo test --workspace --all-features

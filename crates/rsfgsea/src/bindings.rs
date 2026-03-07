@@ -1,8 +1,8 @@
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InterfaceMode {
-    Fgsea,
     Multilevel,
     Simple,
+    Fgsea,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -17,9 +17,9 @@ pub enum ExecutionPlan {
 
 pub fn parse_interface_mode(mode: &str) -> Result<InterfaceMode, String> {
     match mode.to_lowercase().as_str() {
-        "fgsea" => Ok(InterfaceMode::Fgsea),
         "multilevel" => Ok(InterfaceMode::Multilevel),
         "simple" => Ok(InterfaceMode::Simple),
+        "fgsea" => Ok(InterfaceMode::Fgsea),
         other => Err(format!(
             "Invalid mode '{}'. Expected one of: fgsea, multilevel, simple.",
             other
@@ -42,9 +42,9 @@ pub fn resolve_execution_plan(
     }
 
     let (n_perm, allow_multilevel) = match mode {
-        InterfaceMode::Fgsea => (nperm.unwrap_or(n_perm_simple), nperm.is_none()),
         InterfaceMode::Multilevel => (n_perm_simple, true),
         InterfaceMode::Simple => (nperm.unwrap_or(n_perm_simple), false),
+        InterfaceMode::Fgsea => (nperm.unwrap_or(n_perm_simple), nperm.is_none()),
     };
 
     Ok(ExecutionPlan::Gpu {

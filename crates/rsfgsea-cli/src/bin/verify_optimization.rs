@@ -48,7 +48,7 @@ fn main() -> Result<()> {
     // 2. CPU Run (Reference)
     println!("\n[1/2] Running GSEA on CPU...");
     let start_cpu = Instant::now();
-    let cpu_results = run_gsea(
+    let cpu_results = fgsea_multilevel_with_sample_size(
         &ranks,
         &pathways,
         n_perm,
@@ -58,6 +58,7 @@ fn main() -> Result<()> {
         1e-10, // Small eps for multilevel
         ScoreType::Std,
         1.0,
+        101,
     );
     let cpu_dur = start_cpu.elapsed();
     println!("CPU Time: {:?}", cpu_dur);

@@ -1,121 +1,19 @@
+use crate::algo_support::{
+    apply_bh_adjustment, build_gene_index, compute_nes, extract_pathway_hits, leading_edge,
+    mode_fraction_count, multilevel_error, selected_tail_count, should_refine_multilevel,
+    simple_log2err, warn_prepare_stats,
+};
 use crate::core::{EnrichmentResult, Pathway, RankedList, ScoreType};
-use crate::esruler_compat::EsRulerCompat;
 use crate::fastgsea_compat::{
     calc_gsea_stat_cumulative_batch_f64,
     calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel,
 };
+#[cfg(feature = "gpu")]
+use crate::gpu_algo::run_gsea_gpu_with_config_impl;
+use crate::multilevel::run_multilevel_gsea_group_impl;
 use crate::rng_compat::{RLecuyerCmrgSeedCompat, RMt19937SeedCompat};
 use rayon::prelude::*;
-use special::Gamma;
-use statrs::distribution::{Beta, ContinuousCDF};
-use std::collections::{BTreeMap, HashMap, HashSet};
-#[cfg(feature = "gpu")]
-use std::sync::Arc;
-#[cfg(feature = "gpu")]
-use std::sync::atomic::{AtomicU64, Ordering};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct GseaScore {
-    pub ns: i64,
-    pub coef_ns: i64,
-    pub diff: i64, // n - k
-    pub coef_const: i64,
-}
-
-impl GseaScore {
-    pub fn new(ns: i64, coef_ns: i64, diff: i64, coef_const: i64) -> Self {
-        Self {
-            ns,
-            coef_ns,
-            diff,
-            coef_const,
-        }
-    }
-
-    pub fn get_double(&self) -> f64 {
-        (self.coef_ns as f64 / self.ns as f64) - (self.coef_const as f64 / self.diff as f64)
-    }
-
-    // Comparison using i128 to avoid overflow
-    pub fn compare(&self, other: &Self) -> std::cmp::Ordering {
-        // score1 - score2 = (coef_ns1 * other.ns - ns1 * other.coef_ns) * diff - (coef_const1 - other.coef_const) * ns1 * other.ns
-        let p1 =
-            (self.coef_ns as i128 * other.ns as i128) - (self.ns as i128 * other.coef_ns as i128);
-        let q1 = self.ns as i128 * other.ns as i128;
-        let p2 = self.coef_const as i128 - other.coef_const as i128;
-        let q2 = self.diff as i128; // diff is same for both in a pathway
-
-        (p1 * q2).cmp(&(p2 * q1))
-    }
-
-    pub fn abs_num(&self) -> i128 {
-        (self.coef_ns as i128 * self.diff as i128 - self.coef_const as i128 * self.ns as i128).abs()
-    }
-}
-
-pub fn calculate_es(
-    hits: &[usize],
-    weights: &[f64],
-    n_total: usize,
-    score_type: ScoreType,
-) -> (f64, usize) {
-    if hits.is_empty() {
-        return (0.0, 0);
-    }
-
-    let k = hits.len();
-    let n_miss = (n_total - k) as f64;
-    let sum_weights: f64 = hits.iter().map(|&idx| weights[idx]).sum();
-
-    if sum_weights == 0.0 {
-        return (0.0, 0);
-    }
-
-    let mut curr_max = 0.0;
-    let mut curr_min = 0.0;
-    let mut max_idx = hits[0];
-    let mut min_idx = hits[0];
-
-    let mut curr_sum_weight = 0.0;
-    for (j, &hit_idx) in hits.iter().enumerate().take(k) {
-        let p_miss = (hit_idx - j) as f64 / n_miss;
-
-        let es_before = (curr_sum_weight / sum_weights) - p_miss;
-        if es_before > curr_max {
-            curr_max = es_before;
-            max_idx = hit_idx;
-        }
-        if es_before < curr_min {
-            curr_min = es_before;
-            min_idx = hit_idx;
-        }
-
-        curr_sum_weight += weights[hit_idx];
-        let es_at = (curr_sum_weight / sum_weights) - p_miss;
-        if es_at > curr_max {
-            curr_max = es_at;
-            max_idx = hit_idx;
-        }
-        if es_at < curr_min {
-            curr_min = es_at;
-            min_idx = hit_idx;
-        }
-    }
-
-    match score_type {
-        ScoreType::Std => {
-            if curr_max.abs() == curr_min.abs() {
-                (0.0, hits[0])
-            } else if curr_max.abs() > curr_min.abs() {
-                (curr_max, max_idx)
-            } else {
-                (curr_min, min_idx)
-            }
-        }
-        ScoreType::Pos => (curr_max, max_idx),
-        ScoreType::Neg => (curr_min, min_idx),
-    }
-}
+use std::collections::BTreeMap;
 
 // Rust port of fgsea::calcGseaStat behavior (for gseaParam=1 used in fgseaSimpleImpl).
 pub fn calculate_es_fgsea(
@@ -188,30 +86,6 @@ pub fn calculate_es_fgsea(
     }
 }
 
-fn multilevel_error(pval: f64, sample_size: usize) -> f64 {
-    if !(pval.is_finite()) || pval <= 0.0 {
-        return f64::NAN;
-    }
-    let level = (-pval.log2() + 1.0).floor();
-    (level
-        * (((sample_size as f64 + 1.0) / 2.0).trigamma() - (sample_size as f64 + 1.0).trigamma()))
-    .sqrt()
-        / 2.0_f64.ln()
-}
-
-fn log2_qbeta(prob: f64, shape1: f64, shape2: f64) -> f64 {
-    if shape1 <= 0.0 {
-        return f64::NEG_INFINITY;
-    }
-    if shape2 <= 0.0 {
-        return 0.0;
-    }
-    match Beta::new(shape1, shape2) {
-        Ok(beta) => beta.inverse_cdf(prob).log2(),
-        Err(_) => f64::NAN,
-    }
-}
-
 fn derive_fgsea_simple_seed(seed: u64) -> (u64, RMt19937SeedCompat) {
     // Mirrors first sample.int(1e9, 1) draw in fgseaMultilevel().
     let mut rng = RMt19937SeedCompat::from_r_set_seed(seed as u32);
@@ -219,90 +93,8 @@ fn derive_fgsea_simple_seed(seed: u64) -> (u64, RMt19937SeedCompat) {
     (simple_seed, rng)
 }
 
-pub fn calculate_gsea_score(
-    hits: &[usize],
-    scaled_scores: &[i64],
-    _ns_total: i64,
-    n_total: usize,
-    score_type: ScoreType,
-) -> (GseaScore, usize) {
-    let k = hits.len();
-    let diff = (n_total - k) as i64;
-    // Calculate local sum of weights for the pathway (hits)
-    // The previous implementation incorrectly used the global sum passed as ns_total
-    let ns: i64 = hits.iter().map(|&i| scaled_scores[i]).sum();
-
-    let mut curr_max_num: i128 = 0;
-    let mut curr_min_num: i128 = 0;
-    let mut max_p = (0, 0); // (coef_ns, coef_const)
-    let mut min_p = (0, 0);
-    let mut m_idx = hits[0];
-    let mut v_idx = hits[0];
-
-    let mut curr_coef_ns: i64 = 0;
-    for (j, &hit_idx) in hits.iter().enumerate().take(k) {
-        let coef_const = (hit_idx - j) as i64;
-
-        let num_before = (curr_coef_ns as i128 * diff as i128) - (coef_const as i128 * ns as i128);
-        if num_before > curr_max_num {
-            curr_max_num = num_before;
-            max_p = (curr_coef_ns, coef_const);
-            m_idx = hit_idx;
-        }
-        if num_before < curr_min_num {
-            curr_min_num = num_before;
-            min_p = (curr_coef_ns, coef_const);
-            v_idx = hit_idx;
-        }
-
-        curr_coef_ns += scaled_scores[hit_idx];
-        let num_at = (curr_coef_ns as i128 * diff as i128) - (coef_const as i128 * ns as i128);
-        if num_at > curr_max_num {
-            curr_max_num = num_at;
-            max_p = (curr_coef_ns, coef_const);
-            m_idx = hit_idx;
-        }
-        if num_at < curr_min_num {
-            curr_min_num = num_at;
-            min_p = (curr_coef_ns, coef_const);
-            v_idx = hit_idx;
-        }
-    }
-
-    match score_type {
-        ScoreType::Std => {
-            if curr_max_num.abs() == curr_min_num.abs() {
-                (GseaScore::new(ns, 0, diff, 0), hits[0])
-            } else if curr_max_num.abs() > curr_min_num.abs() {
-                (GseaScore::new(ns, max_p.0, diff, max_p.1), m_idx)
-            } else {
-                (GseaScore::new(ns, min_p.0, diff, min_p.1), v_idx)
-            }
-        }
-        ScoreType::Pos => (GseaScore::new(ns, max_p.0, diff, max_p.1), m_idx),
-        ScoreType::Neg => (GseaScore::new(ns, min_p.0, diff, min_p.1), v_idx),
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
-pub fn run_gsea(
-    ranks: &RankedList,
-    pathways: &[Pathway],
-    n_perm: usize,
-    seed: u64,
-    min_size: usize,
-    max_size: usize,
-    eps: f64,
-    score_type: ScoreType,
-    gsea_param: f64,
-) -> Vec<EnrichmentResult> {
-    run_gsea_with_sample_size(
-        ranks, pathways, n_perm, seed, min_size, max_size, eps, score_type, gsea_param, 101,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn run_gsea_with_sample_size(
+pub fn fgsea_multilevel_with_sample_size(
     ranks: &RankedList,
     pathways: &[Pathway],
     n_perm: usize,
@@ -330,24 +122,7 @@ pub fn run_gsea_with_sample_size(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn run_gsea_simple(
-    ranks: &RankedList,
-    pathways: &[Pathway],
-    n_perm: usize,
-    seed: u64,
-    min_size: usize,
-    max_size: usize,
-    eps: f64,
-    score_type: ScoreType,
-    gsea_param: f64,
-) -> Vec<EnrichmentResult> {
-    run_gsea_simple_with_sample_size(
-        ranks, pathways, n_perm, seed, min_size, max_size, eps, score_type, gsea_param, 101,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn run_gsea_simple_with_sample_size(
+pub fn fgsea_simple_with_sample_size(
     ranks: &RankedList,
     pathways: &[Pathway],
     n_perm: usize,
@@ -417,7 +192,7 @@ pub fn fgsea_with_sample_size(
     sample_size: usize,
 ) -> Vec<EnrichmentResult> {
     if let Some(nperm_simple_mode) = nperm {
-        run_gsea_simple_with_sample_size(
+        fgsea_simple_with_sample_size(
             ranks,
             pathways,
             nperm_simple_mode,
@@ -430,7 +205,7 @@ pub fn fgsea_with_sample_size(
             sample_size,
         )
     } else {
-        run_gsea_with_sample_size(
+        fgsea_multilevel_with_sample_size(
             ranks,
             pathways,
             n_perm_simple,
@@ -478,34 +253,10 @@ fn run_gsea_internal(
         log2err: Option<f64>,
     }
 
-    let gene_to_idx: HashMap<String, usize> = ranks
-        .genes
-        .iter()
-        .enumerate()
-        .map(|(i, g)| (g.clone(), i))
-        .collect();
+    let gene_to_idx = build_gene_index(ranks);
     let n_total = ranks.len();
 
-    // Match fgsea prepareStats warnings (improved wording).
-    let mut seen_nonzero = HashSet::new();
-    let mut tie_count = 0usize;
-    for &s in &ranks.scores {
-        if s != 0.0 && !seen_nonzero.insert(s.to_bits()) {
-            tie_count += 1;
-        }
-    }
-    if tie_count > 0 && n_total > 0 {
-        let tie_pct = (tie_count as f64) * 100.0 / (n_total as f64);
-        eprintln!(
-            "Warning: detected {} tied non-zero ranking scores ({:.2}% of genes). Ties are resolved by input order and can slightly affect enrichment outcomes.",
-            tie_count, tie_pct
-        );
-    }
-    if matches!(score_type, ScoreType::Std) && ranks.scores.iter().all(|&s| s > 0.0) {
-        eprintln!(
-            "Warning: all ranking scores are positive while scoreType='std'. For one-tailed enrichment, consider scoreType='pos'."
-        );
-    }
+    warn_prepare_stats(ranks, score_type);
 
     // Match fgsea::preparePathways() bounds behavior:
     // minSize <- max(minSize, 1)
@@ -525,13 +276,7 @@ fn run_gsea_internal(
     let mut work: Vec<Working> = pathways
         .par_iter()
         .map(|pw| {
-            let mut hits: Vec<usize> = pw
-                .genes
-                .iter()
-                .filter_map(|g| gene_to_idx.get(g).copied())
-                .collect();
-            hits.sort_unstable();
-            hits.dedup();
+            let hits = extract_pathway_hits(pw, &gene_to_idx);
             if hits.len() < min_size || hits.len() > max_size {
                 return None;
             }
@@ -655,8 +400,6 @@ fn run_gsea_internal(
 
     let mut n_more_extreme_vec = vec![0usize; work.len()];
     let mut mode_fraction_vec = vec![0usize; work.len()];
-    let mut simple_error_vec = vec![f64::NAN; work.len()];
-    let mut mult_error_vec = vec![f64::NAN; work.len()];
 
     for (wi, w) in work.iter_mut().enumerate() {
         let le_zero_mean = if w.n_le_zero > 0 {
@@ -670,31 +413,7 @@ fn run_gsea_internal(
             0.0
         };
 
-        w.nes = match score_type {
-            ScoreType::Std => {
-                if w.es > 0.0 && ge_zero_mean != 0.0 {
-                    Some(w.es / ge_zero_mean)
-                } else if w.es <= 0.0 && le_zero_mean != 0.0 {
-                    Some(w.es / le_zero_mean.abs())
-                } else {
-                    None
-                }
-            }
-            ScoreType::Pos => {
-                if w.es >= 0.0 && ge_zero_mean != 0.0 {
-                    Some(w.es / ge_zero_mean)
-                } else {
-                    None
-                }
-            }
-            ScoreType::Neg => {
-                if w.es <= 0.0 && le_zero_mean != 0.0 {
-                    Some(w.es / le_zero_mean.abs())
-                } else {
-                    None
-                }
-            }
-        };
+        w.nes = compute_nes(w.es, score_type, le_zero_mean, ge_zero_mean);
 
         if w.nes.is_some() {
             let p_le = (w.n_le_es + 1) as f64 / (w.n_le_zero + 1) as f64;
@@ -702,39 +421,16 @@ fn run_gsea_internal(
             w.p_value = p_le.min(p_ge);
         }
 
-        let n_more_extreme = match score_type {
-            ScoreType::Std => {
-                if w.es > 0.0 {
-                    w.n_ge_es
-                } else {
-                    w.n_le_es
-                }
-            }
-            ScoreType::Pos => w.n_ge_es,
-            ScoreType::Neg => w.n_le_es,
-        };
-
-        let mode_fraction = match score_type {
-            ScoreType::Std => {
-                if w.es >= 0.0 {
-                    w.n_ge_zero
-                } else {
-                    w.n_le_zero
-                }
-            }
-            ScoreType::Pos => w.n_ge_zero,
-            ScoreType::Neg => w.n_le_zero,
-        };
+        let n_more_extreme =
+            selected_tail_count(score_type, w.es, w.n_le_es as u64, w.n_ge_es as u64) as usize;
+        let mode_fraction =
+            mode_fraction_count(score_type, w.es, w.n_le_zero as u64, w.n_ge_zero as u64) as usize;
 
         n_more_extreme_vec[wi] = n_more_extreme;
         mode_fraction_vec[wi] = mode_fraction;
 
-        w.log2err = if n_perm > 0 && w.p_value.is_finite() {
-            Some(
-                1.0 / 2.0_f64.ln()
-                    * (((n_more_extreme + 1) as f64).trigamma() - ((n_perm + 1) as f64).trigamma())
-                        .sqrt(),
-            )
+        w.log2err = if w.p_value.is_finite() {
+            simple_log2err(n_more_extreme as u64, n_perm)
         } else {
             None
         };
@@ -743,16 +439,6 @@ fn run_gsea_internal(
             w.p_value = f64::NAN;
             w.nes = None;
             w.log2err = None;
-        } else if allow_multilevel && n_perm > 0 && w.p_value.is_finite() {
-            let n_more = n_more_extreme as f64;
-            let n_perm_f = n_perm as f64;
-            let left = log2_qbeta(0.025, n_more, n_perm_f - n_more + 1.0);
-            let right = log2_qbeta(0.975, n_more + 1.0, n_perm_f - n_more);
-            let crude = ((n_more + 1.0) / (n_perm_f + 1.0)).log2();
-            let simple_error = 0.5 * (crude - left).max(right - crude);
-            let mult_error = multilevel_error((n_more + 1.0) / (n_perm_f + 1.0), sample_size);
-            simple_error_vec[wi] = simple_error;
-            mult_error_vec[wi] = mult_error;
         }
     }
 
@@ -760,9 +446,13 @@ fn run_gsea_internal(
         let mut multilevel_groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for i in 0..work.len() {
             if work[i].p_value.is_finite()
-                && mode_fraction_vec[i] >= 10
-                && mult_error_vec[i].is_finite()
-                && mult_error_vec[i] < simple_error_vec[i]
+                && should_refine_multilevel(
+                    n_more_extreme_vec[i] as u64,
+                    mode_fraction_vec[i] as u64,
+                    n_perm,
+                    sample_size,
+                    work[i].p_value,
+                )
             {
                 multilevel_groups.entry(work[i].size).or_default().push(i);
             }
@@ -833,131 +523,22 @@ fn run_gsea_internal(
 
     let mut final_results: Vec<EnrichmentResult> = work
         .into_iter()
-        .map(|w| {
-            let leading_edge: Vec<String> = match score_type {
-                ScoreType::Pos => w
-                    .hits
-                    .iter()
-                    .filter(|&&idx| idx <= w.peak_idx)
-                    .map(|&idx| ranks.genes[idx].clone())
-                    .collect(),
-                ScoreType::Neg => {
-                    let mut le: Vec<String> = w
-                        .hits
-                        .iter()
-                        .filter(|&&idx| idx >= w.peak_idx)
-                        .map(|&idx| ranks.genes[idx].clone())
-                        .collect();
-                    le.reverse();
-                    le
-                }
-                ScoreType::Std => {
-                    if w.es > 0.0 {
-                        w.hits
-                            .iter()
-                            .filter(|&&idx| idx <= w.peak_idx)
-                            .map(|&idx| ranks.genes[idx].clone())
-                            .collect()
-                    } else if w.es < 0.0 {
-                        let mut le: Vec<String> = w
-                            .hits
-                            .iter()
-                            .filter(|&&idx| idx >= w.peak_idx)
-                            .map(|&idx| ranks.genes[idx].clone())
-                            .collect();
-                        le.reverse();
-                        le
-                    } else {
-                        Vec::new()
-                    }
-                }
-            };
-
-            EnrichmentResult {
-                pathway_name: w.pathway_name,
-                size: w.size,
-                es: w.es,
-                nes: w.nes,
-                p_value: w.p_value,
-                padj: w.padj,
-                log2err: w.log2err,
-                leading_edge,
-            }
+        .map(|w| EnrichmentResult {
+            pathway_name: w.pathway_name,
+            size: w.size,
+            es: w.es,
+            nes: w.nes,
+            p_value: w.p_value,
+            padj: w.padj,
+            log2err: w.log2err,
+            leading_edge: leading_edge(&w.hits, w.peak_idx, w.es, score_type, ranks),
         })
         .collect();
 
-    if !final_results.is_empty() {
-        let mut indices: Vec<usize> = (0..final_results.len())
-            .filter(|&i| final_results[i].p_value.is_finite())
-            .collect();
-        indices.sort_by(|&a, &b| {
-            final_results[a]
-                .p_value
-                .partial_cmp(&final_results[b].p_value)
-                .unwrap()
-        });
-        let m = final_results.len() as f64;
-        let mut prev_padj = 1.0;
-        for i in (0..indices.len()).rev() {
-            let idx = indices[i];
-            let p = final_results[idx].p_value;
-            let padj = (p * m / (i + 1) as f64).min(prev_padj).min(1.0);
-            final_results[idx].padj = Some(padj);
-            prev_padj = padj;
-        }
-    }
-
+    apply_bh_adjustment(&mut final_results);
     final_results.sort_by(|a, b| a.pathway_name.cmp(&b.pathway_name));
     final_results
 }
-#[allow(clippy::too_many_arguments)]
-pub fn run_multilevel_gsea(
-    n_total: usize,
-    scaled_scores: &[i64],
-    _ns_total: i64,
-    k: usize,
-    obs_es: f64,
-    score_type: ScoreType,
-    sample_size: usize,
-    seed: u64,
-    eps: f64,
-) -> (f64, Option<f64>) {
-    let (p, _cp_ge_half, err) = run_multilevel_gsea_impl(
-        n_total,
-        scaled_scores,
-        k,
-        obs_es,
-        score_type,
-        sample_size,
-        seed,
-        eps,
-    );
-    (p, err)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_multilevel_gsea_impl(
-    n_total: usize,
-    scaled_scores: &[i64],
-    k: usize,
-    obs_es: f64,
-    score_type: ScoreType,
-    sample_size: usize,
-    seed: u64,
-    eps: f64,
-) -> (f64, bool, Option<f64>) {
-    run_multilevel_gsea_esruler(
-        n_total,
-        scaled_scores,
-        k,
-        obs_es,
-        score_type,
-        sample_size,
-        seed,
-        eps,
-    )
-}
-
 #[allow(clippy::too_many_arguments)]
 fn run_multilevel_gsea_group(
     n_total: usize,
@@ -970,7 +551,7 @@ fn run_multilevel_gsea_group(
     seed: u64,
     eps: f64,
 ) -> Vec<(f64, bool, Option<f64>)> {
-    run_multilevel_gsea_esruler_group(
+    run_multilevel_gsea_group_impl(
         n_total,
         scaled_scores,
         k,
@@ -980,107 +561,6 @@ fn run_multilevel_gsea_group(
         seed,
         eps,
     )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_multilevel_gsea_esruler(
-    n_total: usize,
-    scaled_scores: &[i64],
-    k: usize,
-    obs_es: f64,
-    score_type: ScoreType,
-    sample_size: usize,
-    seed: u64,
-    eps: f64,
-) -> (f64, bool, Option<f64>) {
-    if k == 0 || n_total == 0 {
-        return (1.0, true, Some(0.0));
-    }
-    let pos_ranks: Vec<i64> = scaled_scores.iter().map(|v| v.abs()).collect();
-    let mut neg_ranks = pos_ranks.clone();
-    neg_ranks.reverse();
-
-    let mut es_pos = EsRulerCompat::new(pos_ranks, sample_size, k, 1.0, false);
-    let mut es_neg = EsRulerCompat::new(neg_ranks, sample_size, k, 1.0, false);
-
-    let cur_es = obs_es;
-    if cur_es >= 0.0 {
-        es_pos.extend(cur_es.abs(), seed, eps);
-    } else {
-        es_neg.extend(cur_es.abs(), seed, eps);
-    }
-
-    let sign = matches!(score_type, ScoreType::Pos | ScoreType::Neg);
-    let (p, _is_cp_ge_half, err) = if cur_es >= 0.0 {
-        es_pos.get_pvalue(cur_es.abs(), eps, sign)
-    } else {
-        es_neg.get_pvalue(cur_es.abs(), eps, sign)
-    };
-
-    if err.is_finite() {
-        (p, _is_cp_ge_half, Some(err))
-    } else {
-        (p, _is_cp_ge_half, None)
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn run_multilevel_gsea_esruler_group(
-    n_total: usize,
-    scaled_scores: &[i64],
-    k: usize,
-    obs_es_list: &[f64],
-    score_type: ScoreType,
-    sample_size: usize,
-    seed: u64,
-    eps: f64,
-) -> Vec<(f64, bool, Option<f64>)> {
-    if k == 0 || n_total == 0 || obs_es_list.is_empty() {
-        return vec![(1.0, true, Some(0.0)); obs_es_list.len()];
-    }
-
-    let pos_ranks: Vec<i64> = scaled_scores.iter().map(|v| v.abs()).collect();
-    let mut neg_ranks = pos_ranks.clone();
-    neg_ranks.reverse();
-
-    let mut es_pos = EsRulerCompat::new(pos_ranks, sample_size, k, 1.0, false);
-    let mut es_neg = EsRulerCompat::new(neg_ranks, sample_size, k, 1.0, false);
-
-    let mut max_es = f64::NEG_INFINITY;
-    let mut min_es = f64::INFINITY;
-    for &es in obs_es_list {
-        if es > max_es {
-            max_es = es;
-        }
-        if es < min_es {
-            min_es = es;
-        }
-    }
-
-    if max_es >= 0.0 {
-        es_pos.extend(max_es.abs(), seed, eps);
-    }
-    if min_es < 0.0 {
-        es_neg.extend(min_es.abs(), seed, eps);
-    }
-
-    let sign = matches!(score_type, ScoreType::Pos | ScoreType::Neg);
-    obs_es_list
-        .iter()
-        .copied()
-        .map(|cur_es| {
-            let (p, _is_cp_ge_half, err) = if cur_es >= 0.0 {
-                es_pos.get_pvalue(cur_es.abs(), eps, sign)
-            } else {
-                es_neg.get_pvalue(cur_es.abs(), eps, sign)
-            };
-            if err.is_finite() {
-                (p, _is_cp_ge_half, Some(err))
-            } else {
-                (p, _is_cp_ge_half, None)
-            }
-        })
-        .collect()
 }
 
 #[cfg(feature = "gpu")]
@@ -1115,341 +595,17 @@ pub fn run_gsea_gpu_with_config(
     sample_size: usize,
     allow_multilevel: bool,
 ) -> Result<Vec<EnrichmentResult>, anyhow::Error> {
-    use rsfgsea_gpu::GpuEngine;
-    use std::collections::BTreeMap;
-
-    let sample_size = sample_size.max(1);
-    let eps = eps.clamp(0.0, 1.0);
-
-    let (abs_weights, scaled_scores, _ns_total) = ranks.prepare(gsea_param);
-    let abs_weights_f32: Vec<f32> = abs_weights.iter().map(|&w| w as f32).collect();
-
-    let gene_to_idx: HashMap<String, usize> = ranks
-        .genes
-        .iter()
-        .enumerate()
-        .map(|(i, g)| (g.clone(), i))
-        .collect();
-
-    // 1. Group pathways by size
-    let mut by_size: BTreeMap<usize, Vec<(usize, Vec<usize>)>> = BTreeMap::new();
-    for (i, p) in pathways.iter().enumerate() {
-        let hits: Vec<usize> = p
-            .genes
-            .iter()
-            .filter_map(|g| gene_to_idx.get(g).copied())
-            .collect();
-        let k = hits.len();
-        if k >= min_size && k <= max_size {
-            by_size.entry(k).or_default().push((i, hits));
-        }
-    }
-
-    let runtime = tokio::runtime::Runtime::new()?;
-    let engine = runtime.block_on(GpuEngine::new())?;
-    let scores_buffer = engine.upload_scores(&abs_weights_f32);
-    let gpu_score_type = match score_type {
-        ScoreType::Std => 0,
-        ScoreType::Pos => 1,
-        ScoreType::Neg => 2,
-    };
-
-    let mut results = vec![None; pathways.len()];
-    let gpu_verbose = std::env::var("RSFGSEA_GPU_VERBOSE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false);
-    let total_groups = by_size.len();
-    let mut group_idx = 0usize;
-
-    let total_null_gen_time = Arc::new(AtomicU64::new(0));
-    let total_pure_screening_time = Arc::new(AtomicU64::new(0));
-    let total_multilevel_time = Arc::new(AtomicU64::new(0));
-
-    for (k, group) in by_size {
-        group_idx += 1;
-        if gpu_verbose
-            || group_idx == 1
-            || group_idx == total_groups
-            || group_idx.is_multiple_of(25)
-        {
-            println!(
-                "GPU null group {}/{}: {} pathways (k={})",
-                group_idx,
-                total_groups,
-                group.len(),
-                k
-            );
-        }
-
-        let gen_start = std::time::Instant::now();
-        let mut null_distribution = engine.generate_null_distribution(
-            &scores_buffer,
-            k,
-            ranks.len(),
-            n_perm,
-            seed,
-            gpu_score_type,
-        )?;
-        total_null_gen_time.fetch_add(
-            gen_start.elapsed().as_micros() as u64,
-            std::sync::atomic::Ordering::Relaxed,
-        );
-
-        // Sort null distribution for O(log N) lookup
-        null_distribution.sort_unstable_by(|a, b| a.partial_cmp(b).unwrap());
-
-        // Pre-calculate stats for the null distribution
-        let mut n_le_zero = 0u64;
-        let mut n_ge_zero = 0u64;
-        let mut le_zero_sum = 0.0f64;
-        let mut ge_zero_sum = 0.0f64;
-        for &es in &null_distribution {
-            let perm_es = es as f64;
-            if perm_es <= 0.0 {
-                n_le_zero += 1;
-                le_zero_sum += perm_es;
-            }
-            if perm_es >= 0.0 {
-                n_ge_zero += 1;
-                ge_zero_sum += perm_es;
-            }
-        }
-        let le_zero_mean = if n_le_zero > 0 {
-            le_zero_sum / n_le_zero as f64
-        } else {
-            0.0
-        };
-        let ge_zero_mean = if n_ge_zero > 0 {
-            ge_zero_sum / n_ge_zero as f64
-        } else {
-            0.0
-        };
-
-        // Process pathways of this size in parallel
-        let group_results: Vec<Option<EnrichmentResult>> = group
-            .par_iter()
-            .map(|(orig_idx, hits)| {
-                let screening_start = std::time::Instant::now();
-                let mut sorted_hits = hits.clone();
-                sorted_hits.sort_unstable();
-                let (obs_es, peak_idx) =
-                    calculate_es(&sorted_hits, &abs_weights, ranks.len(), score_type);
-
-                // Use binary search for fast p-value count
-                let obs_es_f32 = obs_es as f32;
-                let (n_le_es, n_ge_es) = {
-                    let idx_le = null_distribution
-                        .binary_search_by(|val| val.partial_cmp(&obs_es_f32).unwrap())
-                        .map_or_else(|idx| idx, |idx| idx + 1); // Count elements <= obs_es_f32
-                    let idx_ge = null_distribution
-                        .binary_search_by(|val| val.partial_cmp(&obs_es_f32).unwrap())
-                        .unwrap_or_else(|idx| idx); // Find first element >= obs_es_f32
-
-                    (idx_le as u64, (null_distribution.len() - idx_ge) as u64)
-                };
-
-                let p_le = (n_le_es + 1) as f64 / (n_le_zero + 1) as f64;
-                let p_ge = (n_ge_es + 1) as f64 / (n_ge_zero + 1) as f64;
-                let p_value_simple = match score_type {
-                    ScoreType::Std => p_le.min(p_ge),
-                    ScoreType::Pos => p_ge,
-                    ScoreType::Neg => p_le,
-                };
-                total_pure_screening_time.fetch_add(
-                    screening_start.elapsed().as_micros() as u64,
-                    Ordering::Relaxed,
-                );
-
-                let nes = if obs_es > 0.0 {
-                    if ge_zero_mean != 0.0 {
-                        Some(obs_es / ge_zero_mean)
-                    } else {
-                        None
-                    }
-                } else if le_zero_mean != 0.0 {
-                    Some(obs_es / le_zero_mean.abs())
-                } else {
-                    None
-                };
-
-                let leading_edge: Vec<String> = match score_type {
-                    ScoreType::Pos => sorted_hits
-                        .iter()
-                        .filter(|&&idx| idx <= peak_idx)
-                        .map(|&idx| ranks.genes[idx].clone())
-                        .collect(),
-                    ScoreType::Neg => {
-                        let mut le: Vec<String> = sorted_hits
-                            .iter()
-                            .filter(|&&idx| idx >= peak_idx)
-                            .map(|&idx| ranks.genes[idx].clone())
-                            .collect();
-                        le.reverse();
-                        le
-                    }
-                    ScoreType::Std => {
-                        if obs_es > 0.0 {
-                            sorted_hits
-                                .iter()
-                                .filter(|&&idx| idx <= peak_idx)
-                                .map(|&idx| ranks.genes[idx].clone())
-                                .collect()
-                        } else if obs_es < 0.0 {
-                            let mut le: Vec<String> = sorted_hits
-                                .iter()
-                                .filter(|&&idx| idx >= peak_idx)
-                                .map(|&idx| ranks.genes[idx].clone())
-                                .collect();
-                            le.reverse();
-                            le
-                        } else {
-                            Vec::new()
-                        }
-                    }
-                };
-
-                let n_more_extreme = match score_type {
-                    ScoreType::Std => {
-                        if obs_es > 0.0 {
-                            n_ge_es
-                        } else {
-                            n_le_es
-                        }
-                    }
-                    ScoreType::Pos => n_ge_es,
-                    ScoreType::Neg => n_le_es,
-                };
-                let mode_fraction = match score_type {
-                    ScoreType::Std => {
-                        if obs_es >= 0.0 {
-                            n_ge_zero
-                        } else {
-                            n_le_zero
-                        }
-                    }
-                    ScoreType::Pos => n_ge_zero,
-                    ScoreType::Neg => n_le_zero,
-                };
-                let simple_log2err = if p_value_simple.is_finite() {
-                    Some(
-                        1.0 / 2.0_f64.ln()
-                            * (((n_more_extreme + 1) as f64).trigamma()
-                                - ((n_perm + 1) as f64).trigamma())
-                            .sqrt(),
-                    )
-                } else {
-                    None
-                };
-                let should_run_multilevel = if mode_fraction < 10 || !p_value_simple.is_finite() {
-                    false
-                } else {
-                    let n_more = n_more_extreme as f64;
-                    let n_perm_f = n_perm as f64;
-                    let left = log2_qbeta(0.025, n_more, n_perm_f - n_more + 1.0);
-                    let right = log2_qbeta(0.975, n_more + 1.0, n_perm_f - n_more);
-                    let crude = ((n_more + 1.0) / (n_perm_f + 1.0)).log2();
-                    let simple_error = 0.5 * (crude - left).max(right - crude);
-                    let mult_error =
-                        multilevel_error((n_more + 1.0) / (n_perm_f + 1.0), sample_size);
-                    mult_error < simple_error
-                };
-                if allow_multilevel && should_run_multilevel {
-                    let ml_start = std::time::Instant::now();
-                    let (m_p, is_cp_ge_half, _m_err) = run_multilevel_gsea_impl(
-                        ranks.len(),
-                        &scaled_scores,
-                        k,
-                        obs_es,
-                        score_type,
-                        sample_size,
-                        seed + *orig_idx as u64,
-                        eps,
-                    );
-
-                    total_multilevel_time
-                        .fetch_add(ml_start.elapsed().as_micros() as u64, Ordering::Relaxed);
-
-                    let denom_prob = (mode_fraction + 1) as f64 / (n_perm + 1) as f64;
-                    let mut p_value_ml = (m_p / denom_prob).min(1.0);
-                    let log2err = if p_value_ml < eps {
-                        p_value_ml = eps;
-                        None
-                    } else if is_cp_ge_half {
-                        Some(multilevel_error(p_value_ml, sample_size))
-                    } else {
-                        None
-                    };
-
-                    Some(EnrichmentResult {
-                        pathway_name: pathways[*orig_idx].name.clone(),
-                        p_value: p_value_ml,
-                        padj: None,
-                        es: obs_es,
-                        nes,
-                        log2err,
-                        size: k,
-                        leading_edge,
-                    })
-                } else {
-                    Some(EnrichmentResult {
-                        pathway_name: pathways[*orig_idx].name.clone(),
-                        p_value: p_value_simple,
-                        padj: None,
-                        es: obs_es,
-                        nes,
-                        log2err: simple_log2err,
-                        size: k,
-                        leading_edge,
-                    })
-                }
-            })
-            .collect();
-
-        for (i, res) in group_results.into_iter().enumerate() {
-            if let Some(r) = res {
-                results[group[i].0] = Some(r);
-            }
-        }
-    }
-
-    println!("\nGPU Execution Timings (Total Compute Across All Threads):");
-    println!(
-        "  Null Distribution Gen: {} ms",
-        total_null_gen_time.load(Ordering::Relaxed) / 1000
-    );
-    println!(
-        "  Pure Screening Pass:   {} ms",
-        total_pure_screening_time.load(Ordering::Relaxed) / 1000
-    );
-    println!(
-        "  Multilevel Pass:       {} ms",
-        total_multilevel_time.load(Ordering::Relaxed) / 1000
-    );
-
-    let mut final_results: Vec<EnrichmentResult> = results.into_iter().flatten().collect();
-
-    if !final_results.is_empty() {
-        let mut indices: Vec<usize> = (0..final_results.len())
-            .filter(|&i| final_results[i].p_value.is_finite())
-            .collect();
-        indices.sort_by(|&a, &b| {
-            final_results[a]
-                .p_value
-                .partial_cmp(&final_results[b].p_value)
-                .unwrap()
-        });
-        let m = final_results.len() as f64;
-        let mut prev_padj = 1.0;
-        for i in (0..indices.len()).rev() {
-            let idx = indices[i];
-            let p = final_results[idx].p_value;
-            let padj = (p * m / (i + 1) as f64).min(prev_padj).min(1.0);
-            final_results[idx].padj = Some(padj);
-            prev_padj = padj;
-        }
-    }
-
-    final_results.sort_by(|a, b| a.pathway_name.cmp(&b.pathway_name));
-
-    Ok(final_results)
+    run_gsea_gpu_with_config_impl(
+        ranks,
+        pathways,
+        n_perm,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        sample_size,
+        allow_multilevel,
+    )
 }

@@ -92,7 +92,7 @@ fn run_gsea_py(
             gseaParam,
             sampleSize,
         ),
-        ExecutionPlan::Cpu(InterfaceMode::Multilevel) => run_gsea_with_sample_size(
+        ExecutionPlan::Cpu(InterfaceMode::Multilevel) => fgsea_multilevel_with_sample_size(
             &rs_ranks,
             &pd.pathways,
             nPermSimple,
@@ -104,7 +104,7 @@ fn run_gsea_py(
             gseaParam,
             sampleSize,
         ),
-        ExecutionPlan::Cpu(InterfaceMode::Simple) => run_gsea_simple_with_sample_size(
+        ExecutionPlan::Cpu(InterfaceMode::Simple) => fgsea_simple_with_sample_size(
             &rs_ranks,
             &pd.pathways,
             nperm.unwrap_or(nPermSimple),
@@ -145,38 +145,33 @@ fn run_gsea_py(
 
     let mut py_results = Vec::new();
     for res in results {
+        let export = res.export();
         let mut map = HashMap::new();
         map.insert(
             "pathway".to_string(),
-            res.pathway_name.into_pyobject(py).unwrap().unbind().into(),
+            export.pathway.into_pyobject(py)?.unbind().into(),
         );
         map.insert(
             "size".to_string(),
-            res.size.into_pyobject(py).unwrap().unbind().into(),
+            export.size.into_pyobject(py)?.unbind().into(),
         );
         map.insert(
             "es".to_string(),
-            res.es.into_pyobject(py).unwrap().unbind().into(),
+            export.es.into_pyobject(py)?.unbind().into(),
         );
-        map.insert(
-            "nes".to_string(),
-            res.nes.into_pyobject(py).unwrap().unbind(),
-        );
+        map.insert("nes".to_string(), export.nes.into_pyobject(py)?.unbind());
         map.insert(
             "pval".to_string(),
-            res.p_value.into_pyobject(py).unwrap().unbind().into(),
+            export.pval.into_pyobject(py)?.unbind().into(),
         );
-        map.insert(
-            "padj".to_string(),
-            res.padj.into_pyobject(py).unwrap().unbind(),
-        );
+        map.insert("padj".to_string(), export.padj.into_pyobject(py)?.unbind());
         map.insert(
             "log2err".to_string(),
-            res.log2err.into_pyobject(py).unwrap().unbind(),
+            export.log2err.into_pyobject(py)?.unbind(),
         );
         map.insert(
             "leading_edge".to_string(),
-            res.leading_edge.into_pyobject(py).unwrap().unbind(),
+            export.leading_edge.into_pyobject(py)?.unbind(),
         );
         py_results.push(map);
     }

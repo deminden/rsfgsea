@@ -44,7 +44,7 @@ fn test_synthetic_large_run() {
 
     // 3. Run GSEA
     // Use 1000 perms to be reasonably fast but thorough
-    let results = run_gsea(
+    let results = fgsea_multilevel_with_sample_size(
         &db,
         &pathways,
         1000,
@@ -54,6 +54,7 @@ fn test_synthetic_large_run() {
         1e-10,
         ScoreType::Std,
         1.0,
+        101,
     );
 
     // 4. Assertions

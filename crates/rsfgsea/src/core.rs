@@ -85,3 +85,34 @@ pub struct EnrichmentResult {
     pub log2err: Option<f64>,
     pub leading_edge: Vec<String>,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EnrichmentResultExport {
+    pub pathway: String,
+    pub size: usize,
+    pub es: f64,
+    pub nes: Option<f64>,
+    pub pval: f64,
+    pub padj: Option<f64>,
+    pub log2err: Option<f64>,
+    pub leading_edge: Vec<String>,
+}
+
+impl EnrichmentResult {
+    pub fn export(&self) -> EnrichmentResultExport {
+        EnrichmentResultExport {
+            pathway: self.pathway_name.clone(),
+            size: self.size,
+            es: self.es,
+            nes: self.nes,
+            pval: self.p_value,
+            padj: self.padj,
+            log2err: self.log2err,
+            leading_edge: self.leading_edge.clone(),
+        }
+    }
+
+    pub fn leading_edge_csv(&self) -> String {
+        self.leading_edge.join(",")
+    }
+}

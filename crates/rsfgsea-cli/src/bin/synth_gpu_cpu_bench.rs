@@ -67,7 +67,7 @@ fn main() -> Result<()> {
     if !args.skip_cpu {
         println!("\n[1/2] CPU simple benchmark...");
         let cpu_start = Instant::now();
-        let cpu_results = run_gsea_simple(
+        let cpu_results = fgsea_simple_with_sample_size(
             &ranks,
             &pathways,
             args.n_perm,
@@ -77,6 +77,7 @@ fn main() -> Result<()> {
             1e-50,
             ScoreType::Std,
             1.0,
+            101,
         );
         let cpu_elapsed = cpu_start.elapsed();
         let measured_cpu_ms = cpu_elapsed.as_secs_f64() * 1000.0;

@@ -18,7 +18,7 @@ fn test_regression_against_known_values() {
         genes: vec!["ZMYND10".to_string(), "SCIN".to_string()],
     }];
 
-    let results = run_gsea(
+    let results = fgsea_multilevel_with_sample_size(
         &ranks,
         &pathways,
         100,
@@ -28,6 +28,7 @@ fn test_regression_against_known_values() {
         1e-10,
         ScoreType::Std,
         1.0,
+        101,
     );
     assert_eq!(results.len(), 1);
     let res = &results[0];

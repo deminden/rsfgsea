@@ -126,7 +126,7 @@ async fn main() -> Result<()> {
 
     println!("\n[1/2] Computing GSEA on CPU (Rayon)...");
     let start_cpu = Instant::now();
-    let _cpu_res = run_gsea(
+    let _cpu_res = fgsea_multilevel_with_sample_size(
         &ranks,
         std::slice::from_ref(&pathway),
         n_perm,
@@ -136,6 +136,7 @@ async fn main() -> Result<()> {
         1.0,
         ScoreType::Std,
         1.0,
+        101,
     );
     let cpu_duration = start_cpu.elapsed();
     println!("CPU Time: {:?}", cpu_duration);

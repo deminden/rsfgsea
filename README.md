@@ -5,9 +5,9 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 ## Features
 
 - **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
-- **Hybrid CPU/GPU Engine**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 - **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on large 1-worker benchmark workloads, `rsfgsea` is about **3.0x-4.3x faster** than R `fgsea` in this repo's current benchmark setup.
 - **Deterministic + High-Throughput RNG Paths**: R-compatible MT19937-based paths are used for parity-sensitive execution, with optimized RNG/shuffle paths available in GPU-oriented flows.
+- **Hybrid CPU/GPU Engine (Experimental)**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 
 ## Usage
 
@@ -312,7 +312,7 @@ Examples:
 
 Unlike the CPU parity path above, the current hybrid GPU path does not match R at floating-point-noise scale. It uses GPU simple-stage screening/null generation plus CPU multilevel refinement, and its parity characteristics should be interpreted separately from the CPU results.
 
-GPU parity was evaluated on `data/Folder_with_examples` (23 files) against R `fgseaMultilevel` using seeds `[11, 23, 42]`, `nPermSimple=1000`, `sampleSize=101`, `eps=1e-50` (66 file-seed runs, 2,238 matched pathways total).
+GPU parity was evaluated against R `fgseaMultilevel` using seeds `[11, 23, 42]`, `nPermSimple=1000`, `sampleSize=101`, `eps=1e-50`.
 
 | Metric | Mean | Median | P95 | Max |
 | :--- | ---: | ---: | ---: | ---: |

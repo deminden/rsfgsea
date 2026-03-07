@@ -2,7 +2,7 @@ use rsfgsea::prelude::ScoreType;
 
 fn cpu_es(hits: &[usize], weights: &[f32], n_total: usize, score_type: ScoreType) -> f64 {
     let weights_f64: Vec<f64> = weights.iter().map(|&w| w as f64).collect();
-    rsfgsea::algo::calculate_es(hits, &weights_f64, n_total, score_type).0
+    rsfgsea::algo::calculate_es_fgsea(&weights_f64, hits, n_total, score_type).0
 }
 
 #[test]
