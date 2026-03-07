@@ -1,0 +1,25 @@
+[package]
+name = 'rsfgsea_r'
+publish = false
+version = '0.2.6'
+edition = '2021'
+rust-version = '1.65'
+
+[lib]
+crate-type = [ 'staticlib' ]
+name = 'rsfgseaR'
+
+[dependencies]
+extendr-api = '0.8.1'
+rayon = '1.10'
+rsfgsea = { path = './vendor/rsfgsea' }
+
+[features]
+default = []
+gpu = ['rsfgsea/gpu']
+
+[profile.release]
+lto = true
+codegen-units = 1
+
+[workspace]

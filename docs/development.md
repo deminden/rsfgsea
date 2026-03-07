@@ -13,6 +13,11 @@ Supporting directories:
 - `tests/`: integration-level validation assets
 - `reports/`: generated comparison reports
 - `results/`: benchmark and parity outputs
+- `r-pkg/`: R package sources
+
+R package maintenance:
+
+- `scripts/sync_r_vendor.sh`: refreshes the vendored Rust core used by `r-pkg/rsfgseaR`
 
 ## What To Keep Stable
 

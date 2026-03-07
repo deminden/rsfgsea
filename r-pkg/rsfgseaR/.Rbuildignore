@@ -1,0 +1,10 @@
+^\.vscode$
+^\.gitignore$
+^src/\.gitignore$
+^src/\.cargo$
+^src/rust/target$
+^src/Makevars$
+^src/Makevars\.win$
+^src/.*\.(o|so|dll|a)$
+^src/symbols\.rds$
+^.*\.Rcheck$

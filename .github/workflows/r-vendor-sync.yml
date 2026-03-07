@@ -1,0 +1,30 @@
+name: R Vendor Sync
+
+on:
+  push:
+    paths:
+      - "crates/rsfgsea/**"
+      - "r-pkg/rsfgseaR/src/rust/vendor/rsfgsea/**"
+      - "scripts/sync_r_vendor.sh"
+      - ".github/workflows/r-vendor-sync.yml"
+  pull_request:
+    paths:
+      - "crates/rsfgsea/**"
+      - "r-pkg/rsfgseaR/src/rust/vendor/rsfgsea/**"
+      - "scripts/sync_r_vendor.sh"
+      - ".github/workflows/r-vendor-sync.yml"
+  workflow_dispatch:
+
+jobs:
+  check-r-vendor-sync:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Sync vendored Rust core
+        run: ./scripts/sync_r_vendor.sh
+
+      - name: Verify vendored files are in sync
+        run: git diff --exit-code -- r-pkg/rsfgseaR/src/rust/vendor/rsfgsea

@@ -1,0 +1,26 @@
+Package: rsfgseaR
+Title: Fgsea-Compatible Rust Preranked Gene Set Enrichment in R
+Version: 0.2.6
+Authors@R: c(
+    person("Denis", "Demin", email = "denisdeminbio@gmail.com", role = c("aut", "cre"))
+    )
+Author: Denis Demin [aut, cre]
+Maintainer: Denis Demin <denisdeminbio@gmail.com>
+Description: Provides an R interface to 'rsfgsea', a high-performance Rust
+    implementation of fgsea-compatible preranked Gene Set Enrichment Analysis.
+    Supports wrapper-style fgsea execution, fixed-permutation simple mode, and
+    multilevel mode with results returned in a familiar fgsea-style tabular
+    shape.
+License: MIT + file LICENSE
+Encoding: UTF-8
+SystemRequirements: Cargo (Rust's package manager), rustc
+URL: https://github.com/deminden/rsfgsea
+BugReports: https://github.com/deminden/rsfgsea/issues
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.3
+Config/rextendr/version: 0.4.2
+Depends: 
+    R (>= 4.2)
+Suggests:
+    testthat (>= 3.0.0)
+Config/testthat/edition: 3

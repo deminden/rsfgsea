@@ -20,6 +20,24 @@ outputs/
 .RData
 .Rproj.user
 *.Rproj
+r-pkg/*.tar.gz
+r-pkg/*.zip
+r-pkg/*.tgz
+r-pkg/*.Rcheck/
+r-pkg/rsfgseaR.Rcheck/
+r-pkg/rsfgseaR/src/Makevars
+r-pkg/rsfgseaR/src/Makevars.win
+r-pkg/rsfgseaR/src/vendor/
+r-pkg/rsfgseaR/src/*.o
+r-pkg/rsfgseaR/src/*.so
+r-pkg/rsfgseaR/src/*.dll
+r-pkg/rsfgseaR/src/*.a
+r-pkg/rsfgseaR/src/symbols.rds
+r-pkg/rsfgseaR/src/.cargo/
+r-pkg/rsfgseaR/src/rust/target/
+r-pkg/rsfgseaR/.vscode/
+!r-pkg/rsfgseaR/src/rust/Cargo.lock
+!r-pkg/rsfgseaR/src/rust/vendor.tar.xz
 
 # System files
 .DS_Store

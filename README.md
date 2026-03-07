@@ -14,19 +14,28 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 ### As a Binary
 
 ```bash
-# Build
+# Install from crates.io
+cargo install rsfgsea
+
+# Run the installed binary
+rsfgsea \
+    --ranks data/pearson_symbols.rnk \
+    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
+    --output results.tsv
+
+# Or build from a repository checkout
 git clone https://github.com/deminden/rsfgsea
 cd rsfgsea
 cargo build --workspace --release
 
-# Minimal run (defaults: mode=fgsea, nPermSimple=1000, seed=42)
+# Run the locally built binary
 ./target/release/rsfgsea \
     --ranks data/pearson_symbols.rnk \
     --gmt data/h.all.v2025.1.Hs.symbols.gmt \
     --output results.tsv
 
-# Full parameter example
-./target/release/rsfgsea \
+# Full parameter example with the installed binary
+rsfgsea \
     --ranks data/pearson_symbols.rnk \
     --gmt data/h.all.v2025.1.Hs.symbols.gmt \
     --mode fgsea \
@@ -44,6 +53,13 @@ cargo build --workspace --release
 ### As a Crate
 
 Add to `Cargo.toml`:
+```toml
+[dependencies]
+rsfgsea = "0.2.6"
+```
+
+Or use the repository directly during development:
+
 ```toml
 [dependencies]
 rsfgsea = { git = "https://github.com/deminden/rsfgsea" }
@@ -73,17 +89,16 @@ let results = fgsea_with_sample_size(
 ```
 ### Python Extension
 
-The Python extension lives in `crates/rsfgseapy` and is built with `maturin`.
+The Python package is published as `rsfgseapy`.
 
 ```bash
-# Build
+# Install from PyPI
+pip install rsfgseapy
+
+# Or build from a repository checkout
 git clone https://github.com/deminden/rsfgsea
 cd rsfgsea
-cargo build --workspace --release
-
-# Install Python extension
 cd crates/rsfgseapy
-#pip install maturin # if you don't have maturin installed
 maturin develop --release
 
 # Optional: run Python binding tests
@@ -147,6 +162,36 @@ Default fgsea-style parameters in this project interfaces:
 - `scoreType="std"`
 - `gseaParam=1.0`
 - `nproc=0`
+
+### R Package
+
+The R package lives in [`r-pkg/rsfgseaR`](./r-pkg/rsfgseaR) and can be installed from a repository checkout.
+
+```bash
+git clone https://github.com/deminden/rsfgsea
+cd rsfgsea
+R CMD INSTALL r-pkg/rsfgseaR
+```
+
+Minimal example:
+
+```r
+library(rsfgseaR)
+
+stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+pathways <- list(
+  PW_A = c("g1", "g2"),
+  PW_B = c("g3", "g4")
+)
+
+res <- fgsea(pathways = pathways, stats = stats)
+print(res[, c("pathway", "nes", "pval")])
+```
+
+Notes:
+- default installs are CPU-only and CRAN-friendly
+- local GPU builds are available with `RSFGSEAR_ENABLE_GPU=1 R CMD INSTALL r-pkg/rsfgseaR`
+- `pathways` can be a named list or a GMT path, and `stats` can be a named numeric vector or a ranked-list file path
 
 
 #### GPU Support
