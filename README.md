@@ -28,7 +28,7 @@ cargo build --workspace --release
 # Full parameter example
 ./target/release/rsfgsea \
     --ranks data/pearson_symbols.rnk \
-    --gmt data/Human_GO_AllPathways_noPFOCR_with_GO_iea_March_01_2024_symbol_renamed.gmt \
+    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
     --mode fgsea \
     --nPermSimple 1000 \
     --minSize 1 \
@@ -57,20 +57,6 @@ let ranks = RankedList::new(genes, scores);
 let pathways = read_gmt("pathways.gmt")?;
 
 // Wrapper-style API (closest to R fgsea semantics).
-let results = fgsea(
-    &ranks,
-    &pathways.pathways,
-    None,   // nperm; Some(N) forces simple mode
-    1000,   // nPermSimple
-    42,     // seed
-    1,      // minSize
-    ranks.len() - 1,
-    1e-50,  // eps
-    ScoreType::Std,
-    1.0,    // gseaParam
-);
-
-// Explicit wrapper sampleSize configuration.
 let results = fgsea_with_sample_size(
     &ranks,
     &pathways.pathways,
@@ -88,14 +74,6 @@ let results = fgsea_with_sample_size(
 ### Python Extension
 
 The Python extension lives in `crates/rsfgseapy` and is built with `maturin`.
-
-Current status:
-- `run_gsea_py(...)` exposes CPU and hybrid-GPU execution.
-- CPU mode supports `fgsea`, `multilevel`, and `simple`.
-- GPU mode supports:
-  - `mode="fgsea"` wrapper semantics
-  - `mode="simple"` for GPU simple-only execution
-  - `mode="multilevel"` for GPU screening with CPU multilevel refinement
 
 ```bash
 # Build
@@ -241,44 +219,18 @@ Benchmarked on **AMD Ryzen 9 7950X3D**. Times are **median of 5 runs** (after on
 - R timing source: `system.time(...)["elapsed"]` around `fgsea` calls
 - R multicore modes: `BiocParallel::MulticoreParam(workers=16|32)` passed as `BPPARAM`
 
-### Modes
+Headline results:
 
-- **Multilevel mode** (`run_gsea` / R `fgseaMultilevel`): adaptive multilevel Monte Carlo for very small p-values.
-- **Simple mode** (`run_gsea_simple` / R `fgseaSimple`): fixed permutation sampling (`nPermSimple`).
-- These modes have different compute structure, so multicore scaling is expected to differ between them.
+| Workload | Rust | R fgsea | Result |
+| :--- | ---: | ---: | :--- |
+| Multilevel, small, 1 worker | 2 ms | 43 ms | Rust `21.5x` faster |
+| Multilevel, large, 16 workers | 104 ms | 939 ms | Rust `9.0x` faster |
+| Simple, small, 1 worker | 814 ms | 2544 ms | Rust `3.1x` faster |
+| Simple, large, 16 workers | 687 ms | 774 ms | Rust `1.13x` faster |
 
-### Benchmark Results
-
-#### Multilevel Mode
-Parameters: `eps=1e-50`, `sampleSize=101` (R), `nPermSimple=1000` (rsfgsea simple stage).
-
-| Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
-| Small (50 pathways) | 2 | 43 | 3 | 69 | 4 | 72 | 16w: 0.67x, 32w: 0.50x | 16w: 0.62x, 32w: 0.60x | 21.50x | 23.00x | 18.00x |
-| Large (29,705 pathways) | 276 | 1,190 | 104 | 939 | 116 | 1,030 | 16w: 2.65x, 32w: 2.38x | 16w: 1.27x, 32w: 1.16x | 4.31x | 9.03x | 8.88x |
-
-#### Simple Mode
-Parameters: `nPermSimple=1,000,000` (small), `nPermSimple=10,000` (large).
-
-| Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
-| Small (50 pathways, 1M perms) | 814 | 2,544 | 829 | 406 | 847 | 468 | 16w: 0.98x, 32w: 0.96x | 16w: 6.27x, 32w: 5.44x | 3.13x | 0.49x | 0.55x |
-| Large (29,705 pathways, 10k perms) | 948 | 2,875 | 687 | 774 | 797 | 829 | 16w: 1.38x, 32w: 1.19x | 16w: 3.71x, 32w: 3.47x | 3.03x | 1.13x | 1.04x |
-
-#### Rust Thread-Scaling Sweep (Many-Variant View)
-Additional Rust-only sweep (same workloads/settings) across `1/2/4/8/16/32` workers (median of 3 runs after warmup):
-
-| Workload | 1w (ms) | 2w (ms) | 4w (ms) | 8w (ms) | 16w (ms) | 32w (ms) | Best scaling vs 1w |
-| :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
-| Multilevel / Small | 2 | 2 | 2 | 2 | 3 | 4 | 1.00x (2w) |
-| Multilevel / Large | 280 | 175 | 126 | 108 | 106 | 118 | 2.64x (16w) |
-| Simple / Small (1M perms) | 850 | 845 | 827 | 849 | 826 | 808 | 1.05x (32w) |
-| Simple / Large (10k perms) | 959 | 698 | 686 | 728 | 715 | 800 | 1.40x (4w) |
-
-- This parity-preserving engine keeps outputs aligned across thread counts (`nproc`-invariant).
-- Multicore gain is strongest in large multilevel and large simple workloads; small workloads remain overhead-dominated.
-- Rust remains faster than R in multilevel mode at all measured worker counts.
-- In simple mode, Rust is faster at 1 worker and on the large workload at 16/32 workers; R remains faster on the small 1M-permutation case at 16/32 workers.
+- Large multilevel workloads show the strongest CPU scaling in the current parity-preserving path.
+- Small workloads are overhead-dominated and do not benefit much from more threads.
+- Full benchmark matrices and thread-scaling tables are in [`docs/reproducibility.md`](./docs/reproducibility.md).
 
 ## Precision vs R
 
@@ -288,22 +240,17 @@ Additional Rust-only sweep (same workloads/settings) across `1/2/4/8/16/32` work
 - **Examples-folder snapshot** (`data/Folder_with_examples`, 23 files, seed `42`, `nPermSimple=1000`):
   - Multilevel mode vs R `fgseaMultilevel`: max `|ES|` diff `4.988e-09`, max `|NES|` diff `4.983e-09`, max `|pval|` diff `4.975e-09`, max `|padj|` diff `4.965e-09`.
   - Simple mode vs R `fgseaSimple`: max `|ES|` diff `4.988e-09`, max `|NES|` diff `4.983e-09`, max `|pval|` diff `4.975e-09`, max `|padj|` diff `4.965e-09`.
-- **Distribution-level parity stats** (examples folder, seed `42`, matched pathways `n=746` across `22` files, absolute differences):
+- Compact parity snapshot:
 
-| Mode | Metric | Mean | Median | P95 | Max |
-| :--- | :--- | ---: | ---: | ---: | ---: |
-| Multilevel | `abs(ES)` | `2.535e-09` | `2.583e-09` | `4.723e-09` | `4.988e-09` |
-| Multilevel | `abs(NES)` | `2.555e-09` | `2.619e-09` | `4.707e-09` | `4.983e-09` |
-| Multilevel | `abs(pval)` | `2.543e-09` | `2.602e-09` | `4.745e-09` | `4.975e-09` |
-| Multilevel | `abs(padj)` | `2.607e-09` | `2.183e-09` | `4.542e-09` | `4.965e-09` |
-| Simple | `abs(ES)` | `2.535e-09` | `2.583e-09` | `4.723e-09` | `4.988e-09` |
-| Simple | `abs(NES)` | `2.555e-09` | `2.619e-09` | `4.707e-09` | `4.983e-09` |
-| Simple | `abs(pval)` | `2.534e-09` | `2.577e-09` | `4.745e-09` | `4.975e-09` |
-| Simple | `abs(padj)` | `2.605e-09` | `2.183e-09` | `4.542e-09` | `4.965e-09` |
+| Mode | Max `|ES|` diff | Max `|NES|` diff | Max `|pval|` diff | Max `|padj|` diff |
+| :--- | ---: | ---: | ---: | ---: |
+| Multilevel | `4.988e-09` | `4.983e-09` | `4.975e-09` | `4.965e-09` |
+| Simple | `4.988e-09` | `4.983e-09` | `4.975e-09` | `4.965e-09` |
 
 - **Finite-value coverage**: p-value NaN mismatch count was `0` in both modes on this run.
 - **Interpretation**: in this parity configuration and snapshot, ES/NES/p-value agreement is at floating-point-noise scale.
 - **Thread invariance**: with fixed seed/settings, outputs are invariant across `nproc` values in the current CPU parity path.
+- Full parity distribution tables are in [`docs/reproducibility.md`](./docs/reproducibility.md).
 
 This section describes the CPU parity path. GPU parity is materially looser at present and is summarized separately in [GPU Accuracy vs R](#gpu-accuracy-vs-r).
 
@@ -339,20 +286,20 @@ Unlike the CPU parity path above, the current hybrid GPU path does not match R a
 
 GPU parity was evaluated against R `fgseaMultilevel` using seeds `[11, 23, 42]`, `nPermSimple=1000`, `sampleSize=101`, `eps=1e-50`.
 
-| Metric | Mean | Median | P95 | Max |
-| :--- | ---: | ---: | ---: | ---: |
-| `abs(ES)` | `2.535e-09` | `2.531e-09` | `4.736e-09` | `4.998e-09` |
-| `abs(NES)` | `1.842e-02` | `1.245e-02` | `5.827e-02` | `1.238e-01` |
-| `abs(pval)` | `1.548e-02` | `1.199e-02` | `3.996e-02` | `5.007e-01` |
-| `abs(padj)` | `1.248e-02` | `5.101e-03` | `5.784e-02` | `2.458e-01` |
+Compact GPU parity snapshot:
 
-Relative p-value difference (`|p_r - p_gpu| / max(|p_r|, 1e-12)`):
+| Metric | Mean | P95 | Max |
+| :--- | ---: | ---: | ---: |
+| `abs(ES)` | `2.535e-09` | `4.736e-09` | `4.998e-09` |
+| `abs(NES)` | `1.842e-02` | `5.827e-02` | `1.238e-01` |
+| `abs(pval)` | `1.548e-02` | `3.996e-02` | `5.007e-01` |
+
+Relative p-value difference:
 - mean: `4.15%`
-- median: `2.37%`
 - p95: `13.36%`
-- max: `67.39%`
-- `<1%`: `26.4%` of pathways
 - `<10%`: `90.9%` of pathways
+
+- Full GPU parity tables are in [`docs/reproducibility.md`](./docs/reproducibility.md).
 
 Artifacts:
 - `reports/gpu_vs_r/gpu_vs_r_report.md`

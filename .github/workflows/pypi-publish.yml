@@ -31,7 +31,7 @@ jobs:
         with:
           command: build
           working-directory: crates/rsfgseapy
-          args: --release --out dist/wheels
+          args: --release --out wheelhouse
           manylinux: auto
 
       - name: Build source distribution
@@ -40,20 +40,20 @@ jobs:
         with:
           command: sdist
           working-directory: crates/rsfgseapy
-          args: --out dist/sdist
+          args: --out sdist
 
       - name: Upload wheel distributions
         uses: actions/upload-artifact@v4
         with:
           name: pypi-dists-${{ matrix.os }}
-          path: crates/rsfgseapy/dist/wheels/*
+          path: crates/rsfgseapy/wheelhouse/*
 
       - name: Upload source distribution
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: pypi-dists-${{ matrix.os }}-sdist
-          path: crates/rsfgseapy/dist/sdist/*
+          path: crates/rsfgseapy/sdist/*
 
   publish:
     name: Publish to PyPI

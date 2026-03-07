@@ -39,12 +39,12 @@ jobs:
 
       - name: Build wheel
         working-directory: crates/rsfgseapy
-        run: maturin build --release --out dist
+        run: maturin build --release --out wheelhouse
 
       - name: Install built wheel and run binding tests
         working-directory: crates/rsfgseapy
         run: |
-          python -m pip install --force-reinstall dist/*.whl
+          python -m pip install --force-reinstall wheelhouse/*.whl
           pytest tests
 
   build:
@@ -67,7 +67,7 @@ jobs:
         with:
           command: build
           working-directory: crates/rsfgseapy
-          args: --release --out dist/wheels
+          args: --release --out wheelhouse
           manylinux: auto
 
       - name: Build source distribution
@@ -76,30 +76,30 @@ jobs:
         with:
           command: sdist
           working-directory: crates/rsfgseapy
-          args: --out dist/sdist
+          args: --out sdist
 
       - name: Check built distributions
         shell: bash
         run: |
           python -m pip install --upgrade pip twine
-          python -m twine check crates/rsfgseapy/dist/wheels/*
+          python -m twine check crates/rsfgseapy/wheelhouse/*
 
       - name: Check source distribution
         if: matrix.os == 'ubuntu-latest'
         shell: bash
         run: |
           python -m pip install --upgrade pip twine
-          python -m twine check crates/rsfgseapy/dist/sdist/*
+          python -m twine check crates/rsfgseapy/sdist/*
 
       - name: Upload wheel distributions
         uses: actions/upload-artifact@v4
         with:
           name: python-dists-${{ matrix.os }}
-          path: crates/rsfgseapy/dist/wheels/*
+          path: crates/rsfgseapy/wheelhouse/*
 
       - name: Upload source distribution
         if: matrix.os == 'ubuntu-latest'
         uses: actions/upload-artifact@v4
         with:
           name: python-dists-${{ matrix.os }}-sdist
-          path: crates/rsfgseapy/dist/sdist/*
+          path: crates/rsfgseapy/sdist/*
