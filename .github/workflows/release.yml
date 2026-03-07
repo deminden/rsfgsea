@@ -23,7 +23,7 @@ jobs:
             binary_name: rsfgsea
             archive_ext: tar.gz
           - name: macos-x86_64
-            os: macos-13
+            os: macos-latest
             artifact_name: rsfgsea-x86_64-apple-darwin
             binary_name: rsfgsea
             archive_ext: tar.gz
