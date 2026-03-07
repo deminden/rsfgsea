@@ -25,7 +25,7 @@ pub(crate) fn run_gsea_gpu_with_config_impl(
     sample_size: usize,
     allow_multilevel: bool,
 ) -> Result<Vec<EnrichmentResult>> {
-    use rsfgsea_gpu::GpuEngine;
+    use crate::gpu::GpuEngine;
 
     let sample_size = sample_size.max(1);
     let eps = eps.clamp(0.0, 1.0);

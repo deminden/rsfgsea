@@ -63,7 +63,10 @@ fn main() -> Result<()> {
         });
     }
 
+    #[cfg(feature = "gpu")]
     let mut cpu_ms: Option<f64> = args.cpu_baseline_ms;
+    #[cfg(not(feature = "gpu"))]
+    let cpu_ms: Option<f64> = args.cpu_baseline_ms;
     if !args.skip_cpu {
         println!("\n[1/2] CPU simple benchmark...");
         let cpu_start = Instant::now();
@@ -80,8 +83,11 @@ fn main() -> Result<()> {
             101,
         );
         let cpu_elapsed = cpu_start.elapsed();
-        let measured_cpu_ms = cpu_elapsed.as_secs_f64() * 1000.0;
-        cpu_ms = Some(measured_cpu_ms);
+        #[cfg(feature = "gpu")]
+        {
+            let measured_cpu_ms = cpu_elapsed.as_secs_f64() * 1000.0;
+            cpu_ms = Some(measured_cpu_ms);
+        }
         println!(
             "CPU simple: {} ms ({} pathways)",
             cpu_elapsed.as_millis(),

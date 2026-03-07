@@ -4,8 +4,8 @@ use flate2::read::MultiGzDecoder;
 use rand::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rsfgsea::GpuEngine;
 use rsfgsea::prelude::*;
-use rsfgsea_gpu::GpuEngine;
 use std::fs::File;
 use std::time::Instant;
 

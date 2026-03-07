@@ -1,8 +1,6 @@
 [workspace]
 members = [
     "crates/rsfgsea",
-    "crates/rsfgsea-cli",
-    "crates/rsfgsea-gpu",
     "crates/rsfgseapy",
 ]
 resolver = "2"

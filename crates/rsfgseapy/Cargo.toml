@@ -5,6 +5,9 @@ edition = "2024"
 authors = ["Denis Demin"]
 description = "Python bindings for rsfgsea"
 license = "MIT"
+documentation = "https://github.com/deminden/rsfgsea/tree/main/docs"
+homepage = "https://github.com/deminden/rsfgsea"
+repository = "https://github.com/deminden/rsfgsea"
 
 [lib]
 name = "rsfgseapy"

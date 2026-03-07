@@ -2,6 +2,7 @@ use crate::core::ScoreType;
 use crate::esruler_compat::EsRulerCompat;
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "gpu")]
 pub(crate) fn run_multilevel_gsea_impl(
     n_total: usize,
     scaled_scores: &[i64],
@@ -48,6 +49,7 @@ pub(crate) fn run_multilevel_gsea_group_impl(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[cfg(feature = "gpu")]
 fn run_multilevel_gsea_esruler(
     n_total: usize,
     scaled_scores: &[i64],

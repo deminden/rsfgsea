@@ -1,4 +1,4 @@
-use crate::{GpuEngine, GpuResult};
+use crate::gpu::{GpuEngine, GpuResult};
 use anyhow::Result;
 use bytemuck::cast_slice;
 use futures_intrusive::channel::shared::oneshot_channel;

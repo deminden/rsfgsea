@@ -22,12 +22,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
       - name: Build wheels
         uses: PyO3/maturin-action@v1
         with:
           command: build
           working-directory: crates/rsfgseapy
-          args: --release --out dist
+          args: --release --out dist/wheels
           manylinux: auto
 
       - name: Build source distribution
@@ -36,13 +40,20 @@ jobs:
         with:
           command: sdist
           working-directory: crates/rsfgseapy
-          args: --out dist
+          args: --out dist/sdist
 
-      - name: Upload distributions
+      - name: Upload wheel distributions
         uses: actions/upload-artifact@v4
         with:
           name: pypi-dists-${{ matrix.os }}
-          path: crates/rsfgseapy/dist/*
+          path: crates/rsfgseapy/dist/wheels/*
+
+      - name: Upload source distribution
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: pypi-dists-${{ matrix.os }}-sdist
+          path: crates/rsfgseapy/dist/sdist/*
 
   publish:
     name: Publish to PyPI

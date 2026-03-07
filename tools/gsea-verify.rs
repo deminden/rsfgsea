@@ -1,8 +1,8 @@
 use anyhow::Result;
 use rand::prelude::*;
 use rand::rngs::StdRng;
+use rsfgsea::GpuEngine;
 use rsfgsea::prelude::*;
-use rsfgsea_gpu::GpuEngine;
 
 #[tokio::main]
 async fn main() -> Result<()> {

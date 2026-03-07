@@ -4,9 +4,7 @@
 
 Main crates:
 
-- `crates/rsfgsea`: core algorithms and public Rust API
-- `crates/rsfgsea-cli`: command-line interface
-- `crates/rsfgsea-gpu`: WebGPU backend pieces
+- `crates/rsfgsea`: core algorithms, public Rust API, and CLI binaries
 - `crates/rsfgseapy`: Python bindings
 
 Supporting directories:

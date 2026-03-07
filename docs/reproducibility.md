@@ -7,7 +7,7 @@ This project keeps parity and validation workflows close to the codebase.
 The main validation layers are:
 
 - unit and integration tests in `crates/rsfgsea/tests`
-- GPU-focused tests in `crates/rsfgsea-gpu/tests`
+- GPU-focused tests in `crates/rsfgsea/tests`
 - generated reports in `reports/`
 - ad hoc and semi-structured helpers in `scripts/`
 

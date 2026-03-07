@@ -45,7 +45,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build CLI binary
-        run: cargo build -p rsfgsea-cli --release --bin rsfgsea
+        run: cargo build -p rsfgsea --release --bin rsfgsea
 
       - name: Package Unix artifact
         if: matrix.archive_ext == 'tar.gz'

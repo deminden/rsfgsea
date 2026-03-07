@@ -1,4 +1,4 @@
-use rsfgsea_gpu::GpuEngine;
+use rsfgsea::GpuEngine;
 
 macro_rules! skip_if_no_gpu {
     ($engine:expr) => {

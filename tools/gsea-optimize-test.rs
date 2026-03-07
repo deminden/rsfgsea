@@ -48,7 +48,7 @@ fn main() -> Result<()> {
     // 2. CPU Run (Reference)
     println!("\n[1/2] Running GSEA on CPU...");
     let start_cpu = Instant::now();
-    let cpu_results = fgsea_multilevel_with_sample_size(
+    let _cpu_results = fgsea_multilevel_with_sample_size(
         &ranks,
         &pathways,
         n_perm,
@@ -105,7 +105,7 @@ fn main() -> Result<()> {
 
         // Map results for comparison
         let mut cpu_map = std::collections::HashMap::new();
-        for res in &cpu_results {
+        for res in &_cpu_results {
             cpu_map.insert(res.pathway_name.clone(), res);
         }
 
