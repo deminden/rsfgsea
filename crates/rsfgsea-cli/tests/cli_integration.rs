@@ -52,6 +52,11 @@ fn cli_simple_mode_writes_results() {
 #[test]
 fn cli_gpu_rejects_non_fgsea_mode_before_adapter_init() {
     let (_dir, ranks, gmt, output) = write_test_inputs();
+    let expected_stderr = if cfg!(feature = "gpu") {
+        "--gpu currently supports only --mode fgsea."
+    } else {
+        "--gpu requires building the CLI with --features gpu."
+    };
 
     cli_bin()
         .args([
@@ -67,7 +72,5 @@ fn cli_gpu_rejects_non_fgsea_mode_before_adapter_init() {
         ])
         .assert()
         .failure()
-        .stderr(predicate::str::contains(
-            "--gpu currently supports only --mode fgsea.",
-        ));
+        .stderr(predicate::str::contains(expected_stderr));
 }
