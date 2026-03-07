@@ -120,15 +120,6 @@ fn main() -> Result<()> {
         args.nperm
     );
 
-    // In the future, check if args.gpu and feature is enabled
-    #[cfg(feature = "gpu")]
-    {
-        if args.gpu {
-            // TODO: Implement GPU run
-            println!("GPU support requested but not yet implemented in main.");
-        }
-    }
-
     let score_type = match args.score_type.to_lowercase().as_str() {
         "std" => ScoreType::Std,
         "pos" => ScoreType::Pos,

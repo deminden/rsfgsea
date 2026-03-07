@@ -13,8 +13,6 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 
 ### As a Binary
 
-Note: the main `rsfgsea` CLI can use the hybrid GPU runner with `--gpu` when built with `--features gpu`. The hybrid GPU path currently supports wrapper-style `--mode fgsea` only.
-
 ```bash
 # Build
 git clone https://github.com/deminden/rsfgsea
