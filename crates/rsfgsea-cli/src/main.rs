@@ -88,6 +88,29 @@ enum CliMode {
     Simple,
 }
 
+#[cfg(feature = "gpu")]
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct GpuModeConfig {
+    n_perm: usize,
+    eps: f64,
+    sample_size: usize,
+    allow_multilevel: bool,
+}
+
+#[cfg(feature = "gpu")]
+fn validate_gpu_mode_args(args: &Args) -> Result<GpuModeConfig> {
+    if args.mode != CliMode::Fgsea {
+        bail!("--gpu currently supports only --mode fgsea.");
+    }
+
+    Ok(GpuModeConfig {
+        n_perm: args.nperm.unwrap_or(args.n_perm_simple),
+        eps: args.eps,
+        sample_size: args.sample_size,
+        allow_multilevel: args.nperm.is_none(),
+    })
+}
+
 fn main() -> Result<()> {
     let args = Args::parse();
 
@@ -219,33 +242,29 @@ fn run_gpu_mode(
     score_type: ScoreType,
     max_size: usize,
 ) -> Result<Vec<EnrichmentResult>> {
-    if args.mode != CliMode::Fgsea {
-        bail!("--gpu currently supports only --mode fgsea.");
-    }
-    if args.nperm.is_some() {
-        bail!("--gpu does not support --nperm/simple-only forcing yet.");
-    }
-    if args.sample_size != 101 {
-        bail!(
-            "--gpu currently uses sampleSize=101 internally; custom --sampleSize is not supported."
-        );
-    }
-    if args.eps != 1e-50 {
-        bail!("--gpu currently uses eps=1e-50 internally; custom --eps is not supported.");
-    }
+    let config = validate_gpu_mode_args(args)?;
 
     println!(
         "GPU hybrid path enabled: simple-stage screening on GPU, multilevel refinement on CPU."
     );
-    rsfgsea::algo::run_gsea_gpu(
+    if !config.allow_multilevel {
+        println!(
+            "GPU wrapper forced into simple-only mode via --nperm={}.",
+            config.n_perm
+        );
+    }
+    rsfgsea::algo::run_gsea_gpu_with_config(
         ranks,
         pathways,
-        args.n_perm_simple,
+        config.n_perm,
         args.seed,
         args.min_size,
         max_size,
+        config.eps,
         score_type,
         args.gsea_param,
+        config.sample_size,
+        config.allow_multilevel,
     )
 }
 
@@ -258,4 +277,76 @@ fn run_gpu_mode(
     _max_size: usize,
 ) -> Result<Vec<EnrichmentResult>> {
     bail!("--gpu requires building the CLI with --features gpu.");
+}
+
+#[cfg(all(test, feature = "gpu"))]
+mod tests {
+    use super::*;
+
+    fn base_args() -> Args {
+        Args {
+            ranks: "ranks.tsv".to_string(),
+            gmt: "pathways.gmt".to_string(),
+            n_perm_simple: 1000,
+            nperm: None,
+            seed: 42,
+            output: "out.tsv".to_string(),
+            min_size: 1,
+            max_size: None,
+            eps: 1e-50,
+            sample_size: 101,
+            score_type: "std".to_string(),
+            gsea_param: 1.0,
+            mode: CliMode::Fgsea,
+            nproc: 0,
+            gpu: true,
+        }
+    }
+
+    #[test]
+    fn gpu_validation_accepts_custom_sample_size_and_eps() {
+        let mut args = base_args();
+        args.sample_size = 151;
+        args.eps = 1e-8;
+
+        let config = validate_gpu_mode_args(&args).unwrap();
+        assert_eq!(
+            config,
+            GpuModeConfig {
+                n_perm: 1000,
+                eps: 1e-8,
+                sample_size: 151,
+                allow_multilevel: true,
+            }
+        );
+    }
+
+    #[test]
+    fn gpu_validation_allows_wrapper_nperm_override() {
+        let mut args = base_args();
+        args.nperm = Some(250);
+
+        let config = validate_gpu_mode_args(&args).unwrap();
+        assert_eq!(
+            config,
+            GpuModeConfig {
+                n_perm: 250,
+                eps: 1e-50,
+                sample_size: 101,
+                allow_multilevel: false,
+            }
+        );
+    }
+
+    #[test]
+    fn gpu_validation_still_rejects_non_fgsea_mode() {
+        let mut args = base_args();
+        args.mode = CliMode::Simple;
+
+        let err = validate_gpu_mode_args(&args).unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("--gpu currently supports only --mode fgsea.")
+        );
+    }
 }

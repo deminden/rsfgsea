@@ -1095,11 +1095,31 @@ pub fn run_gsea_gpu(
     score_type: ScoreType,
     gsea_param: f64,
 ) -> Result<Vec<EnrichmentResult>, anyhow::Error> {
+    run_gsea_gpu_with_config(
+        ranks, pathways, n_perm, seed, min_size, max_size, 1e-50, score_type, gsea_param, 101, true,
+    )
+}
+
+#[cfg(feature = "gpu")]
+#[allow(clippy::too_many_arguments)]
+pub fn run_gsea_gpu_with_config(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    n_perm: usize,
+    seed: u64,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+    allow_multilevel: bool,
+) -> Result<Vec<EnrichmentResult>, anyhow::Error> {
     use rsfgsea_gpu::GpuEngine;
     use std::collections::BTreeMap;
 
-    let sample_size = 101usize;
-    let eps = 1e-50_f64;
+    let sample_size = sample_size.max(1);
+    let eps = eps.clamp(0.0, 1.0);
 
     let (abs_weights, scaled_scores, _ns_total) = ranks.prepare(gsea_param);
     let abs_weights_f32: Vec<f32> = abs_weights.iter().map(|&w| w as f32).collect();
@@ -1333,7 +1353,7 @@ pub fn run_gsea_gpu(
                         multilevel_error((n_more + 1.0) / (n_perm_f + 1.0), sample_size);
                     mult_error < simple_error
                 };
-                if should_run_multilevel {
+                if allow_multilevel && should_run_multilevel {
                     let ml_start = std::time::Instant::now();
                     let (m_p, is_cp_ge_half, _m_err) = run_multilevel_gsea_impl(
                         ranks.len(),

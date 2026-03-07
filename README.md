@@ -95,7 +95,8 @@ cargo build --release --features gpu
 Current status:
 - `run_gsea_gpu(...)` is a hybrid path: GPU is used for simple-stage null generation / ES screening, and CPU is still used for multilevel refinement.
 - The main `rsfgsea` CLI can call the hybrid GPU path with `--gpu` when built with `--features gpu`.
-- The current CLI GPU path supports wrapper-style `--mode fgsea` only. It does not yet support `--nperm`, custom `--sampleSize`, or custom `--eps`.
+- The current CLI GPU path supports wrapper-style `--mode fgsea`, including `--nperm` to force simple-only execution and custom `--sampleSize` / `--eps` for the CPU multilevel refinement stage.
+- `--gpu` still rejects `--mode simple` and `--mode multilevel`; those mode names are not wired separately yet.
 - `run_gsea_gpu(...)` requires a usable non-CPU WebGPU adapter. Software adapters such as `llvmpipe` are rejected.
 
 Use the hybrid GPU runner in Rust code:
