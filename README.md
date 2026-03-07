@@ -116,14 +116,24 @@ Usage example:
 ```python
 import rsfgseapy
 
-# Prepare inputs
-ranks = {"GENE_A": 10.5, "GENE_B": 8.4, ...}
-gmt_path = "pathways.gmt"
-
-# Run GSEA
+# Minimal wrapper-style run for light users.
 results = rsfgseapy.run_gsea_py(
-    ranks=ranks,
-    gmt_path=gmt_path,
+    ranks={"GENE_A": 2.0, "GENE_B": 1.0, "GENE_C": -1.0, "GENE_D": -2.0},
+    gmt_path="pathways.gmt",
+)
+
+for res in results:
+    print(res["pathway"], res["pval"])
+```
+
+Full example:
+
+```python
+import rsfgseapy
+
+results = rsfgseapy.run_gsea_py(
+    ranks={"GENE_A": 10.5, "GENE_B": 8.4, ...},
+    gmt_path="pathways.gmt",
     mode="fgsea",
     gpu=False,
     nPermSimple=1000,
@@ -136,11 +146,16 @@ results = rsfgseapy.run_gsea_py(
     scoreType="std",
     gseaParam=1.0
 )
-
-# Access results
 for res in results:
     print(f"Pathway: {res['pathway']}, NES: {res['nes']}, p-val: {res['pval']}")
 ```
+
+How to think about `nPermSimple` vs `nperm`:
+
+- `nPermSimple` is the normal simple-stage permutation count used by wrapper mode.
+- `nperm` is an explicit override that forces wrapper mode into fixed-permutation simple behavior.
+- Leave `nperm=None` unless you intentionally want simple mode.
+- Change `nPermSimple` when you want to tune the default wrapper-stage screening budget.
 
 Default fgsea-style parameters in this project interfaces:
 - `mode=fgsea`

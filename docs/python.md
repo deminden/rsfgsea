@@ -38,7 +38,23 @@ Important options:
 - `gseaParam=1.0`
 - `nproc=0`
 
-## Example
+## Minimal Example
+
+For most users, wrapper mode with defaults is the right starting point.
+
+```python
+import rsfgseapy
+
+results = rsfgseapy.run_gsea_py(
+    ranks={"GENE_A": 2.0, "GENE_B": 1.0, "GENE_C": -1.0, "GENE_D": -2.0},
+    gmt_path="data/pathways.gmt",
+)
+
+for row in results:
+    print(row["pathway"], row["pval"])
+```
+
+## Full Example
 
 ```python
 import rsfgseapy
@@ -68,6 +84,26 @@ results = rsfgseapy.run_gsea_py(
 for row in results:
     print(row["pathway"], row["nes"], row["pval"])
 ```
+
+## `nPermSimple` vs `nperm`
+
+This is the main point that confuses new users.
+
+`nPermSimple`
+
+- the normal simple-stage permutation count
+- used by wrapper mode before any multilevel refinement
+
+`nperm`
+
+- explicit fixed-permutation override
+- if you set `nperm` in wrapper mode, wrapper mode stops being adaptive and behaves like simple mode
+
+Use this rule:
+
+- leave `nperm=None` for normal fgsea-style wrapper behavior
+- tune `nPermSimple` if you want a different wrapper screening budget
+- set `nperm` only when you deliberately want simple mode
 
 ## Result Shape
 
