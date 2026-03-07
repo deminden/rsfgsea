@@ -84,33 +84,6 @@ let results = fgsea_with_sample_size(
     1.0,
     101,
 );
-
-// Direct multilevel API.
-let results = run_gsea(
-    &ranks, 
-    &pathways.pathways, 
-    1000,   // nPermSimple
-    42,     // seed
-    1,      // minSize
-    ranks.len() - 1, // maxSize
-    1e-50,  // eps
-    ScoreType::Std, 
-    1.0     // gseaParam
-);
-
-// Or configure the multilevel sample size explicitly.
-let results = run_gsea_with_sample_size(
-    &ranks,
-    &pathways.pathways,
-    1000,
-    42,
-    1,
-    ranks.len() - 1,
-    1e-50,
-    ScoreType::Std,
-    1.0,
-    101,
-);
 ```
 
 #### GPU Support

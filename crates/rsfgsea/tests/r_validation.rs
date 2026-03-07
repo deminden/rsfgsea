@@ -66,6 +66,25 @@ mod tests {
             }
         }
 
+        assert!(stats.count > 0, "Expected at least one matched pathway.");
+        let mean_rel_diff = stats.total_rel_diff / stats.count as f64;
+        let frac_le_10pct = (stats.bins[0] + stats.bins[1]) as f64 / stats.count as f64;
+
+        assert!(
+            mean_rel_diff < 0.05,
+            "Mean relative p-value diff too high: {:.4}",
+            mean_rel_diff
+        );
+        assert!(
+            frac_le_10pct >= 0.85,
+            "Too few pathways within 10% relative p-value diff: {:.1}%",
+            frac_le_10pct * 100.0
+        );
+        assert_eq!(
+            stats.bins[3], 0,
+            "Unexpected pathways with >50% relative p-value diff."
+        );
+
         stats.print();
     }
 

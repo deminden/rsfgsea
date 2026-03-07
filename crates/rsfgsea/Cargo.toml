@@ -25,6 +25,7 @@ rsfgsea-gpu = { path = "../rsfgsea-gpu", optional = true }
 
 [dev-dependencies]
 criterion = "0.4"
+tempfile = "3.13"
 
 [features]
 default = []

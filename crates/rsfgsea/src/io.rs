@@ -27,6 +27,13 @@ pub fn read_ranked_list(path: &str) -> Result<RankedList> {
         let score: f64 = parts[1]
             .parse()
             .with_context(|| format!("Failed to parse score on line {}", line_idx + 1))?;
+        if !score.is_finite() {
+            anyhow::bail!(
+                "Non-finite score '{}' found on line {}. Ranked lists must contain only finite numeric scores.",
+                parts[1],
+                line_idx + 1
+            );
+        }
 
         if !seen_genes.insert(gene.clone()) {
             anyhow::bail!(

@@ -35,6 +35,11 @@ ndarray = "0.15"
 csv = "1.3"
 rand = "0.8"
 
+[dev-dependencies]
+assert_cmd = "2.0"
+predicates = "3.1"
+tempfile = "3.13"
+
 [features]
 default = []
 gpu = ["rsfgsea/gpu"]
