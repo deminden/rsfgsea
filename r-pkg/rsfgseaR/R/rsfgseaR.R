@@ -237,7 +237,7 @@ supportedModes <- function() {
 #' @param pathways Either a named list of character vectors or a path to a GMT file.
 #' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
 #' @param nPermSimple Integer permutation count for the simple screening stage.
-#' @param seed Integer RNG seed.
+#' @param seed Optional integer RNG seed. `NULL` uses a fresh random seed.
 #' @param nproc Number of worker threads. `0` keeps the default Rayon behavior.
 #' @param minSize Minimum pathway size.
 #' @param maxSize Maximum pathway size. Defaults to `length(stats) - 1`.
@@ -258,7 +258,7 @@ fgsea <- function(
   pathways,
   stats,
   nPermSimple = 1000L,
-  seed = 42L,
+  seed = NULL,
   nproc = 0L,
   minSize = 1L,
   maxSize = NULL,
@@ -273,7 +273,9 @@ fgsea <- function(
 ) {
   stats <- .normalize_stats(stats)
   .validate_integerish_scalar(nPermSimple, "nPermSimple", min_value = 1L)
-  .validate_integerish_scalar(seed, "seed", min_value = 0L)
+  if (!is.null(seed)) {
+    .validate_integerish_scalar(seed, "seed", min_value = 0L)
+  }
   .validate_integerish_scalar(nproc, "nproc", min_value = 0L)
   .validate_integerish_scalar(minSize, "minSize", min_value = 1L)
   .validate_integerish_scalar(sampleSize, "sampleSize", min_value = 1L)
@@ -314,7 +316,7 @@ fgsea <- function(
     names(stats),
     pathways_info$path,
     as.integer(nPermSimple),
-    as.integer(seed),
+    if (is.null(seed)) NULL else as.integer(seed),
     as.integer(nproc),
     as.integer(minSize),
     if (is.null(maxSize)) -1L else as.integer(maxSize),
@@ -339,7 +341,7 @@ fgsea <- function(
 #' @param pathways Either a named list of character vectors or a path to a GMT file.
 #' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
 #' @param nperm Number of permutations.
-#' @param seed Integer RNG seed.
+#' @param seed Optional integer RNG seed. `NULL` uses a fresh random seed.
 #' @param nproc Number of worker threads. `0` keeps the default Rayon behavior.
 #' @param minSize Minimum pathway size.
 #' @param maxSize Maximum pathway size. Defaults to `length(stats) - 1`.
@@ -357,7 +359,7 @@ fgseaSimple <- function(
   pathways,
   stats,
   nperm = 1000L,
-  seed = 42L,
+  seed = NULL,
   nproc = 0L,
   minSize = 1L,
   maxSize = NULL,
@@ -392,7 +394,7 @@ fgseaSimple <- function(
 #' @param pathways Either a named list of character vectors or a path to a GMT file.
 #' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
 #' @param nPermSimple Simple-stage permutation count used before multilevel refinement.
-#' @param seed Integer RNG seed.
+#' @param seed Optional integer RNG seed. `NULL` uses a fresh random seed.
 #' @param nproc Number of worker threads. `0` keeps the default Rayon behavior.
 #' @param minSize Minimum pathway size.
 #' @param maxSize Maximum pathway size. Defaults to `length(stats) - 1`.
@@ -410,7 +412,7 @@ fgseaMultilevel <- function(
   pathways,
   stats,
   nPermSimple = 1000L,
-  seed = 42L,
+  seed = NULL,
   nproc = 0L,
   minSize = 1L,
   maxSize = NULL,

@@ -396,6 +396,29 @@ mod tests {
     }
 
     #[test]
+    fn mt_sample_int_no_replace_matches_r_reference() {
+        // Reference generated in R:
+        // set.seed(707850213); sample.int(500, 14)
+        let mut r = RMt19937SeedCompat::from_r_set_seed(707_850_213u32);
+        let got = r.sample_int_no_replace(500, 14);
+        let expected = vec![
+            427usize, 52, 329, 411, 196, 105, 4, 358, 27, 442, 164, 400, 429, 206,
+        ];
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn mt_sample_int_no_replace_matches_small_r_reference() {
+        // Reference generated in R:
+        // set.seed(707850213); sample.int(20, 5); sample.int(20, 5)
+        let mut r = RMt19937SeedCompat::from_r_set_seed(707_850_213u32);
+        let got1 = r.sample_int_no_replace(20, 5);
+        let got2 = r.sample_int_no_replace(20, 5);
+        assert_eq!(got1, vec![11usize, 9, 4, 19, 18]);
+        assert_eq!(got2, vec![6usize, 4, 16, 13, 14]);
+    }
+
+    #[test]
     fn lecuyer_sample_int_no_replace_matches_r_reference() {
         // Reference generated in R:
         // RNGkind("L'Ecuyer-CMRG"); set.seed(707850213); sample.int(500, 14)

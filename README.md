@@ -130,6 +130,7 @@ results = rsfgseapy.run_gsea_py(
     mode="fgsea",
     gpu=False,
     nPermSimple=1000,
+    seed=None,
     nperm=None,
     nproc=0,
     minSize=1,
@@ -312,7 +313,7 @@ Use these settings when you want the closest behavior to R `fgsea`:
 - CLI:
   - `--mode fgsea` (default): fgsea-style wrapper behavior.
   - `--nPermSimple 1000`: simple stage size used before multilevel refinement.
-  - `--seed <int>`: fix seed for reproducible Monte Carlo runs.
+  - `--seed <int>`: fix seed for reproducible Monte Carlo runs. If omitted, a fresh random seed is generated and printed.
   - `--scoreType std|pos|neg`: match the R score mode.
   - `--nproc <N>`: allowed; parity path is thread-count invariant in current implementation.
 - To force simple-only comparison (like `fgseaSimple`), use:

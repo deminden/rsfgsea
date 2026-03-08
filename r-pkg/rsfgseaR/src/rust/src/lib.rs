@@ -16,6 +16,14 @@ fn parse_score_type(score_type: &str) -> std::result::Result<ScoreType, String> 
     }
 }
 
+fn normalize_seed(seed: Nullable<i32>) -> std::result::Result<Option<u64>, String> {
+    match seed.into_option() {
+        Some(seed) if seed < 0 => Err("seed must be greater than or equal to 0.".to_string()),
+        Some(seed) => Ok(Some(seed as u64)),
+        None => Ok(None),
+    }
+}
+
 fn run_with_optional_thread_pool<T, F>(nproc: i32, f: F) -> std::result::Result<T, String>
 where
     F: FnOnce() -> T + Send,
@@ -38,7 +46,7 @@ fn run_gpu_path(
     ranks: &RankedList,
     pathways: &[Pathway],
     n_perm: usize,
-    seed: u64,
+    seed: Option<u64>,
     min_size: usize,
     max_size: usize,
     eps: f64,
@@ -72,7 +80,7 @@ fn run_gpu_path(
     _ranks: &RankedList,
     _pathways: &[Pathway],
     _n_perm: usize,
-    _seed: u64,
+    _seed: Option<u64>,
     _min_size: usize,
     _max_size: usize,
     _eps: f64,
@@ -109,7 +117,7 @@ fn fgsea_rust_impl(
     genes: Strings,
     gmt_path: &str,
     n_perm_simple: i32,
-    seed: i32,
+    seed: Nullable<i32>,
     nproc: i32,
     min_size: i32,
     max_size: i32,
@@ -126,9 +134,6 @@ fn fgsea_rust_impl(
     }
     if n_perm_simple <= 0 {
         return Err("nPermSimple must be greater than 0.".to_string());
-    }
-    if seed < 0 {
-        return Err("seed must be greater than or equal to 0.".to_string());
     }
     if nproc < 0 {
         return Err("nproc must be greater than or equal to 0.".to_string());
@@ -153,6 +158,7 @@ fn fgsea_rust_impl(
         read_gmt(gmt_path).map_err(|err| format!("Failed to read GMT file '{gmt_path}': {err}"))?;
 
     let score_type = parse_score_type(score_type)?;
+    let seed = normalize_seed(seed)?;
     let mode = parse_interface_mode(mode).map_err(|err| err.to_string())?;
     let nperm = (nperm >= 0).then_some(nperm as usize);
     let exec_mode =
@@ -176,7 +182,7 @@ fn fgsea_rust_impl(
             &ranks,
             &pathways.pathways,
             n_perm,
-            seed as u64,
+            seed,
             min_size as usize,
             max_size,
             eps,
@@ -192,7 +198,7 @@ fn fgsea_rust_impl(
                 &pathways.pathways,
                 nperm,
                 n_perm_simple as usize,
-                seed as u64,
+                seed,
                 min_size as usize,
                 max_size,
                 eps,
@@ -204,7 +210,7 @@ fn fgsea_rust_impl(
                 &ranks,
                 &pathways.pathways,
                 nperm.unwrap_or(n_perm_simple as usize),
-                seed as u64,
+                seed,
                 min_size as usize,
                 max_size,
                 eps,
@@ -216,7 +222,7 @@ fn fgsea_rust_impl(
                 &ranks,
                 &pathways.pathways,
                 n_perm_simple as usize,
-                seed as u64,
+                seed,
                 min_size as usize,
                 max_size,
                 eps,
@@ -269,7 +275,7 @@ fn fgsea_rust(
     genes: Strings,
     gmt_path: &str,
     n_perm_simple: i32,
-    seed: i32,
+    seed: Nullable<i32>,
     nproc: i32,
     min_size: i32,
     max_size: i32,

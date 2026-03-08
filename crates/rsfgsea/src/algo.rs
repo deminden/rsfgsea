@@ -11,9 +11,29 @@ use crate::fastgsea_compat::{
 #[cfg(feature = "gpu")]
 use crate::gpu_algo::run_gsea_gpu_with_config_impl;
 use crate::multilevel::run_multilevel_gsea_group_impl;
-use crate::rng_compat::{RLecuyerCmrgSeedCompat, RMt19937SeedCompat};
+use crate::rng_compat::RMt19937SeedCompat;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
+
+pub fn resolve_rng_seed(seed: Option<u64>) -> u64 {
+    seed.unwrap_or_else(rand::random)
+}
+
+pub trait IntoSeed {
+    fn into_seed(self) -> Option<u64>;
+}
+
+impl IntoSeed for u64 {
+    fn into_seed(self) -> Option<u64> {
+        Some(self)
+    }
+}
+
+impl IntoSeed for Option<u64> {
+    fn into_seed(self) -> Option<u64> {
+        self
+    }
+}
 
 // Rust port of fgsea::calcGseaStat behavior (for gseaParam=1 used in fgseaSimpleImpl).
 pub fn calculate_es_fgsea(
@@ -94,11 +114,11 @@ fn derive_fgsea_simple_seed(seed: u64) -> (u64, RMt19937SeedCompat) {
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn fgsea_multilevel_with_sample_size(
+pub fn fgsea_multilevel_with_sample_size<S: IntoSeed>(
     ranks: &RankedList,
     pathways: &[Pathway],
     n_perm: usize,
-    seed: u64,
+    seed: S,
     min_size: usize,
     max_size: usize,
     eps: f64,
@@ -106,6 +126,7 @@ pub fn fgsea_multilevel_with_sample_size(
     gsea_param: f64,
     sample_size: usize,
 ) -> Vec<EnrichmentResult> {
+    let seed = resolve_rng_seed(seed.into_seed());
     run_gsea_internal(
         ranks,
         pathways,
@@ -122,11 +143,11 @@ pub fn fgsea_multilevel_with_sample_size(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn fgsea_simple_with_sample_size(
+pub fn fgsea_simple_with_sample_size<S: IntoSeed>(
     ranks: &RankedList,
     pathways: &[Pathway],
     n_perm: usize,
-    seed: u64,
+    seed: S,
     min_size: usize,
     max_size: usize,
     eps: f64,
@@ -134,6 +155,7 @@ pub fn fgsea_simple_with_sample_size(
     gsea_param: f64,
     sample_size: usize,
 ) -> Vec<EnrichmentResult> {
+    let seed = resolve_rng_seed(seed.into_seed());
     run_gsea_internal(
         ranks,
         pathways,
@@ -150,12 +172,12 @@ pub fn fgsea_simple_with_sample_size(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn fgsea(
+pub fn fgsea<S: IntoSeed + Copy>(
     ranks: &RankedList,
     pathways: &[Pathway],
     nperm: Option<usize>,
     n_perm_simple: usize,
-    seed: u64,
+    seed: S,
     min_size: usize,
     max_size: usize,
     eps: f64,
@@ -178,12 +200,12 @@ pub fn fgsea(
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn fgsea_with_sample_size(
+pub fn fgsea_with_sample_size<S: IntoSeed + Copy>(
     ranks: &RankedList,
     pathways: &[Pathway],
     nperm: Option<usize>,
     n_perm_simple: usize,
-    seed: u64,
+    seed: S,
     min_size: usize,
     max_size: usize,
     eps: f64,
@@ -309,7 +331,8 @@ fn run_gsea_internal(
         if work.len() == 1 {
             // Match fgseaSimpleImpl(toKeepLength == 1) semantics:
             // - In fgseaSimple: draw seeds vector from MT, then inside bplapply
-            //   `set.seed(seeds[i])` under SerialParam (L'Ecuyer-CMRG RNG kind).
+            //   `set.seed(seeds[i])` and `sample.int(...)` under R's default
+            //   Mersenne-Twister RNG.
             // - In fgseaMultilevel simple stage: one seed draw and one chunk.
             let (perm_chunks, chunk_seeds): (Vec<usize>, Vec<u64>) = if allow_multilevel {
                 (vec![n_perm], vec![simple_seed])
@@ -337,7 +360,9 @@ fn run_gsea_internal(
             let k = work[0].size;
             let pathway_score = work[0].es;
             for (chunk_iters, chunk_seed) in perm_chunks.into_iter().zip(chunk_seeds.into_iter()) {
-                let mut r_rng = RLecuyerCmrgSeedCompat::from_r_set_seed(chunk_seed as u32);
+                // fgseaSimpleImpl(toKeepLength == 1) uses set.seed() + sample.int()
+                // in R, so this branch must follow R's default Mersenne-Twister stream.
+                let mut r_rng = RMt19937SeedCompat::from_r_set_seed(chunk_seed as u32);
                 for _ in 0..chunk_iters {
                     let mut rand_hits: Vec<usize> = r_rng
                         .sample_int_no_replace(n_total, k)
@@ -565,11 +590,11 @@ fn run_multilevel_gsea_group(
 
 #[cfg(feature = "gpu")]
 #[allow(clippy::too_many_arguments)]
-pub fn run_gsea_gpu(
+pub fn run_gsea_gpu<S: IntoSeed>(
     ranks: &RankedList,
     pathways: &[Pathway],
     n_perm: usize,
-    seed: u64,
+    seed: S,
     min_size: usize,
     max_size: usize,
     score_type: ScoreType,
@@ -582,11 +607,11 @@ pub fn run_gsea_gpu(
 
 #[cfg(feature = "gpu")]
 #[allow(clippy::too_many_arguments)]
-pub fn run_gsea_gpu_with_config(
+pub fn run_gsea_gpu_with_config<S: IntoSeed>(
     ranks: &RankedList,
     pathways: &[Pathway],
     n_perm: usize,
-    seed: u64,
+    seed: S,
     min_size: usize,
     max_size: usize,
     eps: f64,
@@ -595,6 +620,7 @@ pub fn run_gsea_gpu_with_config(
     sample_size: usize,
     allow_multilevel: bool,
 ) -> Result<Vec<EnrichmentResult>, anyhow::Error> {
+    let seed = resolve_rng_seed(seed.into_seed());
     run_gsea_gpu_with_config_impl(
         ranks,
         pathways,

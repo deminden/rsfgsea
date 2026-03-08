@@ -8,7 +8,7 @@ fgsea(
   pathways,
   stats,
   nPermSimple = 1000L,
-  seed = 42L,
+  seed = NULL,
   nproc = 0L,
   minSize = 1L,
   maxSize = NULL,
@@ -29,7 +29,7 @@ fgsea(
 
 \item{nPermSimple}{Integer permutation count for the simple screening stage.}
 
-\item{seed}{Integer RNG seed.}
+\item{seed}{Optional integer RNG seed. \code{NULL} uses a fresh random seed.}
 
 \item{nproc}{Number of worker threads. \code{0} keeps the default Rayon behavior.}
 

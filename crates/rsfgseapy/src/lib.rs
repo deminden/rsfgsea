@@ -17,13 +17,13 @@ fn parse_score_type(score_type: &str) -> PyResult<ScoreType> {
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=42, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
     gmt_path: String,
     nPermSimple: usize,
-    seed: u64,
+    seed: Option<u64>,
     nproc: usize,
     minSize: usize,
     maxSize: Option<usize>,

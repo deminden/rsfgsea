@@ -1,6 +1,7 @@
 use anyhow::{Result, bail};
 use clap::{Parser, ValueEnum};
 use rsfgsea::prelude::*;
+use rsfgsea::resolve_rng_seed;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
@@ -26,9 +27,9 @@ struct Args {
     #[arg(long = "nperm")]
     nperm: Option<usize>,
 
-    /// Random seed
-    #[arg(short, long, default_value_t = 42)]
-    seed: u64,
+    /// Random seed. Omit to generate a fresh seed for each run.
+    #[arg(short, long)]
+    seed: Option<u64>,
 
     /// Output TSV path
     #[arg(short, long)]
@@ -133,6 +134,7 @@ fn validate_gpu_mode_args(args: &Args) -> Result<GpuModeConfig> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let seed = resolve_rng_seed(args.seed);
 
     if args.sample_size == 0 {
         bail!("--sampleSize must be greater than 0.");
@@ -162,6 +164,7 @@ fn main() -> Result<()> {
         args.n_perm_simple,
         args.nperm
     );
+    println!("Using RNG seed: {seed}");
 
     let score_type: ScoreType = args.score_type.into();
 
@@ -170,7 +173,7 @@ fn main() -> Result<()> {
         .max_size
         .unwrap_or_else(|| ranks.len().saturating_sub(1));
     let results = if args.gpu {
-        run_gpu_mode(&args, &ranks, &pd.pathways, score_type, max_size)?
+        run_gpu_mode(&args, &ranks, &pd.pathways, score_type, max_size, seed)?
     } else {
         match args.mode {
             CliMode::Fgsea => fgsea_with_sample_size(
@@ -178,7 +181,7 @@ fn main() -> Result<()> {
                 &pd.pathways,
                 args.nperm,
                 args.n_perm_simple,
-                args.seed,
+                Some(seed),
                 args.min_size,
                 max_size,
                 args.eps,
@@ -194,7 +197,7 @@ fn main() -> Result<()> {
                     &ranks,
                     &pd.pathways,
                     args.n_perm_simple,
-                    args.seed,
+                    Some(seed),
                     args.min_size,
                     max_size,
                     args.eps,
@@ -207,7 +210,7 @@ fn main() -> Result<()> {
                 &ranks,
                 &pd.pathways,
                 args.nperm.unwrap_or(args.n_perm_simple),
-                args.seed,
+                Some(seed),
                 args.min_size,
                 max_size,
                 args.eps,
@@ -259,6 +262,7 @@ fn run_gpu_mode(
     pathways: &[Pathway],
     score_type: ScoreType,
     max_size: usize,
+    seed: u64,
 ) -> Result<Vec<EnrichmentResult>> {
     let config = validate_gpu_mode_args(args)?;
 
@@ -275,7 +279,7 @@ fn run_gpu_mode(
         ranks,
         pathways,
         config.n_perm,
-        args.seed,
+        Some(seed),
         args.min_size,
         max_size,
         config.eps,
@@ -293,6 +297,7 @@ fn run_gpu_mode(
     _pathways: &[Pathway],
     _score_type: ScoreType,
     _max_size: usize,
+    _seed: u64,
 ) -> Result<Vec<EnrichmentResult>> {
     bail!("--gpu requires building the CLI with --features gpu.");
 }
@@ -307,7 +312,7 @@ mod tests {
             gmt: PathBuf::from("pathways.gmt"),
             n_perm_simple: 1000,
             nperm: None,
-            seed: 42,
+            seed: Some(42),
             output: PathBuf::from("out.tsv"),
             min_size: 1,
             max_size: None,

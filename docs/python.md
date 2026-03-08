@@ -29,6 +29,7 @@ Important options:
 - `mode="fgsea" | "simple" | "multilevel"`
 - `gpu=False`
 - `nPermSimple=1000`
+- `seed=None`
 - `nperm=None`
 - `minSize=1`
 - `maxSize=None`
@@ -71,6 +72,7 @@ results = rsfgseapy.run_gsea_py(
     mode="fgsea",
     gpu=False,
     nPermSimple=1000,
+    seed=None,
     nperm=None,
     minSize=1,
     maxSize=None,
@@ -102,6 +104,7 @@ This is the main point that confuses new users.
 Use this rule:
 
 - leave `nperm=None` for normal fgsea-style wrapper behavior
+- leave `seed=None` for a fresh random run, or set `seed=<int>` for reproducibility
 - tune `nPermSimple` if you want a different wrapper screening budget
 - set `nperm` only when you deliberately want simple mode
 

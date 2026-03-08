@@ -185,6 +185,28 @@ fn multilevel_results_are_reproducible_for_fixed_seed() {
 }
 
 #[test]
+fn rust_api_accepts_missing_seed() {
+    let ranks = ranked_list_from_scores(&[3.0, 2.0, 1.0, -1.0, -2.0, -3.0]);
+    let pathways = vec![pathway_from_indices("p", &[0, 1, 2], &ranks)];
+
+    let res = fgsea_simple_with_sample_size(
+        &ranks,
+        &pathways,
+        100,
+        None,
+        1,
+        ranks.len() - 1,
+        1e-50,
+        ScoreType::Std,
+        1.0,
+        101,
+    );
+
+    assert_eq!(res.len(), 1);
+    assert!(res[0].p_value.is_finite());
+}
+
+#[test]
 fn leading_edge_is_consistent_under_sign_flip_and_positive_score_type() {
     let ranks = ranked_list_from_scores(&[10.0, 8.0, 6.0, 4.0, 2.0, -2.0, -4.0, -6.0, -8.0, -10.0]);
     let pathway = pathway_from_indices("p", &[0, 1, 4, 8], &ranks);

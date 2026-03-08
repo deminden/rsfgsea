@@ -14,6 +14,7 @@ The API intentionally keeps fgsea-style parameter names and execution modes:
 - `mode="simple"`
 - `mode="multilevel"`
 - `nPermSimple`
+- `seed`
 - `nperm`
 - `minSize`
 - `maxSize`
@@ -83,6 +84,7 @@ results = rsfgseapy.run_gsea_py(
     mode="fgsea",
     gpu=False,
     nPermSimple=1000,
+    seed=None,
     nperm=None,
     minSize=1,
     maxSize=None,
@@ -115,6 +117,7 @@ These two names come from fgsea and they are not interchangeable.
 
 Practical rule:
 
+- leave `seed=None` for a fresh random run, or set `seed=<int>` for reproducibility
 - light users: keep `nperm=None`
 - use `nPermSimple` to tune the default wrapper behavior
 - only set `nperm` when you deliberately want fixed-permutation simple execution
