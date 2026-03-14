@@ -2,7 +2,7 @@ name: Python Package
 
 on:
   push:
-    branches: ["main"]
+    branches: ["main", "dev"]
     paths:
       - ".github/workflows/python-package.yml"
       - "crates/rsfgseapy/**"
@@ -10,7 +10,7 @@ on:
       - "Cargo.toml"
       - "Cargo.lock"
   pull_request:
-    branches: ["main"]
+    branches: ["main", "dev"]
     paths:
       - ".github/workflows/python-package.yml"
       - "crates/rsfgseapy/**"
