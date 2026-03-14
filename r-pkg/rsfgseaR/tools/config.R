@@ -43,6 +43,7 @@ if (enable_gpu) {
 .profile <- ifelse(is_debug, "", "--release")
 .clean_targets <- ifelse(is_debug, "", "$(TARGET_DIR)")
 .cargo_features <- ifelse(enable_gpu, "--features gpu", "")
+.target_dir <- normalizePath(tempfile("rsfgseaR-target-"), winslash = "/", mustWork = FALSE)
 
 # We specify this target when building for webR
 webr_target <- "wasm32-unknown-emscripten"
@@ -108,6 +109,7 @@ new_txt <- gsub("@CRAN_FLAGS@", .cran_flags, mv_txt) |>
   gsub("@PROFILE@", .profile, x = _) |>
   gsub("@CLEAN_TARGET@", .clean_targets, x = _) |>
   gsub("@CARGO_FEATURES@", .cargo_features, x = _) |>
+  gsub("@TARGET_DIR@", .target_dir, x = _) |>
   gsub("@LIBDIR@", .libdir, x = _) |>
   gsub("@TARGET@", .target, x = _) |>
   gsub("@PANIC_EXPORTS@", .panic_exports, x = _)

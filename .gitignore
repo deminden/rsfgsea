@@ -23,6 +23,7 @@ outputs/
 r-pkg/*.tar.gz
 r-pkg/*.zip
 r-pkg/*.tgz
+/rsfgseaR.Rcheck/
 r-pkg/*.Rcheck/
 r-pkg/rsfgseaR.Rcheck/
 r-pkg/rsfgseaR/src/Makevars

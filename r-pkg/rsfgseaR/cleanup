@@ -1,4 +1,9 @@
 #!/usr/bin/env sh
+set -eu
+
+pkg_dir="$(CDPATH= cd -- "$(dirname "$0")" && pwd)"
+cd "$pkg_dir"
+
 rm -f src/Makevars src/Makevars.win
 rm -f src/*.o src/*.so src/*.dll src/*.a src/symbols.rds
 rm -rf src/.cargo src/vendor src/rust/target

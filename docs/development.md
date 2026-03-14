@@ -58,6 +58,10 @@ These can be cleaned with:
 ./r-pkg/rsfgseaR/cleanup
 ```
 
+If you edit Rust sources after running `./scripts/sync_r_vendor.sh`, run
+`./scripts/sync_r_vendor.sh` again before committing so the vendored R Rust core
+stays in sync with `crates/rsfgsea`.
+
 ## Editing Guidance
 
 Good changes usually:
