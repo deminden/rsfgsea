@@ -21,7 +21,8 @@ $(STATLIB):
 	if [ -f ./rust/vendor.tar.xz ]; then \
 		mkdir -p $(CARGOTMP) && \
 		tar xf rust/vendor.tar.xz -C $(CARGOTMP) && \
-		printf '%s\n' '[source.crates-io]' 'replace-with = "vendored-sources"' '' '[source.vendored-sources]' 'directory = "$(CARGOTMP)/vendor"' > $(CARGOTMP)/config.toml; \
+		VENDOR_ABS=$$(cygpath -m "$(CARGOTMP)/vendor") && \
+		printf '%s\n' '[source.crates-io]' 'replace-with = "vendored-sources"' '' '[source.vendored-sources]' "directory = \"$$VENDOR_ABS\"" > $(CARGOTMP)/config.toml; \
 	fi
 
 	# Build the project using Cargo with additional flags
