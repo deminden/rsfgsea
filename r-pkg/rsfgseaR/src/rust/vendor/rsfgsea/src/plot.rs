@@ -346,7 +346,7 @@ pub fn write_enrichment_plot_png<P: AsRef<Path>>(
         let (label_width, _) = text_size(tick_scale, &font, label);
         draw_text(
             &mut img,
-            &font,
+            font,
             plot_left - scaled_px_i32(12.0, dpi_scale) - label_width as i32,
             y.round() as i32 - scaled_px_i32(12.0, dpi_scale),
             tick_scale,
@@ -365,7 +365,7 @@ pub fn write_enrichment_plot_png<P: AsRef<Path>>(
         );
         draw_text(
             &mut img,
-            &font,
+            font,
             x.round() as i32 - scaled_px_i32(12.0, dpi_scale),
             plot_top + plot_height + scaled_px_i32(24.0, dpi_scale),
             tick_scale,
@@ -377,7 +377,7 @@ pub fn write_enrichment_plot_png<P: AsRef<Path>>(
     if let Some(title) = options.title.as_deref() {
         draw_text_centered(
             &mut img,
-            &font,
+            font,
             pixel_width as i32 / 2,
             scaled_px_i32(24.0, dpi_scale),
             title_scale,
@@ -387,7 +387,7 @@ pub fn write_enrichment_plot_png<P: AsRef<Path>>(
     }
     draw_text_centered(
         &mut img,
-        &font,
+        font,
         pixel_width as i32 / 2,
         pixel_height as i32 - scaled_px_i32(28.0, dpi_scale),
         axis_label_scale,
@@ -396,7 +396,7 @@ pub fn write_enrichment_plot_png<P: AsRef<Path>>(
     );
     draw_vertical_text_centered(
         &mut img,
-        &font,
+        font,
         plot_left - scaled_px_i32(30.0, dpi_scale) - max_y_tick_label_width,
         plot_top + plot_height / 2,
         axis_label_scale,
@@ -655,6 +655,7 @@ fn draw_thick_line_segment(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn draw_dotted_horizontal_line(
     img: &mut RgbaImage,
     x0: f32,
