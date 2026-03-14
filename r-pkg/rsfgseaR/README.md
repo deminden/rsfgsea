@@ -68,8 +68,29 @@ plotEnrichment(
 )
 ```
 
-All plotting parameters are available in the R wrapper; the example above keeps
+For multi-pathway summaries:
+
+```r
+plotGseaTable(
+  pathways = list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4")),
+  stats = c(g1 = 2, g2 = 1, g3 = -1, g4 = -2),
+  fgseaRes = data.frame(
+    pathway = c("PW_A", "PW_B"),
+    nes = c(1.5, -1.4),
+    pval = c(0.01, 0.03),
+    padj = c(0.02, 0.05)
+  ),
+  output = "table.png",
+  dpi = 300L
+)
+```
+
+All plotting parameters are available in the R wrapper; the examples above keep
 only the most common overrides visible.
+
+For the full cross-interface plotting guide, see:
+
+- <https://github.com/deminden/rsfgsea/blob/main/docs/plotting.md>
 
 Current status:
 

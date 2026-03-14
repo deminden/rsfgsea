@@ -28,6 +28,10 @@ fn plot_cli_bin() -> Command {
     Command::new(env!("CARGO_BIN_EXE_rsfgsea-plot-enrichment"))
 }
 
+fn plot_table_cli_bin() -> Command {
+    Command::new(env!("CARGO_BIN_EXE_rsfgsea-plot-gsea-table"))
+}
+
 #[test]
 fn cli_simple_mode_writes_results() {
     let (_dir, ranks, gmt, output) = write_test_inputs();
@@ -159,4 +163,32 @@ fn plot_cli_dpi_controls_pixel_dimensions() {
     let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
     assert_eq!(width, 360);
     assert_eq!(height, 300);
+}
+
+#[test]
+fn plot_table_cli_writes_png() {
+    let (_dir, ranks, gmt, output) = write_test_inputs();
+    let png = output.with_extension("table.png");
+
+    plot_table_cli_bin()
+        .args([
+            "--ranks",
+            ranks.to_str().unwrap(),
+            "--gmt",
+            gmt.to_str().unwrap(),
+            "--pathway",
+            "PW_A",
+            "PW_B",
+            "--output",
+            png.to_str().unwrap(),
+            "--dpi",
+            "300",
+            "--nPermSimple",
+            "100",
+        ])
+        .assert()
+        .success();
+
+    let bytes = fs::read(&png).unwrap();
+    assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));
 }

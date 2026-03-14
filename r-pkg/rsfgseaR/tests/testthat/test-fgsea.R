@@ -119,3 +119,26 @@ test_that("plotEnrichment writes a PNG file", {
   expect_true(file.exists(out_path))
   expect_gt(file.info(out_path)$size, 0)
 })
+
+test_that("plotGseaTable writes a PNG file", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  fgsea_res <- data.frame(
+    pathway = c("PW_A", "PW_B"),
+    nes = c(1.5, -1.4),
+    pval = c(0.01, 0.02),
+    padj = c(0.02, 0.03)
+  )
+  out_path <- tempfile(fileext = ".png")
+
+  rsfgseaR::plotGseaTable(
+    pathways = pathways,
+    stats = stats,
+    fgseaRes = fgsea_res,
+    output = out_path,
+    dpi = 300L
+  )
+
+  expect_true(file.exists(out_path))
+  expect_gt(file.info(out_path)$size, 0)
+})

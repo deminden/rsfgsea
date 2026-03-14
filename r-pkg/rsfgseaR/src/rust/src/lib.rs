@@ -172,6 +172,109 @@ fn write_enrichment_plot(
     }
 }
 
+/// Write a multi-pathway GSEA table plot as PNG.
+#[allow(clippy::too_many_arguments)]
+#[extendr]
+fn write_gsea_table_plot(
+    stats: Doubles,
+    genes: Strings,
+    pathway_names: Strings,
+    pathway_gene_lists: List,
+    result_pathways: Strings,
+    result_nes: Doubles,
+    result_pval: Doubles,
+    result_padj: Doubles,
+    output_path: &str,
+    gsea_param: f64,
+    width_inches: f64,
+    height_inches: Nullable<f64>,
+    dpi: i32,
+    transparent_background: bool,
+) -> Robj {
+    let result = (|| -> std::result::Result<(), String> {
+        if stats.len() != genes.len() {
+            return Err("stats and gene names must have the same length.".to_string());
+        }
+        if pathway_names.len() != pathway_gene_lists.len() {
+            return Err("pathway_names and pathway_gene_lists must have the same length.".to_string());
+        }
+        if result_pathways.len() != result_nes.len()
+            || result_pathways.len() != result_pval.len()
+            || result_pathways.len() != result_padj.len()
+        {
+            return Err(
+                "result_pathways, result_nes, result_pval, and result_padj must have the same length."
+                    .to_string(),
+            );
+        }
+        let height_inches = height_inches.into_option();
+        if width_inches <= 0.0 || height_inches.is_some_and(|h| h <= 0.0) || dpi <= 0 {
+            return Err("width_inches, height_inches, and dpi must be greater than 0.".to_string());
+        }
+
+        let genes: Vec<String> = genes.iter().map(|gene| gene.to_string()).collect();
+        let scores: Vec<f64> = stats.iter().map(|v| v.inner()).collect();
+        let ranks = RankedList::new(genes, scores);
+
+        let pathway_names_vec: Vec<String> =
+            pathway_names.iter().map(|name| name.to_string()).collect();
+        let pathways: Vec<Pathway> = pathway_names_vec
+            .into_iter()
+            .zip(pathway_gene_lists.iter())
+            .map(|(name, (_, genes_obj))| {
+                let genes = genes_obj
+                    .as_str_vector()
+                    .ok_or_else(|| format!("pathway '{name}' genes must be a character vector."))?
+                    .iter()
+                    .map(|gene: &&str| (*gene).to_string())
+                    .collect();
+                Ok(Pathway {
+                    name,
+                    description: None,
+                    genes,
+                })
+            })
+            .collect::<std::result::Result<Vec<_>, String>>()?;
+
+        let results: Vec<EnrichmentResult> = result_pathways
+            .iter()
+            .zip(result_nes.iter())
+            .zip(result_pval.iter())
+            .zip(result_padj.iter())
+            .map(|(((pathway_name, nes), pval), padj)| EnrichmentResult {
+                pathway_name: pathway_name.to_string(),
+                size: 0,
+                es: 0.0,
+                nes: Some(nes.inner()),
+                p_value: pval.inner(),
+                padj: Some(padj.inner()),
+                log2err: None,
+                leading_edge: Vec::new(),
+            })
+            .collect();
+
+        write_gsea_table_plot_png(
+            &ranks,
+            &pathways,
+            &results,
+            output_path,
+            gsea_param,
+            &GseaTablePlotOptions {
+                width_inches,
+                height_inches,
+                dpi: dpi as u32,
+                transparent_background,
+            },
+        )
+        .map_err(|err| err.to_string())
+    })();
+
+    match result {
+        Ok(()) => output_path.into(),
+        Err(err) => throw_r_error(err),
+    }
+}
+
 /// Run fgsea-compatible enrichment using a named stats vector and a GMT file.
 #[allow(clippy::too_many_arguments)]
 fn fgsea_rust_impl(
@@ -377,4 +480,5 @@ extendr_module! {
     fn supported_modes;
     fn fgsea_rust;
     fn write_enrichment_plot;
+    fn write_gsea_table_plot;
 }

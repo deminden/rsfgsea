@@ -26,5 +26,9 @@ fgsea_rust <- function(stats, genes, gmt_path, n_perm_simple, seed, nproc, min_s
 #' @noRd
 write_enrichment_plot <- function(stats, genes, pathway_genes, output_path, pathway_name, score_type, gsea_param, width_inches, height_inches, dpi, transparent_background, title) .Call(wrap__write_enrichment_plot, stats, genes, pathway_genes, output_path, pathway_name, score_type, gsea_param, width_inches, height_inches, dpi, transparent_background, title)
 
+#' Write a multi-pathway GSEA table plot as PNG.
+#' @noRd
+write_gsea_table_plot <- function(stats, genes, pathway_names, pathway_gene_lists, result_pathways, result_nes, result_pval, result_padj, output_path, gsea_param, width_inches, height_inches, dpi, transparent_background) .Call(wrap__write_gsea_table_plot, stats, genes, pathway_names, pathway_gene_lists, result_pathways, result_nes, result_pval, result_padj, output_path, gsea_param, width_inches, height_inches, dpi, transparent_background)
+
 
 # nolint end

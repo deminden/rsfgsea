@@ -12,8 +12,9 @@ pub use crate::core::{
 };
 pub use crate::io::{read_gmt, read_ranked_list};
 pub use crate::plot::{
-    EnrichmentPlotData, EnrichmentPlotOptions, build_enrichment_plot_data,
-    write_enrichment_plot_png,
+    EnrichmentPlotData, EnrichmentPlotOptions, GseaTablePlotData, GseaTablePlotOptions,
+    build_enrichment_plot_data, build_gsea_table_plot_data, write_enrichment_plot_png,
+    write_gsea_table_plot_png,
 };
 
 #[cfg(feature = "gpu")]

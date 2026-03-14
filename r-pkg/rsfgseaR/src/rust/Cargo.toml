@@ -1,7 +1,7 @@
 [package]
 name = 'rsfgsea_r'
 publish = false
-version = '0.3.0'
+version = '0.3.1'
 edition = '2021'
 rust-version = '1.65'
 
@@ -11,7 +11,7 @@ name = 'rsfgseaR'
 
 [dependencies]
 extendr-api = '0.8.1'
-rayon = '1.10'
+rayon = '1.11.0'
 rsfgsea = { path = './vendor/rsfgsea' }
 
 [features]

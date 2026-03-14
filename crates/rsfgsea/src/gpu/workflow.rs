@@ -1,8 +1,8 @@
 use crate::GpuEngine;
 use anyhow::Result;
-use rand::SeedableRng;
 use rand::rngs::{SmallRng, StdRng};
 use rand::seq::index::sample;
+use rand::{RngExt, SeedableRng};
 use rayon::prelude::*;
 
 #[derive(Debug, Clone)]
@@ -291,8 +291,6 @@ impl GpuEngine {
         seed: u64,
         score_type: u32,
     ) -> Result<FgseaMultilevelResult> {
-        use rand::Rng;
-
         let n_total = abs_scores.len();
         let k = pathway_indices.len();
         if k == 0 || k >= n_total {
@@ -310,9 +308,9 @@ impl GpuEngine {
         current_samples
             .par_chunks_mut(k)
             .for_each_with(pool.clone(), |local_pool, chunk| {
-                let mut local_rng = rand::thread_rng();
+                let mut local_rng = rand::rng();
                 for i in 0..k {
-                    let j = local_rng.gen_range(i..n_total);
+                    let j = local_rng.random_range(i..n_total);
                     local_pool.swap(i, j);
                     chunk[i] = local_pool[i] as u32;
                 }
@@ -373,17 +371,17 @@ impl GpuEngine {
             let mut next_samples = vec![0u32; sample_size * k];
             let current_samples_ref = &current_samples;
             next_samples.par_chunks_mut(k).for_each(|chunk| {
-                let mut local_rng = rand::thread_rng();
-                let src_idx = top_indices[local_rng.gen_range(0..top_indices.len())];
+                let mut local_rng = rand::rng();
+                let src_idx = top_indices[local_rng.random_range(0..top_indices.len())];
                 let mut sample = current_samples_ref[src_idx * k..(src_idx + 1) * k].to_vec();
 
                 let n_swaps = (k as f64 * 0.1).ceil() as usize;
                 for _ in 0..n_swaps {
-                    let hit_to_swap = local_rng.gen_range(0..k);
+                    let hit_to_swap = local_rng.random_range(0..k);
                     let old_gene = sample[hit_to_swap];
-                    let mut new_gene = local_rng.gen_range(0..n_total) as u32;
+                    let mut new_gene = local_rng.random_range(0..n_total) as u32;
                     while sample.binary_search(&new_gene).is_ok() {
-                        new_gene = local_rng.gen_range(0..n_total) as u32;
+                        new_gene = local_rng.random_range(0..n_total) as u32;
                     }
 
                     sample[hit_to_swap] = new_gene;

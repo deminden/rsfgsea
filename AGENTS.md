@@ -13,10 +13,14 @@ Before every commit and before every push, run all checks below from repo root a
 
 ## Rules
 
+- Do routine development work on `dev`, not directly on `main`.
+- Only update `main` after `dev` has been pushed and GitHub CI has passed on `dev`.
 - Do not commit if any check fails.
 - Do not commit if the vendored R Rust core under `r-pkg/rsfgseaR/src/rust/vendor/rsfgsea` is out of sync with `crates/rsfgsea`.
 - Prevent R package artifact failures by running `./r-pkg/rsfgseaR/cleanup` before verification and before packaging.
 - Do not commit if R package build artifacts are still present after cleanup, especially in `r-pkg/rsfgseaR/src` or `r-pkg/rsfgseaR/src/rust/target`.
+- During iterative Rust-side development, do not spend time resyncing the vendored R Rust core or updating wrapper-facing vendored files after every edit.
+- Finalize the Rust-side implementation first, then rerun `./scripts/sync_r_vendor.sh` and update wrapper-facing generated/vendor artifacts before the final verification sequence and commit.
 - If you make any Rust code edits after running `./scripts/sync_r_vendor.sh`, rerun `./scripts/sync_r_vendor.sh` before committing.
 - If a check fails, fix the issue, then rerun the full sequence.
 - If tests fail due to environment/hardware constraints (for example GPU-only runtime tests), report this clearly in the commit/PR notes.

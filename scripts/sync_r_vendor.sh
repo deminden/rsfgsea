@@ -21,6 +21,9 @@ mkdir -p "$vendor_root"
 cp "$src_root/Cargo.toml" "$vendor_root/Cargo.toml"
 cp "$src_root/README.md" "$vendor_root/README.md"
 cp -r "$src_root/src" "$vendor_root/src"
+if [[ -d "$src_root/assets" ]]; then
+  cp -r "$src_root/assets" "$vendor_root/assets"
+fi
 
 python - <<'PY'
 from pathlib import Path

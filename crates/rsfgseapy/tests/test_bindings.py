@@ -78,3 +78,25 @@ def test_write_enrichment_plot_png_py(tmp_path: Path) -> None:
     height = int.from_bytes(data[20:24], "big")
     assert width == 360
     assert height == 300
+
+
+def test_write_gsea_table_plot_png_py(tmp_path: Path) -> None:
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+    output_path = tmp_path / "table.png"
+    results = [
+        {"pathway": "PW_A", "nes": 1.5, "pval": 0.01, "padj": 0.02},
+        {"pathway": "PW_B", "nes": -1.4, "pval": 0.02, "padj": 0.03},
+    ]
+
+    rsfgseapy.write_gsea_table_plot_png_py(
+        ranks=ranks,
+        pathways=[("PW_A", ["g1", "g2"]), ("PW_B", ["g3", "g4"])],
+        results=results,
+        output_path=str(output_path),
+        width_inches=7.0,
+        dpi=300,
+    )
+
+    assert output_path.exists()
+    data = output_path.read_bytes()
+    assert data.startswith(b"\x89PNG")
