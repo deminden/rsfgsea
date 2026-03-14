@@ -29,7 +29,7 @@ Library:
 
 ```toml
 [dependencies]
-rsfgsea = "0.2.6"
+rsfgsea = "0.3.0"
 ```
 
 CLI:

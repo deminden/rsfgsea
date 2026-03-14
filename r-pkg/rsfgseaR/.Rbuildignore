@@ -2,9 +2,11 @@
 ^\.gitignore$
 ^src/\.gitignore$
 ^src/\.cargo$
-^src/rust/target$
+^src/rust/target($|/)
 ^src/Makevars$
 ^src/Makevars\.win$
 ^src/.*\.(o|so|dll|a)$
+^src/entrypoint\.o$
+^src/rsfgseaR\.so$
 ^src/symbols\.rds$
 ^.*\.Rcheck$

@@ -18,6 +18,7 @@ Supporting directories:
 R package maintenance:
 
 - `scripts/sync_r_vendor.sh`: refreshes the vendored Rust core used by `r-pkg/rsfgseaR`
+- `r-pkg/rsfgseaR/cleanup`: removes generated R package build artifacts before packaging/checks
 
 ## What To Keep Stable
 
@@ -34,12 +35,28 @@ Treat these as user-facing contracts:
 From repo root:
 
 ```bash
+./r-pkg/rsfgseaR/cleanup
+./scripts/sync_r_vendor.sh
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
+R CMD check r-pkg/rsfgseaR --no-manual
 ```
 
 Do not commit or push with any of these failing.
+
+Before running `R CMD check`, make sure the package tree does not contain built
+artifacts such as:
+
+- `r-pkg/rsfgseaR/src/entrypoint.o`
+- `r-pkg/rsfgseaR/src/rsfgseaR.so`
+- `r-pkg/rsfgseaR/src/rust/target/`
+
+These can be cleaned with:
+
+```bash
+./r-pkg/rsfgseaR/cleanup
+```
 
 ## Editing Guidance
 

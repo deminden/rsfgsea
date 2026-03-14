@@ -1,3 +1,10 @@
 src/vendor
 src/Makevars
 src/Makevars.win
+src/entrypoint.o
+src/rsfgseaR.so
+src/*.dll
+src/*.a
+src/symbols.rds
+src/.cargo
+src/rust/target

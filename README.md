@@ -55,7 +55,7 @@ rsfgsea \
 Add to `Cargo.toml`:
 ```toml
 [dependencies]
-rsfgsea = "0.2.6"
+rsfgsea = "0.3.0"
 ```
 
 Or use the repository directly during development:
@@ -377,9 +377,6 @@ Relative p-value difference:
 
 - Full GPU parity tables are in [`docs/reproducibility.md`](./docs/reproducibility.md).
 
-Artifacts:
-- `reports/gpu_vs_r/gpu_vs_r_report.md`
-- `reports/gpu_vs_r/gpu_vs_r_summary.json`
 
 ## Contributing
 
@@ -391,15 +388,6 @@ Pull requests are encouraged — especially for:
 - correctness / numerical stability fixes
 - additional tests (including cross-validation vs R `fgsea`)
 - documentation, examples, and benchmarking
-
-### Development notes
-
-- Please run the full required verification sequence before submitting:
-  ```bash
-  cargo fmt --all -- --check
-  cargo clippy --workspace --all-targets --all-features -- -D warnings
-  cargo test --workspace --all-features
-  ```
 
 ## License
 
