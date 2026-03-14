@@ -1,4 +1,6 @@
+use pyo3::Py;
 use pyo3::prelude::*;
+use pyo3::types::PyAny;
 use rsfgsea::prelude::*;
 use std::collections::HashMap;
 
@@ -34,7 +36,7 @@ fn run_gsea_py(
     nperm: Option<usize>,
     sampleSize: usize,
     gpu: bool,
-) -> PyResult<Vec<HashMap<String, PyObject>>> {
+) -> PyResult<Vec<HashMap<String, Py<PyAny>>>> {
     if sampleSize == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(
             "sampleSize must be greater than 0.",
@@ -228,9 +230,110 @@ fn write_enrichment_plot_png_py(
     .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
 }
 
+#[allow(clippy::too_many_arguments)]
+#[allow(non_snake_case)]
+#[pyfunction]
+#[pyo3(signature = (ranks, pathways, results, output_path, gseaParam=1.0, width_inches=5.6, height_inches=None, dpi=300, transparent_background=false))]
+fn write_gsea_table_plot_png_py(
+    py: Python<'_>,
+    ranks: HashMap<String, f64>,
+    pathways: Vec<(String, Vec<String>)>,
+    results: Vec<HashMap<String, Py<PyAny>>>,
+    output_path: String,
+    gseaParam: f64,
+    width_inches: f64,
+    height_inches: Option<f64>,
+    dpi: u32,
+    transparent_background: bool,
+) -> PyResult<()> {
+    let mut genes = Vec::new();
+    let mut scores = Vec::new();
+    for (g, s) in ranks {
+        genes.push(g);
+        scores.push(s);
+    }
+    let rs_ranks = RankedList::new(genes, scores);
+
+    let pathways: Vec<Pathway> = pathways
+        .into_iter()
+        .map(|(name, genes)| Pathway {
+            name,
+            description: None,
+            genes,
+        })
+        .collect();
+    let results = parse_results_for_plot_py(py, results)?;
+
+    write_gsea_table_plot_png(
+        &rs_ranks,
+        &pathways,
+        &results,
+        output_path,
+        gseaParam,
+        &GseaTablePlotOptions {
+            width_inches,
+            height_inches,
+            dpi,
+            transparent_background,
+        },
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
+fn parse_results_for_plot_py(
+    py: Python<'_>,
+    results: Vec<HashMap<String, Py<PyAny>>>,
+) -> PyResult<Vec<EnrichmentResult>> {
+    let mut parsed = Vec::with_capacity(results.len());
+    for row in results {
+        let pathway_name = extract_required_py_string(py, &row, "pathway")?;
+        let nes = extract_required_py_f64(py, &row, "nes")?;
+        let pval = extract_required_py_f64(py, &row, "pval")?;
+        let padj = extract_required_py_f64(py, &row, "padj")?;
+        parsed.push(EnrichmentResult {
+            pathway_name,
+            size: 0,
+            es: 0.0,
+            nes: Some(nes),
+            p_value: pval,
+            padj: Some(padj),
+            log2err: None,
+            leading_edge: Vec::new(),
+        });
+    }
+    Ok(parsed)
+}
+
+fn extract_required_py_string(
+    py: Python<'_>,
+    row: &HashMap<String, Py<PyAny>>,
+    key: &str,
+) -> PyResult<String> {
+    row.get(key)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!("Result row missing '{key}'."))
+        })?
+        .bind(py)
+        .extract::<String>()
+}
+
+fn extract_required_py_f64(
+    py: Python<'_>,
+    row: &HashMap<String, Py<PyAny>>,
+    key: &str,
+) -> PyResult<f64> {
+    row.get(key)
+        .ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err(format!("Result row missing '{key}'."))
+        })?
+        .bind(py)
+        .extract::<f64>()
+}
+
 #[pymodule]
 fn rsfgseapy(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_gsea_py, m)?)?;
     m.add_function(wrap_pyfunction!(write_enrichment_plot_png_py, m)?)?;
+    m.add_function(wrap_pyfunction!(write_gsea_table_plot_png_py, m)?)?;
     Ok(())
 }

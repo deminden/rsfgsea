@@ -39,7 +39,7 @@ fn select_adapter(
     backends: wgpu::Backends,
     gl_fallback_enabled: bool,
 ) -> Option<AdapterSelection> {
-    let adapters = instance.enumerate_adapters(backends);
+    let adapters = pollster::block_on(instance.enumerate_adapters(backends));
     let mut selected_adapter = None;
     let mut selected_score = i32::MIN;
 
@@ -93,7 +93,7 @@ impl GpuEngine {
     pub async fn new() -> Result<Self> {
         let gl_fallback_enabled = gl_fallback_enabled();
         let backends = requested_backends(gl_fallback_enabled);
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
             backends,
             ..Default::default()
         });
@@ -109,7 +109,7 @@ impl GpuEngine {
                         ..Default::default()
                     })
                     .await
-                    .ok_or_else(|| anyhow::anyhow!("No GPU adapter found"))?
+                    .map_err(|e| anyhow::anyhow!("No GPU adapter found: {e}"))?
             };
 
         let selected_info = adapter.get_info();
@@ -129,15 +129,12 @@ If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MES
         }
 
         let (device, queue) = adapter
-            .request_device(
-                &wgpu::DeviceDescriptor {
-                    label: Some("rsfgsea-gpu-device"),
-                    required_features: wgpu::Features::empty(),
-                    required_limits: wgpu::Limits::default(),
-                    ..Default::default()
-                },
-                None,
-            )
+            .request_device(&wgpu::DeviceDescriptor {
+                label: Some("rsfgsea-gpu-device"),
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+                ..Default::default()
+            })
             .await?;
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {

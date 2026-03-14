@@ -160,7 +160,9 @@ impl GpuEngine {
         let (sender, receiver) = oneshot_channel::<Option<Result<(), wgpu::BufferAsyncError>>>();
         let slice = staging_buffer.slice(..);
         slice.map_async(wgpu::MapMode::Read, move |v| sender.send(Some(v)).unwrap());
-        self.device.poll(wgpu::Maintain::Wait);
+        self.device
+            .poll(wgpu::PollType::wait_indefinitely())
+            .map_err(|e| anyhow::anyhow!("GPU poll failed: {e}"))?;
 
         pollster::block_on(receiver.receive()).unwrap().unwrap()?;
         let data = slice.get_mapped_range();

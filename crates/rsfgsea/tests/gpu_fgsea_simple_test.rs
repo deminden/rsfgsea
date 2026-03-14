@@ -64,7 +64,7 @@ async fn test_compute_es_batch_multiple() {
 
     // Generate random permutations
     use rand::prelude::*;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut subsets_indices = Vec::with_capacity(n_perm * k as usize);
 
     for _ in 0..n_perm {
@@ -131,7 +131,7 @@ async fn test_fgsea_simple_pathway_random() {
 
     // Random pathway: evenly distributed
     use rand::prelude::*;
-    let mut rng = rand::thread_rng();
+    let mut rng = rand::rng();
     let mut pathway_random: Vec<usize> = (0..n_total).collect();
     pathway_random.shuffle(&mut rng);
     pathway_random.truncate(k);

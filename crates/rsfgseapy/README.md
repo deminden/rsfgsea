@@ -99,7 +99,7 @@ for row in results:
     print(row["pathway"], row["nes"], row["pval"])
 ```
 
-## Plot Example
+## Plotting
 
 ```python
 import rsfgseapy
@@ -114,8 +114,29 @@ rsfgseapy.write_enrichment_plot_png_py(
 )
 ```
 
-All plotting parameters are available in the Python API; the example above keeps
+For multi-pathway summaries:
+
+```python
+import rsfgseapy
+
+rsfgseapy.write_gsea_table_plot_png_py(
+    ranks={"GENE_A": 2.0, "GENE_B": 1.0, "GENE_C": -1.0, "GENE_D": -2.0},
+    pathways=[("PW_A", ["GENE_A", "GENE_B"]), ("PW_B", ["GENE_C", "GENE_D"])],
+    results=[
+        {"pathway": "PW_A", "nes": 1.5, "pval": 0.01, "padj": 0.02},
+        {"pathway": "PW_B", "nes": -1.4, "pval": 0.03, "padj": 0.05},
+    ],
+    output_path="table.png",
+    dpi=300,
+)
+```
+
+All plotting parameters are available in the Python API; the examples above keep
 only the most common publication-oriented overrides visible.
+
+For the full cross-interface plotting guide, see:
+
+- https://github.com/deminden/rsfgsea/blob/main/docs/plotting.md
 
 ## `nPermSimple` vs `nperm`
 

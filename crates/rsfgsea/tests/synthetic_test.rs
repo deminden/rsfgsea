@@ -1,3 +1,4 @@
+use rand::RngExt;
 use rand::prelude::*;
 use rand::rngs::StdRng;
 use rsfgsea::prelude::*;
@@ -14,7 +15,7 @@ fn test_synthetic_large_run() {
     for i in 0..n_genes {
         genes.push(format!("GENE_{}", i));
         // Random scores roughly normal distributed
-        let score: f64 = rng.gen_range(-3.0..3.0);
+        let score: f64 = rng.random_range(-3.0..3.0);
         scores.push(score);
     }
 
@@ -25,7 +26,7 @@ fn test_synthetic_large_run() {
     let mut pathways = Vec::new();
 
     for i in 0..n_pathways {
-        let size = rng.gen_range(15..100);
+        let size = rng.random_range(15..100);
         let mut pw_genes = Vec::new();
         // Randomly sample genes for the pathway
         let mut gene_indices: Vec<usize> = (0..n_genes).collect();

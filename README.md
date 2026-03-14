@@ -6,7 +6,7 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 
 - **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
 - **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on large 1-worker benchmark workloads, `rsfgsea` is about **3.0x-4.3x faster** than R `fgsea` in this repo's current benchmark setup.
-- **Built-In Enrichment Plotting**: Writes single-pathway enrichment plots as PNG directly from Rust, CLI, Python, and R.
+- **Built-In Plotting**: Writes single-pathway enrichment plots and multi-pathway GSEA table plots as PNG directly from Rust, CLI, Python, and R.
 - **Hybrid CPU/GPU Engine (Experimental)**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 
 ## Usage
@@ -55,7 +55,7 @@ rsfgsea \
 Add to `Cargo.toml`:
 ```toml
 [dependencies]
-rsfgsea = "0.3.0"
+rsfgsea = "0.3.1"
 ```
 
 Or use the repository directly during development:
@@ -197,8 +197,8 @@ Notes:
 
 ### Plotting
 
-Single-pathway enrichment plots can be written directly from the CLI, Python,
-or R wrappers.
+Single-pathway enrichment plots and multi-pathway GSEA table plots can be
+written directly from the CLI, Python, or R wrappers.
 
 CLI:
 
@@ -211,6 +211,10 @@ rsfgsea-plot-enrichment \
     --dpi 300 \
     --title "HALLMARK_APOPTOSIS"
 ```
+
+Example enrichment plot:
+
+![Enrichment plot example](docs/images/HADHB_GTEX_muscle_go_table_multilevel_Pearson_top5000_15_500_cell_adhesion_enrichment.png)
 
 Python:
 
@@ -239,6 +243,10 @@ rsfgseaR::plotEnrichment(
   title = "PW_A"
 )
 ```
+
+For multi-pathway summaries, `rsfgsea` also writes fgsea-style table plots:
+
+![GSEA table plot example](docs/images/HADHB_GTEX_muscle_go_table_multilevel_Pearson_top5000_15_500_top10_table.png)
 
 Other plotting parameters such as physical size and transparent background are
 available in [`docs/plotting.md`](./docs/plotting.md).

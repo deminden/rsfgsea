@@ -19,9 +19,10 @@ $(STATLIB):
 	touch $(TARGET_DIR)/libgcc_mock/libgcc_eh.a
 
 	if [ -f ./rust/vendor.tar.xz ]; then \
-		tar xf rust/vendor.tar.xz && \
 		mkdir -p $(CARGOTMP) && \
-		cp rust/vendor-config.toml $(CARGOTMP)/config.toml; \
+		tar xf rust/vendor.tar.xz -C $(CARGOTMP) && \
+		VENDOR_ABS=$$(cygpath -m "$(CARGOTMP)/vendor") && \
+		printf '%s\n' '[source.crates-io]' 'replace-with = "vendored-sources"' '' '[source.vendored-sources]' "directory = \"$$VENDOR_ABS\"" > $(CARGOTMP)/config.toml; \
 	fi
 
 	# Build the project using Cargo with additional flags

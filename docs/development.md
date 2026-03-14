@@ -45,6 +45,16 @@ R CMD check r-pkg/rsfgseaR --no-manual
 
 Do not commit or push with any of these failing.
 
+## Branch Workflow
+
+Use `dev` as the active development branch.
+
+- commit and push day-to-day work on `dev`
+- let GitHub CI run on `dev`
+- only merge or fast-forward `main` after `dev` is green
+
+Avoid making routine feature commits directly on `main`.
+
 Before running `R CMD check`, make sure the package tree does not contain built
 artifacts such as:
 
@@ -61,6 +71,11 @@ These can be cleaned with:
 If you edit Rust sources after running `./scripts/sync_r_vendor.sh`, run
 `./scripts/sync_r_vendor.sh` again before committing so the vendored R Rust core
 stays in sync with `crates/rsfgsea`.
+
+During normal iteration, prefer finalizing the Rust-side implementation first.
+Do not repeatedly resync vendored R Rust sources or wrapper-facing generated
+artifacts after every small Rust edit. Do that once the Rust changes are ready,
+then run the full required verification sequence before committing.
 
 ## Editing Guidance
 

@@ -304,6 +304,85 @@ plotEnrichment <- function(
   invisible(output)
 }
 
+#' Write a multi-pathway GSEA table plot as PNG
+#'
+#' @param pathways Named list of character vectors of pathway genes.
+#' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
+#' @param fgseaRes Data frame with at least `pathway`, `nes`, `pval`, and `padj` columns.
+#' @param output Output PNG file path.
+#' @param gseaParam Weighting exponent.
+#' @param width_inches Output width in inches.
+#' @param height_inches Optional output height in inches. `NULL` derives height from row count.
+#' @param dpi Output DPI metadata for the PNG file.
+#' @param transparent_background Logical flag; if `TRUE`, write the PNG with a transparent background.
+#'
+#' @return Invisibly returns `output`.
+#' @export
+plotGseaTable <- function(
+  pathways,
+  stats,
+  fgseaRes,
+  output,
+  gseaParam = 1.0,
+  width_inches = 5.6,
+  height_inches = NULL,
+  dpi = 300L,
+  transparent_background = FALSE
+) {
+  stats <- .normalize_stats(stats)
+  if (!is.list(pathways) || length(pathways) == 0L || is.null(names(pathways)) || any(names(pathways) == "")) {
+    stop("pathways must be a non-empty named list of character vectors.", call. = FALSE)
+  }
+  for (i in seq_along(pathways)) {
+    genes <- pathways[[i]]
+    if (!is.character(genes) || length(genes) == 0L || anyNA(genes) || any(genes == "")) {
+      stop(sprintf("pathways[['%s']] must be a non-empty character vector.", names(pathways)[[i]]), call. = FALSE)
+    }
+  }
+  if (!is.data.frame(fgseaRes)) {
+    stop("fgseaRes must be a data frame.", call. = FALSE)
+  }
+  required_cols <- c("pathway", "nes", "pval", "padj")
+  missing_cols <- setdiff(required_cols, colnames(fgseaRes))
+  if (length(missing_cols) > 0L) {
+    stop(sprintf("fgseaRes is missing required columns: %s", paste(missing_cols, collapse = ", ")), call. = FALSE)
+  }
+  if (!is.character(output) || length(output) != 1L || identical(output, "")) {
+    stop("output must be a single file path.", call. = FALSE)
+  }
+  .validate_positive_scalar(width_inches, "width_inches")
+  if (!is.null(height_inches)) {
+    .validate_positive_scalar(height_inches, "height_inches")
+  }
+  .validate_integerish_scalar(dpi, "dpi", min_value = 1L)
+  if (!is.logical(transparent_background) || length(transparent_background) != 1L || is.na(transparent_background)) {
+    stop("transparent_background must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.numeric(gseaParam) || length(gseaParam) != 1L || !is.finite(gseaParam) || gseaParam < 0) {
+    stop("gseaParam must be a single finite numeric value >= 0.", call. = FALSE)
+  }
+
+  pathway_names <- names(pathways)
+  write_gsea_table_plot(
+    unname(as.numeric(stats)),
+    names(stats),
+    pathway_names,
+    unname(pathways),
+    as.character(fgseaRes$pathway),
+    as.numeric(fgseaRes$nes),
+    as.numeric(fgseaRes$pval),
+    as.numeric(fgseaRes$padj),
+    output,
+    gseaParam,
+    as.numeric(width_inches),
+    if (is.null(height_inches)) NULL else as.numeric(height_inches),
+    as.integer(dpi),
+    isTRUE(transparent_background)
+  )
+
+  invisible(output)
+}
+
 #' Wrapper-style fgsea interface
 #'
 #' Closest to the standard fgsea-style interface. Uses simple screening first and
