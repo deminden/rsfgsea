@@ -55,6 +55,22 @@ res <- fgsea(
 )
 ```
 
+Plot example:
+
+```r
+plotEnrichment(
+  pathway = c("g1", "g2"),
+  stats = c(g1 = 2, g2 = 1, g3 = -1, g4 = -2),
+  output = "enrichment.png",
+  pathwayName = "PW_A",
+  dpi = 300L,
+  title = "PW_A"
+)
+```
+
+All plotting parameters are available in the R wrapper; the example above keeps
+only the most common overrides visible.
+
 Current status:
 
 - package installs and runs locally with `R CMD INSTALL`

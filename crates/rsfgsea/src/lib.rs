@@ -10,6 +10,7 @@ pub mod gpu;
 mod gpu_algo;
 pub mod io;
 mod multilevel;
+pub mod plot;
 pub mod prelude;
 mod rng_compat;
 
@@ -19,3 +20,4 @@ pub use gpu::GpuEngine;
 pub use crate::algo::*;
 pub use crate::bindings::*;
 pub use crate::core::*;
+pub use crate::plot::*;

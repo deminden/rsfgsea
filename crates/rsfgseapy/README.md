@@ -99,6 +99,24 @@ for row in results:
     print(row["pathway"], row["nes"], row["pval"])
 ```
 
+## Plot Example
+
+```python
+import rsfgseapy
+
+rsfgseapy.write_enrichment_plot_png_py(
+    ranks={"GENE_A": 2.0, "GENE_B": 1.0, "GENE_C": -1.0, "GENE_D": -2.0},
+    pathway_genes=["GENE_A", "GENE_B"],
+    output_path="enrichment.png",
+    pathway_name="PW_A",
+    dpi=300,
+    title="PW_A",
+)
+```
+
+All plotting parameters are available in the Python API; the example above keeps
+only the most common publication-oriented overrides visible.
+
 ## `nPermSimple` vs `nperm`
 
 These two names come from fgsea and they are not interchangeable.

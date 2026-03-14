@@ -11,6 +11,10 @@ pub use crate::core::{
     EnrichmentResult, EnrichmentResultExport, Pathway, PathwayDb, RankedList, ScoreType,
 };
 pub use crate::io::{read_gmt, read_ranked_list};
+pub use crate::plot::{
+    EnrichmentPlotData, EnrichmentPlotOptions, build_enrichment_plot_data,
+    write_enrichment_plot_png,
+};
 
 #[cfg(feature = "gpu")]
 pub use crate::gpu::GpuEngine;

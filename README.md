@@ -6,7 +6,7 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 
 - **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
 - **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on large 1-worker benchmark workloads, `rsfgsea` is about **3.0x-4.3x faster** than R `fgsea` in this repo's current benchmark setup.
-- **Deterministic + High-Throughput RNG Paths**: R-compatible MT19937-based paths are used for parity-sensitive execution, with optimized RNG/shuffle paths available in GPU-oriented flows.
+- **Built-In Enrichment Plotting**: Writes single-pathway enrichment plots as PNG directly from Rust, CLI, Python, and R.
 - **Hybrid CPU/GPU Engine (Experimental)**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 
 ## Usage
@@ -195,6 +195,55 @@ Notes:
 - `pathways` can be a named list or a GMT path, and `stats` can be a named numeric vector or a ranked-list file path
 
 
+### Plotting
+
+Single-pathway enrichment plots can be written directly from the CLI, Python,
+or R wrappers.
+
+CLI:
+
+```bash
+rsfgsea-plot-enrichment \
+    --ranks data/pearson_symbols.rnk \
+    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
+    --pathway HALLMARK_APOPTOSIS \
+    --output enrichment.png \
+    --dpi 300 \
+    --title "HALLMARK_APOPTOSIS"
+```
+
+Python:
+
+```python
+import rsfgseapy
+
+rsfgseapy.write_enrichment_plot_png_py(
+    ranks={"GENE_A": 2.0, "GENE_B": 1.0, "GENE_C": -1.0, "GENE_D": -2.0},
+    pathway_genes=["GENE_A", "GENE_B"],
+    output_path="enrichment.png",
+    pathway_name="PW_A",
+    dpi=300,
+    title="PW_A",
+)
+```
+
+R:
+
+```r
+rsfgseaR::plotEnrichment(
+  pathway = c("g1", "g2"),
+  stats = c(g1 = 2, g2 = 1, g3 = -1, g4 = -2),
+  output = "enrichment.png",
+  pathwayName = "PW_A",
+  dpi = 300L,
+  title = "PW_A"
+)
+```
+
+Other plotting parameters such as physical size and transparent background are
+available in [`docs/plotting.md`](./docs/plotting.md).
+
+
 #### GPU Support
 To enable GPU acceleration, build with the `gpu` feature:
 ```bash
@@ -232,6 +281,7 @@ Project documentation is split into compact guides in [`docs/`](./docs/README.md
 
 - [`docs/cli.md`](./docs/cli.md)
 - [`docs/python.md`](./docs/python.md)
+- [`docs/plotting.md`](./docs/plotting.md)
 - [`docs/algorithms.md`](./docs/algorithms.md)
 - [`docs/development.md`](./docs/development.md)
 - [`docs/reproducibility.md`](./docs/reproducibility.md)
@@ -305,32 +355,6 @@ Notes:
 - full parity distribution tables are in [`docs/reproducibility.md`](./docs/reproducibility.md)
 
 This section describes the CPU parity path. GPU parity is materially looser at present and is summarized separately in [GPU Accuracy vs R](#gpu-accuracy-vs-r).
-
-### Parity Mode
-
-Use these settings when you want the closest behavior to R `fgsea`:
-
-- CLI:
-  - `--mode fgsea` (default): fgsea-style wrapper behavior.
-  - `--nPermSimple 1000`: simple stage size used before multilevel refinement.
-  - `--seed <int>`: fix seed for reproducible Monte Carlo runs. If omitted, a fresh random seed is generated and printed.
-  - `--scoreType std|pos|neg`: match the R score mode.
-  - `--nproc <N>`: allowed; parity path is thread-count invariant in current implementation.
-- To force simple-only comparison (like `fgseaSimple`), use:
-  - `--mode simple --nperm <N>`
-
-Speed-oriented paths:
-- CPU throughput: increase workers with `--nproc <N>`.
-- GPU throughput: use the GPU API (`run_gsea_gpu`) or GPU benchmark/verify binaries built with `--features gpu`.
-
-Examples:
-```bash
-# R-aligned default (wrapper mode)
-./target/release/rsfgsea --mode fgsea --nPermSimple 1000 --seed 42 ...
-
-# Force simple-only mode for direct fgseaSimple-style comparison
-./target/release/rsfgsea --mode simple --nperm 100000 --seed 42 ...
-```
 
 ### GPU Accuracy vs R
 

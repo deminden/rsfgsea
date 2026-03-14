@@ -179,8 +179,58 @@ fn run_gsea_py(
     Ok(py_results)
 }
 
+#[allow(clippy::too_many_arguments)]
+#[allow(non_snake_case)]
+#[pyfunction]
+#[pyo3(signature = (ranks, pathway_genes, output_path, pathway_name="pathway", scoreType="std", gseaParam=1.0, width_inches=4.5, height_inches=3.2, dpi=300, transparent_background=false, title=None))]
+fn write_enrichment_plot_png_py(
+    ranks: HashMap<String, f64>,
+    pathway_genes: Vec<String>,
+    output_path: String,
+    pathway_name: &str,
+    scoreType: &str,
+    gseaParam: f64,
+    width_inches: f64,
+    height_inches: f64,
+    dpi: u32,
+    transparent_background: bool,
+    title: Option<String>,
+) -> PyResult<()> {
+    let st = parse_score_type(scoreType)?;
+    let mut genes = Vec::new();
+    let mut scores = Vec::new();
+    for (g, s) in ranks {
+        genes.push(g);
+        scores.push(s);
+    }
+
+    let rs_ranks = RankedList::new(genes, scores);
+    let pathway = Pathway {
+        name: pathway_name.to_string(),
+        description: None,
+        genes: pathway_genes,
+    };
+
+    write_enrichment_plot_png(
+        &rs_ranks,
+        &pathway,
+        output_path,
+        st,
+        gseaParam,
+        &EnrichmentPlotOptions {
+            width_inches,
+            height_inches,
+            dpi,
+            transparent_background,
+            title,
+        },
+    )
+    .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))
+}
+
 #[pymodule]
 fn rsfgseapy(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(run_gsea_py, m)?)?;
+    m.add_function(wrap_pyfunction!(write_enrichment_plot_png_py, m)?)?;
     Ok(())
 }

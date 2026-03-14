@@ -49,6 +49,12 @@ NULL
   }
 }
 
+.validate_positive_scalar <- function(value, name) {
+  if (length(value) != 1L || !is.numeric(value) || !is.finite(value) || value <= 0) {
+    stop(name, " must be a single finite numeric value > 0.", call. = FALSE)
+  }
+}
+
 .validate_choice <- function(value, name, choices) {
   if (!is.character(value) || length(value) != 1L || !(tolower(value) %in% choices)) {
     stop(name, " must be one of: ", paste(choices, collapse = ", "), ".", call. = FALSE)
@@ -225,6 +231,77 @@ rsfgseaVersion <- function() {
 #' @export
 supportedModes <- function() {
   supported_modes()
+}
+
+#' Write a single-pathway enrichment plot as PNG
+#'
+#' @param pathway Character vector of genes in the pathway.
+#' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
+#' @param output Output PNG file path.
+#' @param pathwayName Pathway label used internally for the Rust plotting call.
+#' @param scoreType One of `"std"`, `"pos"`, `"neg"`.
+#' @param gseaParam Weighting exponent.
+#' @param width_inches Output width in inches.
+#' @param height_inches Output height in inches.
+#' @param dpi Output DPI metadata for the PNG file.
+#' @param transparent_background Logical flag; if `TRUE`, write the PNG with a transparent background.
+#' @param title Optional plot title. If `NULL`, no title is drawn.
+#'
+#' @return Invisibly returns `output`.
+#' @export
+plotEnrichment <- function(
+  pathway,
+  stats,
+  output,
+  pathwayName = "pathway",
+  scoreType = "std",
+  gseaParam = 1.0,
+  width_inches = 4.5,
+  height_inches = 3.2,
+  dpi = 300L,
+  transparent_background = FALSE,
+  title = NULL
+) {
+  stats <- .normalize_stats(stats)
+  if (!is.character(pathway) || length(pathway) == 0L || anyNA(pathway) || any(pathway == "")) {
+    stop("pathway must be a non-empty character vector of genes.", call. = FALSE)
+  }
+  if (!is.character(output) || length(output) != 1L || identical(output, "")) {
+    stop("output must be a single file path.", call. = FALSE)
+  }
+  if (!is.character(pathwayName) || length(pathwayName) != 1L) {
+    stop("pathwayName must be a single string.", call. = FALSE)
+  }
+  .validate_choice(scoreType, "scoreType", c("std", "pos", "neg"))
+  .validate_positive_scalar(width_inches, "width_inches")
+  .validate_positive_scalar(height_inches, "height_inches")
+  .validate_integerish_scalar(dpi, "dpi", min_value = 1L)
+  if (!is.logical(transparent_background) || length(transparent_background) != 1L || is.na(transparent_background)) {
+    stop("transparent_background must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.null(title) && (!is.character(title) || length(title) != 1L)) {
+    stop("title must be NULL or a single string.", call. = FALSE)
+  }
+  if (!is.numeric(gseaParam) || length(gseaParam) != 1L || !is.finite(gseaParam) || gseaParam < 0) {
+    stop("gseaParam must be a single finite numeric value >= 0.", call. = FALSE)
+  }
+
+  write_enrichment_plot(
+    unname(as.numeric(stats)),
+    names(stats),
+    pathway,
+    output,
+    pathwayName,
+    scoreType,
+    gseaParam,
+    as.numeric(width_inches),
+    as.numeric(height_inches),
+    as.integer(dpi),
+    isTRUE(transparent_background),
+    if (is.null(title)) "" else title
+  )
+
+  invisible(output)
 }
 
 #' Wrapper-style fgsea interface

@@ -22,5 +22,9 @@ supported_modes <- function() .Call(wrap__supported_modes)
 #' @noRd
 fgsea_rust <- function(stats, genes, gmt_path, n_perm_simple, seed, nproc, min_size, max_size, eps, score_type, gsea_param, mode, nperm, sample_size, gpu) .Call(wrap__fgsea_rust, stats, genes, gmt_path, n_perm_simple, seed, nproc, min_size, max_size, eps, score_type, gsea_param, mode, nperm, sample_size, gpu)
 
+#' Write a single-pathway enrichment plot as PNG.
+#' @noRd
+write_enrichment_plot <- function(stats, genes, pathway_genes, output_path, pathway_name, score_type, gsea_param, width_inches, height_inches, dpi, transparent_background, title) .Call(wrap__write_enrichment_plot, stats, genes, pathway_genes, output_path, pathway_name, score_type, gsea_param, width_inches, height_inches, dpi, transparent_background, title)
+
 
 # nolint end

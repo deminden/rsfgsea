@@ -55,3 +55,26 @@ def test_gpu_requires_gpu_feature_when_not_built(tmp_path: Path) -> None:
         assert "gpu" in str(err).lower()
     except Exception as err:  # pragma: no cover
         pytest.fail(f"unexpected exception type: {type(err).__name__}: {err}")
+
+
+def test_write_enrichment_plot_png_py(tmp_path: Path) -> None:
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+    output_path = tmp_path / "plot.png"
+
+    rsfgseapy.write_enrichment_plot_png_py(
+        ranks=ranks,
+        pathway_genes=["g1", "g2"],
+        output_path=str(output_path),
+        pathway_name="PW_A",
+        width_inches=1.2,
+        height_inches=1.0,
+        dpi=300,
+    )
+
+    assert output_path.exists()
+    data = output_path.read_bytes()
+    assert data.startswith(b"\x89PNG")
+    width = int.from_bytes(data[16:20], "big")
+    height = int.from_bytes(data[20:24], "big")
+    assert width == 360
+    assert height == 300

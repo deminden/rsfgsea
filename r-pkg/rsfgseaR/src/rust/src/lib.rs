@@ -110,6 +110,68 @@ fn supported_modes() -> Vec<&'static str> {
     vec!["fgsea", "simple", "multilevel"]
 }
 
+/// Write a single-pathway enrichment plot as PNG.
+#[allow(clippy::too_many_arguments)]
+#[extendr]
+fn write_enrichment_plot(
+    stats: Doubles,
+    genes: Strings,
+    pathway_genes: Strings,
+    output_path: &str,
+    pathway_name: &str,
+    score_type: &str,
+    gsea_param: f64,
+    width_inches: f64,
+    height_inches: f64,
+    dpi: i32,
+    transparent_background: bool,
+    title: &str,
+) -> Robj {
+    let result = (|| -> std::result::Result<(), String> {
+        if stats.len() != genes.len() {
+            return Err("stats and gene names must have the same length.".to_string());
+        }
+        if width_inches <= 0.0 || height_inches <= 0.0 || dpi <= 0 {
+            return Err("width_inches, height_inches, and dpi must be greater than 0.".to_string());
+        }
+
+        let genes: Vec<String> = genes.iter().map(|gene| gene.to_string()).collect();
+        let scores: Vec<f64> = stats.iter().map(|v| v.inner()).collect();
+        let ranks = RankedList::new(genes, scores);
+        let pathway = Pathway {
+            name: pathway_name.to_string(),
+            description: None,
+            genes: pathway_genes.iter().map(|gene| gene.to_string()).collect(),
+        };
+        let score_type = parse_score_type(score_type)?;
+
+        write_enrichment_plot_png(
+            &ranks,
+            &pathway,
+            output_path,
+            score_type,
+            gsea_param,
+            &EnrichmentPlotOptions {
+                width_inches,
+                height_inches,
+                dpi: dpi as u32,
+                transparent_background,
+                title: if title.is_empty() {
+                    None
+                } else {
+                    Some(title.to_string())
+                },
+            },
+        )
+        .map_err(|err| err.to_string())
+    })();
+
+    match result {
+        Ok(()) => output_path.into(),
+        Err(err) => throw_r_error(err),
+    }
+}
+
 /// Run fgsea-compatible enrichment using a named stats vector and a GMT file.
 #[allow(clippy::too_many_arguments)]
 fn fgsea_rust_impl(
@@ -314,4 +376,5 @@ extendr_module! {
     fn rsfgsea_version;
     fn supported_modes;
     fn fgsea_rust;
+    fn write_enrichment_plot;
 }

@@ -103,3 +103,19 @@ test_that("R-style aliases mirror bridge helpers", {
   expect_equal(rsfgseaR::rsfgseaVersion(), rsfgseaR::rsfgsea_version())
   expect_equal(rsfgseaR::supportedModes(), rsfgseaR::supported_modes())
 })
+
+test_that("plotEnrichment writes a PNG file", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  out_path <- tempfile(fileext = ".png")
+
+  rsfgseaR::plotEnrichment(
+    pathway = c("g1", "g2"),
+    stats = stats,
+    output = out_path,
+    pathwayName = "PW_A",
+    dpi = 300L
+  )
+
+  expect_true(file.exists(out_path))
+  expect_gt(file.info(out_path)$size, 0)
+})

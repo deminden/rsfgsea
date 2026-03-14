@@ -60,6 +60,8 @@ __pycache__/
 # Local benchmarking/debug scripts
 scripts/compare_folder_examples.py
 scripts/check_batch_kernel_parity.py
+scripts/local/
+reports/low_p_tail/
 
 # Log files
 *.log
