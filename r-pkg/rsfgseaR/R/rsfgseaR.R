@@ -256,8 +256,8 @@ plotEnrichment <- function(
   pathwayName = "pathway",
   scoreType = "std",
   gseaParam = 1.0,
-  width_inches = 4.5,
-  height_inches = 3.2,
+  width_inches = 3.0,
+  height_inches = 2.2,
   dpi = 300L,
   transparent_background = FALSE,
   title = NULL

@@ -184,7 +184,7 @@ fn run_gsea_py(
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, pathway_genes, output_path, pathway_name="pathway", scoreType="std", gseaParam=1.0, width_inches=4.5, height_inches=3.2, dpi=300, transparent_background=false, title=None))]
+#[pyo3(signature = (ranks, pathway_genes, output_path, pathway_name="pathway", scoreType="std", gseaParam=1.0, width_inches=3.0, height_inches=2.2, dpi=300, transparent_background=false, title=None))]
 fn write_enrichment_plot_png_py(
     ranks: HashMap<String, f64>,
     pathway_genes: Vec<String>,

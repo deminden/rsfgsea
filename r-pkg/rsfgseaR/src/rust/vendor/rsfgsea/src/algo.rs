@@ -11,7 +11,7 @@ use crate::fastgsea_compat::{
 #[cfg(feature = "gpu")]
 use crate::gpu_algo::run_gsea_gpu_with_config_impl;
 use crate::multilevel::run_multilevel_gsea_group_impl;
-use crate::rng_compat::RMt19937SeedCompat;
+use crate::rng_compat::{RLecuyerCmrgSeedCompat, RMt19937SeedCompat};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 
@@ -329,63 +329,32 @@ fn run_gsea_internal(
 
     if n_perm > 0 && !work.is_empty() {
         if work.len() == 1 {
-            // Match fgseaSimpleImpl(toKeepLength == 1) semantics:
-            // - In fgseaSimple: draw seeds vector from MT, then inside bplapply
-            //   `set.seed(seeds[i])` and `sample.int(...)` under R's default
-            //   Mersenne-Twister RNG.
-            // - In fgseaMultilevel simple stage: one seed draw and one chunk.
-            let (perm_chunks, chunk_seeds): (Vec<usize>, Vec<u64>) = if allow_multilevel {
-                (vec![n_perm], vec![simple_seed])
-            } else {
-                let granularity = 1000usize.max(n_perm.div_ceil(128));
-                let mut rem = n_perm;
-                let mut chunks = Vec::new();
-                while rem >= granularity {
-                    chunks.push(granularity);
-                    rem -= granularity;
+            // Upstream fgseaSimpleImpl special-cases a single pathway and runs
+            // `sample.int()` inside `bplapply(..., SerialParam())`, which uses
+            // R's L'Ecuyer-CMRG worker RNG rather than boost::mt19937.
+            let w = &mut work[0];
+            let mut rng = RLecuyerCmrgSeedCompat::from_r_set_seed(simple_seed as u32);
+            for _ in 0..n_perm {
+                let mut selected = rng.sample_int_no_replace(n_total, w.size);
+                for idx in &mut selected {
+                    *idx -= 1;
                 }
-                if rem > 0 {
-                    chunks.push(rem);
+                selected.sort_unstable();
+                let (rand_es, _) =
+                    calculate_es_fgsea(&simple_stats, &selected, n_total, score_type);
+                if rand_es <= w.es {
+                    w.n_le_es += 1;
                 }
-                let mut seeds = Vec::with_capacity(chunks.len());
-                if !chunks.is_empty() {
-                    seeds.push(simple_seed);
-                    for _ in 1..chunks.len() {
-                        seeds.push(r_seed_rng.sample_int_one(1_000_000_000) as u64);
-                    }
+                if rand_es >= w.es {
+                    w.n_ge_es += 1;
                 }
-                (chunks, seeds)
-            };
-
-            let k = work[0].size;
-            let pathway_score = work[0].es;
-            for (chunk_iters, chunk_seed) in perm_chunks.into_iter().zip(chunk_seeds.into_iter()) {
-                // fgseaSimpleImpl(toKeepLength == 1) uses set.seed() + sample.int()
-                // in R, so this branch must follow R's default Mersenne-Twister stream.
-                let mut r_rng = RMt19937SeedCompat::from_r_set_seed(chunk_seed as u32);
-                for _ in 0..chunk_iters {
-                    let mut rand_hits: Vec<usize> = r_rng
-                        .sample_int_no_replace(n_total, k)
-                        .into_iter()
-                        .map(|x| x - 1)
-                        .collect();
-                    rand_hits.sort_unstable();
-                    let (rand_es, _) =
-                        calculate_es_fgsea(&simple_stats, &rand_hits, n_total, score_type);
-                    if rand_es <= pathway_score {
-                        work[0].n_le_es += 1;
-                    }
-                    if rand_es >= pathway_score {
-                        work[0].n_ge_es += 1;
-                    }
-                    if rand_es <= 0.0 {
-                        work[0].n_le_zero += 1;
-                        work[0].le_zero_sum += rand_es;
-                    }
-                    if rand_es >= 0.0 {
-                        work[0].n_ge_zero += 1;
-                        work[0].ge_zero_sum += rand_es;
-                    }
+                if rand_es <= 0.0 {
+                    w.n_le_zero += 1;
+                    w.le_zero_sum += rand_es;
+                }
+                if rand_es >= 0.0 {
+                    w.n_ge_zero += 1;
+                    w.ge_zero_sum += rand_es;
                 }
             }
         } else {

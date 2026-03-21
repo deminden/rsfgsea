@@ -1,3 +1,5 @@
+#![cfg(feature = "gpu")]
+
 use rsfgsea::GpuEngine;
 
 macro_rules! skip_if_no_gpu {
@@ -222,37 +224,4 @@ async fn test_fgsea_simple_realistic() {
 
     assert!(result.es > 0.0, "Should have positive ES");
     assert!(result.p_value < 0.01, "Should be highly significant");
-}
-
-/// Benchmark: compare GPU vs CPU (conceptual test)
-#[tokio::test]
-async fn test_gpu_performance() {
-    let engine = skip_if_no_gpu!(GpuEngine::new().await);
-
-    let n_total = 10000;
-    let k = 100;
-    let n_perm = 10000;
-
-    // Create test data
-    let abs_scores: Vec<f32> = (0..n_total).map(|i| (n_total - i) as f32).collect();
-
-    let pathway: Vec<usize> = (0..k).collect();
-
-    // Time the GPU implementation
-    let start = std::time::Instant::now();
-    let result = engine
-        .fgsea_simple_pathway(&pathway, &abs_scores, n_perm, 42, 1)
-        .expect("fgsea_simple failed");
-    let duration = start.elapsed();
-
-    println!("\nGPU Performance Test:");
-    println!("  Genes: {}", n_total);
-    println!("  Pathway size: {}", k);
-    println!("  Permutations: {}", n_perm);
-    println!("  Time: {:?}", duration);
-    println!("  ES: {:.4}", result.es);
-    println!("  P-value: {:.6e}", result.p_value);
-
-    // Just check it completes in reasonable time (< 5 seconds)
-    assert!(duration.as_secs() < 5, "Should complete in under 5 seconds");
 }

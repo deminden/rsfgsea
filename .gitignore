@@ -1,18 +1,13 @@
 # Rust
 /target
-Cargo.lock
 
 # External references
 fgsea_src/
 
-# Data files
-*.gz
-*.tar.gz
-*.csv
-*.tsv
-*.txt
-data/
-outputs/
+# Data files and outputs
+/data/
+/outputs/
+/results/
 
 # R files
 /r_libs
@@ -23,12 +18,11 @@ outputs/
 r-pkg/*.tar.gz
 r-pkg/*.zip
 r-pkg/*.tgz
+/rsfgseaR_*.tar.gz
 /rsfgseaR.Rcheck/
 r-pkg/*.Rcheck/
-r-pkg/rsfgseaR.Rcheck/
 r-pkg/rsfgseaR/src/Makevars
 r-pkg/rsfgseaR/src/Makevars.win
-r-pkg/rsfgseaR/src/vendor/
 r-pkg/rsfgseaR/src/*.o
 r-pkg/rsfgseaR/src/*.so
 r-pkg/rsfgseaR/src/*.dll
@@ -36,7 +30,6 @@ r-pkg/rsfgseaR/src/*.a
 r-pkg/rsfgseaR/src/symbols.rds
 r-pkg/rsfgseaR/src/.cargo/
 r-pkg/rsfgseaR/src/rust/target/
-r-pkg/rsfgseaR/.vscode/
 !r-pkg/rsfgseaR/src/rust/Cargo.lock
 !r-pkg/rsfgseaR/src/rust/vendor.tar.xz
 
@@ -59,10 +52,9 @@ Thumbs.db
 __pycache__/
 
 # Local benchmarking/debug scripts
-scripts/compare_folder_examples.py
-scripts/check_batch_kernel_parity.py
 scripts/local/
-reports/low_p_tail/
+
 
 # Log files
 *.log
+logs/

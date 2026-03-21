@@ -43,7 +43,7 @@ def r_to_t(r, n):
     r_capped = np.clip(r, -0.999, 0.999)
     return r_capped * np.sqrt(n - 2) / np.sqrt(1 - r_capped**2)
 
-results_dir = 'tests/data/muscle_comparison'
+results_dir = 'crates/rsfgsea/tests/data/muscle_comparison'
 os.makedirs(results_dir, exist_ok=True)
 
 for idx, gene_id in enumerate(selected_genes, 1):

@@ -4,8 +4,8 @@
 # check the packages MSRV first
 source("tools/msrv.R")
 
-# check DEBUG and NOT_CRAN environment variables
-env_debug <- Sys.getenv("DEBUG")
+# check package-specific build flags
+env_debug <- Sys.getenv("RSFGSEAR_DEBUG")
 env_not_cran <- Sys.getenv("NOT_CRAN")
 env_gpu <- Sys.getenv("RSFGSEAR_ENABLE_GPU")
 
@@ -17,7 +17,7 @@ is_debug <- env_debug != ""
 enable_gpu <- env_gpu != ""
 
 if (is_debug) {
-  # if we have DEBUG then we set not cran to true
+  # if we have RSFGSEAR_DEBUG then we set not cran to true
   # CRAN is always release build
   is_not_cran <- TRUE
   message("Creating DEBUG build.")
@@ -39,7 +39,7 @@ if (enable_gpu) {
   ""
 )
 
-# when DEBUG env var is present we use `--debug` build
+# when RSFGSEAR_DEBUG env var is present we use `--debug` build
 .profile <- ifelse(is_debug, "", "--release")
 .clean_targets <- ifelse(is_debug, "", "$(TARGET_DIR)")
 .cargo_features <- ifelse(enable_gpu, "--features gpu", "")

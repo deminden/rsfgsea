@@ -11,7 +11,6 @@ Supporting directories:
 
 - `scripts/`: local data-prep and parity helpers
 - `tests/`: integration-level validation assets
-- `reports/`: generated comparison reports
 - `results/`: benchmark and parity outputs
 - `r-pkg/`: R package sources
 

@@ -6,7 +6,7 @@ library(data.table)
 pathways <- gmtPathways('data/h.all.v2025.1.Hs.symbols.gmt')
 
 # Test with one file
-ranks <- read.table('tests/data/muscle_comparison/AKAP3.rnk', header = FALSE, col.names = c("Gene", "Score"), sep = "\t")
+ranks <- read.table('crates/rsfgsea/tests/data/muscle_comparison/AKAP3.rnk', header = FALSE, col.names = c("Gene", "Score"), sep = "\t")
 stats <- setNames(ranks$Score, ranks$Gene)
 
 print(paste("Loaded", length(stats), "genes"))
