@@ -10,7 +10,15 @@ if (is.na(script_path)) {
   script_path <- normalizePath("scripts/run_fgsea_comparison.R", winslash = "/", mustWork = TRUE)
 }
 repo_root <- normalizePath(file.path(dirname(script_path), ".."), winslash = "/", mustWork = TRUE)
-pathways_path <- file.path(repo_root, "data", "h.all.v2025.1.Hs.symbols.gmt")
+pathways_path <- file.path(
+  repo_root,
+  "crates",
+  "rsfgsea",
+  "tests",
+  "data",
+  "muscle_comparison",
+  "h.all.v2025.1.Hs.symbols.gmt"
+)
 pathways <- gmtPathways(pathways_path)
 
 # Directory containing the committed symbol-based .rnk files used for

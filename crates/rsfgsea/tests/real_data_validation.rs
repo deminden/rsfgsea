@@ -11,7 +11,7 @@ mod tests {
         let root = Path::new(&manifest_dir);
         let data_dir = root.join("tests/data/muscle_comparison");
         let ref_csv_path = data_dir.join("r_fgsea_results.csv");
-        let gmt_path = root.join("../../data/h.all.v2025.1.Hs.symbols.gmt");
+        let gmt_path = data_dir.join("h.all.v2025.1.Hs.symbols.gmt");
 
         if !ref_csv_path.exists() {
             println!("Skipping muscle data comparison: data not found.");
