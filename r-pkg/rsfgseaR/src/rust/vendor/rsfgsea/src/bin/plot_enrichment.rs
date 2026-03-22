@@ -37,10 +37,10 @@ struct Args {
     )]
     gsea_param: f64,
 
-    #[arg(long = "width-in", visible_alias = "width", default_value_t = 4.5)]
+    #[arg(long = "width-in", visible_alias = "width", default_value_t = 3.0)]
     width_inches: f64,
 
-    #[arg(long = "height-in", visible_alias = "height", default_value_t = 3.2)]
+    #[arg(long = "height-in", visible_alias = "height", default_value_t = 2.2)]
     height_inches: f64,
 
     #[arg(long, default_value_t = 300)]

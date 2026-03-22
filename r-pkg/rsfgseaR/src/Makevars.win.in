@@ -10,31 +10,27 @@ all: $(SHLIB) rust_clean
 .PHONY: $(STATLIB)
 
 $(SHLIB): $(STATLIB)
-
-CARGOTMP = $(CURDIR)/.cargo
-VENDOR_DIR = vendor
+	@if [ -n "$(STRIP_SHARED_LIB)" ]; then \
+		$(STRIP_SHARED_LIB) $(SHLIB); \
+	fi
 
 $(STATLIB):
 	mkdir -p $(TARGET_DIR)/libgcc_mock
 	touch $(TARGET_DIR)/libgcc_mock/libgcc_eh.a
 
+	TMP_CARGO_HOME=$$(mktemp -d) && \
+	trap 'rm -rf "$$TMP_CARGO_HOME"' EXIT INT TERM && \
 	if [ -f ./rust/vendor.tar.xz ]; then \
-		mkdir -p $(CARGOTMP) && \
-		tar xf rust/vendor.tar.xz -C $(CARGOTMP) && \
-		VENDOR_ABS=$$(cygpath -m "$(CARGOTMP)/vendor") && \
-		printf '%s\n' '[source.crates-io]' 'replace-with = "vendored-sources"' '' '[source.vendored-sources]' "directory = \"$$VENDOR_ABS\"" > $(CARGOTMP)/config.toml; \
-	fi
-
-	# Build the project using Cargo with additional flags
-	export CARGO_HOME=$(CARGOTMP) && \
+		tar xf rust/vendor.tar.xz -C "$$TMP_CARGO_HOME" && \
+		VENDOR_ABS=$$(cygpath -m "$$TMP_CARGO_HOME") && \
+		printf '%s\n' '[source.crates-io]' 'replace-with = "vendored-sources"' '' '[source.vendored-sources]' "directory = \"$$VENDOR_ABS\"" > "$$TMP_CARGO_HOME/config.toml"; \
+	fi && \
+	export CARGO_HOME="$$TMP_CARGO_HOME" && \
 	export LIBRARY_PATH="$(LIBRARY_PATH);$(CURDIR)/$(TARGET_DIR)/libgcc_mock" && \
 	RUSTFLAGS="$(RUSTFLAGS) --print=native-static-libs" cargo build @CRAN_FLAGS@ @CARGO_FEATURES@ --locked --target=$(TARGET) --lib @PROFILE@ --manifest-path=rust/Cargo.toml --target-dir=$(TARGET_DIR)
 
-	# Always clean up CARGOTMP
-	rm -Rf $(CARGOTMP);
-
 rust_clean: $(SHLIB)
-	rm -Rf $(CARGOTMP) $(VENDOR_DIR) @CLEAN_TARGET@
+	rm -Rf @CLEAN_TARGET@
 
 clean:
-	rm -Rf $(SHLIB) $(STATLIB) $(OBJECTS) $(TARGET_DIR) $(VENDOR_DIR)
+	rm -Rf $(SHLIB) $(STATLIB) $(OBJECTS) $(TARGET_DIR)

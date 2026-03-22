@@ -163,8 +163,8 @@ Available table-plot arguments:
 
 Current plot defaults:
 
-- width: `4.5 in`
-- height: `3.2 in`
+- width: `3.0 in`
+- height: `2.2 in`
 - dpi: `300`
 - background: white
 - title: not drawn unless explicitly provided

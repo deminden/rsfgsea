@@ -556,3 +556,179 @@ fn gmt_reader_rejects_malformed_lines() {
     let err = read_gmt(&gmt).unwrap_err();
     assert!(err.to_string().contains("Malformed GMT line"));
 }
+
+#[test]
+fn gmt_reader_reports_the_actual_malformed_line_number() {
+    let dir = tempdir().unwrap();
+    let gmt = dir.path().join("mixed.gmt");
+    fs::write(
+        &gmt,
+        "p1\tdesc\tg1\tg2\n\np2\tdesc\tg3\tg4\nbroken\tdesc-only\n",
+    )
+    .unwrap();
+
+    let err = read_gmt(&gmt).unwrap_err();
+    let msg = err.to_string();
+    assert!(
+        msg.contains("Malformed GMT line 4"),
+        "unexpected error: {msg}"
+    );
+}
+
+#[test]
+fn pathways_with_missing_genes_match_filtered_gene_sets() {
+    let ranks = ranked_list_from_scores(&[5.0, 4.0, 3.0, 2.0, 1.0, -1.0, -2.0, -3.0]);
+    let clean = Pathway {
+        name: "clean".to_string(),
+        description: None,
+        genes: vec!["g1".to_string(), "g3".to_string(), "g7".to_string()],
+    };
+    let mixed = Pathway {
+        name: "mixed".to_string(),
+        description: None,
+        genes: vec![
+            "missing_a".to_string(),
+            "g1".to_string(),
+            "missing_b".to_string(),
+            "g3".to_string(),
+            "g7".to_string(),
+            "missing_c".to_string(),
+        ],
+    };
+    let pathways = vec![clean.clone(), mixed.clone()];
+
+    let simple = fgsea_simple_with_sample_size(
+        &ranks,
+        &pathways,
+        1000,
+        42,
+        1,
+        ranks.len() - 1,
+        1e-50,
+        ScoreType::Std,
+        1.0,
+        101,
+    );
+    let multi = fgsea_multilevel_with_sample_size(
+        &ranks,
+        &pathways,
+        1000,
+        42,
+        1,
+        ranks.len() - 1,
+        1e-50,
+        ScoreType::Std,
+        1.0,
+        101,
+    );
+
+    assert_eq!(simple[0].size, 3);
+    assert_eq!(simple[0].size, simple[1].size);
+    assert!((simple[0].es - simple[1].es).abs() < 1e-12);
+    assert!((simple[0].p_value - simple[1].p_value).abs() < 1e-12);
+    assert_eq!(simple[0].leading_edge, simple[1].leading_edge);
+
+    assert_eq!(multi[0].size, 3);
+    assert_eq!(multi[0].size, multi[1].size);
+    assert!((multi[0].es - multi[1].es).abs() < 1e-12);
+    assert!((multi[0].p_value - multi[1].p_value).abs() < 1e-12);
+    assert_eq!(multi[0].leading_edge, multi[1].leading_edge);
+}
+
+#[test]
+fn ranked_list_preserves_input_order_within_tied_scores() {
+    let ranks = RankedList::new(
+        vec![
+            "g1".to_string(),
+            "g2".to_string(),
+            "g3".to_string(),
+            "g4".to_string(),
+            "g5".to_string(),
+        ],
+        vec![3.0, 1.0, 1.0, 1.0, -2.0],
+    );
+
+    assert_eq!(ranks.genes, vec!["g1", "g2", "g3", "g4", "g5"]);
+}
+
+#[test]
+fn tied_scores_are_deterministic_and_respect_input_order() {
+    let ranks_a = RankedList::new(
+        vec![
+            "lead".to_string(),
+            "hit".to_string(),
+            "other".to_string(),
+            "tail".to_string(),
+        ],
+        vec![2.0, 1.0, 1.0, -1.0],
+    );
+    let ranks_b = RankedList::new(
+        vec![
+            "lead".to_string(),
+            "other".to_string(),
+            "hit".to_string(),
+            "tail".to_string(),
+        ],
+        vec![2.0, 1.0, 1.0, -1.0],
+    );
+    let pathway_a = Pathway {
+        name: "p".to_string(),
+        description: None,
+        genes: vec!["hit".to_string()],
+    };
+    let pathway_b = Pathway {
+        name: "p".to_string(),
+        description: None,
+        genes: vec!["hit".to_string()],
+    };
+
+    let res_a1 = fgsea_simple_with_sample_size(
+        &ranks_a,
+        std::slice::from_ref(&pathway_a),
+        1000,
+        7,
+        1,
+        ranks_a.len() - 1,
+        1e-50,
+        ScoreType::Std,
+        1.0,
+        101,
+    );
+    let res_a2 = fgsea_simple_with_sample_size(
+        &ranks_a,
+        std::slice::from_ref(&pathway_a),
+        1000,
+        7,
+        1,
+        ranks_a.len() - 1,
+        1e-50,
+        ScoreType::Std,
+        1.0,
+        101,
+    );
+    let res_b = fgsea_simple_with_sample_size(
+        &ranks_b,
+        std::slice::from_ref(&pathway_b),
+        1000,
+        7,
+        1,
+        ranks_b.len() - 1,
+        1e-50,
+        ScoreType::Std,
+        1.0,
+        101,
+    );
+
+    assert_eq!(res_a1.len(), 1);
+    assert_eq!(res_a2.len(), 1);
+    assert_eq!(res_b.len(), 1);
+
+    assert!((res_a1[0].es - res_a2[0].es).abs() < 1e-12);
+    assert!((res_a1[0].p_value - res_a2[0].p_value).abs() < 1e-12);
+    assert_eq!(res_a1[0].leading_edge, res_a2[0].leading_edge);
+
+    // Tied non-zero scores are resolved by input order, so reordering tied genes
+    // is allowed to change the enrichment result for that pathway.
+    assert_ne!(ranks_a.genes, ranks_b.genes);
+    assert!((res_a1[0].es - res_b[0].es).abs() > 1e-12);
+}

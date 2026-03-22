@@ -43,8 +43,8 @@ pub struct EnrichmentPlotOptions {
 impl Default for EnrichmentPlotOptions {
     fn default() -> Self {
         Self {
-            width_inches: 4.5,
-            height_inches: 3.2,
+            width_inches: 3.0,
+            height_inches: 2.2,
             dpi: 300,
             transparent_background: false,
             title: None,
@@ -335,8 +335,8 @@ pub fn write_enrichment_plot_png<P: AsRef<Path>>(
     };
     let mut img = RgbaImage::from_pixel(pixel_width, pixel_height, background);
 
-    let left_margin = scaled_px_i32(140.0, dpi_scale);
-    let right_margin = scaled_px_i32(30.0, dpi_scale);
+    let left_margin = scaled_px_i32(122.0, dpi_scale);
+    let right_margin = scaled_px_i32(20.0, dpi_scale);
     let top_margin = scaled_px_i32(90.0, dpi_scale);
     let bottom_margin = scaled_px_i32(80.0, dpi_scale);
     let plot_left = left_margin;
@@ -452,7 +452,7 @@ pub fn write_enrichment_plot_png<P: AsRef<Path>>(
             &mut img,
             (map_x(x0), map_y(y0)),
             (map_x(x1), map_y(y1)),
-            scaled_px_i32(2.0, dpi_scale),
+            scaled_px_i32(1.0, dpi_scale),
             GREEN,
         );
     }
@@ -490,21 +490,33 @@ pub fn write_enrichment_plot_png<P: AsRef<Path>>(
         );
     }
 
+    let tick_top = plot_top + plot_height + scaled_px_i32(22.0, dpi_scale);
+    let tick_bottom = tick_top + scaled_px_i32(7.0, dpi_scale);
+    let tick_label_y = tick_bottom + scaled_px_i32(8.0, dpi_scale);
     for value in x_ticks {
         let x = map_x(value);
         draw_line_segment_mut(
             &mut img,
-            (x, (plot_top + plot_height) as f32),
-            (x, (plot_top + plot_height + 5) as f32),
+            (x, tick_top as f32),
+            (x, tick_bottom as f32),
             BLACK,
         );
+        let label = value.to_string();
+        let (label_width, _) = text_size(tick_scale, &font, &label);
+        let label_x = if value == 0 {
+            plot_left
+        } else if value == x_end {
+            plot_left + plot_width - label_width as i32
+        } else {
+            x.round() as i32 - (label_width as i32 / 2)
+        };
         draw_text(
             &mut img,
             font,
-            x.round() as i32 - scaled_px_i32(12.0, dpi_scale),
-            plot_top + plot_height + scaled_px_i32(24.0, dpi_scale),
+            label_x,
+            tick_label_y,
             tick_scale,
-            &value.to_string(),
+            &label,
             BLACK,
         );
     }

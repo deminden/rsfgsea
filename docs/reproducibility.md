@@ -8,7 +8,6 @@ The main validation layers are:
 
 - unit and integration tests in `crates/rsfgsea/tests`
 - GPU-focused tests in `crates/rsfgsea/tests`
-- generated reports in `reports/`
 - ad hoc and semi-structured helpers in `scripts/`
 
 ## Scripts Overview
@@ -21,12 +20,12 @@ The main validation layers are:
 [`scripts/prepare_data.py`](/home/den/bio/rsfgsea/scripts/prepare_data.py)
 
 - builds ranked lists from bladder correlation data
-- output goes to `tests/data/muscle_comparison`
+- output goes to `crates/rsfgsea/tests/data/muscle_comparison`
 
 [`scripts/prepare_muscle_data.py`](/home/den/bio/rsfgsea/scripts/prepare_muscle_data.py)
 
 - computes per-gene Spearman correlations from muscle expression data
-- emits ranked lists for downstream fgsea comparison
+- emits ranked lists into `crates/rsfgsea/tests/data/muscle_comparison`
 
 [`scripts/run_fgsea_comparison.R`](/home/den/bio/rsfgsea/scripts/run_fgsea_comparison.R)
 
@@ -38,11 +37,6 @@ The main validation layers are:
 - quick manual R-side sanity check for one ranked list
 - useful when debugging overlap or pathway-loading issues
 
-[`scripts/compare_folder_examples.py`](/home/den/bio/rsfgsea/scripts/compare_folder_examples.py)
-
-- compares Rust CLI, Python bindings, and R fgsea on a folder of examples
-- writes a parity report for those examples
-
 ## Practical Workflow
 
 When you need to validate behavior against R:
@@ -50,7 +44,7 @@ When you need to validate behavior against R:
 1. generate or refresh ranked lists
 2. run the R comparison scripts
 3. run the Rust and Python paths on the same inputs
-4. compare result files or generated reports
+4. compare result files
 5. only then interpret statistical differences
 
 ## Benchmark Reference

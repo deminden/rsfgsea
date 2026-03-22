@@ -24,6 +24,13 @@ cargo build --release --features gpu
 
 The binary will be at `target/release/rsfgsea`.
 
+Or install using:
+
+```bash
+# Install from crates.io
+cargo install rsfgsea
+```
+
 ## Inputs
 
 Ranked list:
@@ -140,6 +147,24 @@ Hybrid GPU mode:
   --gpu \
   --mode fgsea \
   --output results.tsv
+```
+
+Full parameter example with the installed binary:
+
+```bash
+rsfgsea \
+    --ranks data/pearson_symbols.rnk \
+    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
+    --mode fgsea \
+    --nPermSimple 1000 \
+    --minSize 1 \
+    --maxSize 5000 \
+    --scoreType std \
+    --gseaParam 1 \
+    --eps 1e-50 \
+    --sampleSize 101 \
+    --nproc 0 \
+    --output results.tsv
 ```
 
 ## Output

@@ -115,3 +115,11 @@ The important consequences are:
 - thread-count changes should not change the intended statistical path
 
 If you change any of those, parity tests are the first thing to revisit.
+
+Current compatibility note:
+
+- upstream `fgsea` has a user-visible single-pathway simple-stage RNG quirk
+- `rsfgsea` currently preserves that behavior for strict parity with the
+  released upstream package
+- if upstream `fgsea` fixes the quirk, `rsfgsea` should follow that fix rather
+  than preserving the old branch-specific RNG behavior indefinitely

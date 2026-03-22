@@ -1,6 +1,6 @@
 # High-Performance GSEA Analysis
 
-High-performance Rust implementation of preranked Gene Set Enrichment Analysis (GSEA). Designed as a drop-in, optimized alternative to the R `fgsea` package, implementing the same robust statistical method with significantly improved speed.
+High-performance Rust implementation of preranked Gene Set Enrichment Analysis (GSEA). Designed as a drop-in, optimized alternative to the R `fgsea` package, implementing the same widely used statistical method with significantly improved speed.
 
 ## Features
 
@@ -33,21 +33,6 @@ cargo build --workspace --release
     --ranks data/pearson_symbols.rnk \
     --gmt data/h.all.v2025.1.Hs.symbols.gmt \
     --output results.tsv
-
-# Full parameter example with the installed binary
-rsfgsea \
-    --ranks data/pearson_symbols.rnk \
-    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
-    --mode fgsea \
-    --nPermSimple 1000 \
-    --minSize 1 \
-    --maxSize 5000 \
-    --scoreType std \
-    --gseaParam 1 \
-    --eps 1e-50 \
-    --sampleSize 101 \
-    --nproc 0 \
-    --output results.tsv
 ```
 
 ### As a Crate
@@ -55,7 +40,7 @@ rsfgsea \
 Add to `Cargo.toml`:
 ```toml
 [dependencies]
-rsfgsea = "0.3.1"
+rsfgsea = "0.3.2"
 ```
 
 Or use the repository directly during development:
@@ -117,31 +102,6 @@ results = rsfgseapy.run_gsea_py(
 
 for res in results:
     print(res["pathway"], res["pval"])
-```
-
-Full example:
-
-```python
-import rsfgseapy
-
-results = rsfgseapy.run_gsea_py(
-    ranks={"GENE_A": 10.5, "GENE_B": 8.4, ...},
-    gmt_path="pathways.gmt",
-    mode="fgsea",
-    gpu=False,
-    nPermSimple=1000,
-    seed=None,
-    nperm=None,
-    nproc=0,
-    minSize=1,
-    maxSize=None,
-    eps=1e-50,
-    sampleSize=101,
-    scoreType="std",
-    gseaParam=1.0
-)
-for res in results:
-    print(f"Pathway: {res['pathway']}, NES: {res['nes']}, p-val: {res['pval']}")
 ```
 
 How to think about `nPermSimple` vs `nperm`:
@@ -310,9 +270,9 @@ PATHWAY_A  description  GENE1  GENE2  GENE3
 PATHWAY_B  description  GENE4  GENE5
 ```
 
-## Performance Comparison (Computation Only)
+## Performance Comparison
 
-Benchmarked on **AMD Ryzen 9 7950X3D**. Times are **median of 5 runs** (after one warmup run).
+Benchmarked on **AMD Ryzen 7950X3D**. Times are **median of 5 runs** (after one warmup run).
 
 **Benchmark setup**:
 - Ranked list: `data/pearson_symbols.rnk` (356 genes)
@@ -360,6 +320,9 @@ Notes:
 - p-value NaN mismatch count was `0` in both modes on this run
 - in this parity configuration and snapshot, ES/NES/p-value agreement is at floating-point-noise scale
 - with fixed seed and settings, outputs are invariant across `nproc` values in the current CPU parity path
+- for strict parity, `rsfgsea` currently preserves an upstream `fgsea`
+  single-pathway simple-stage RNG quirk; this compatibility behavior should be
+  removed once upstream `fgsea` fixes it
 - full parity distribution tables are in [`docs/reproducibility.md`](./docs/reproducibility.md)
 
 This section describes the CPU parity path. GPU parity is materially looser at present and is summarized separately in [GPU Accuracy vs R](#gpu-accuracy-vs-r).
@@ -393,7 +356,7 @@ If you’d like to help improve `rsfgsea`, feel free to open an issue to discuss
 
 Pull requests are encouraged — especially for:
 - performance improvements
-- correctness / numerical stability fixes
+- correctness / numerical stability fixes for GPU mode
 - additional tests (including cross-validation vs R `fgsea`)
 - documentation, examples, and benchmarking
 

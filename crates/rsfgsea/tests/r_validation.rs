@@ -1,9 +1,8 @@
 #[cfg(test)]
 mod tests {
+    use csv::StringRecord;
     use rsfgsea::prelude::*;
     use std::collections::HashMap;
-    use std::fs::File;
-    use std::io::{BufRead, BufReader};
 
     #[test]
     fn test_cross_validation_with_r_fgsea() {
@@ -25,7 +24,7 @@ mod tests {
         let results = fgsea_multilevel_with_sample_size(
             &ranks,
             &pd.pathways,
-            5000, // Matched to R reference granularity ~5000
+            1000, // Matches upstream fgseaMultilevel default nPermSimple
             42,
             1,
             500,
@@ -45,7 +44,7 @@ mod tests {
             if let Some(&(rs_es, rs_pval)) = rs_results.get(&pathway) {
                 let diff = (r_es - rs_es).abs();
                 assert!(
-                    diff < 2e-2,
+                    diff < 1e-6,
                     "ES mismatch for pathway {}: R={} RS={}",
                     pathway,
                     r_es,
@@ -69,21 +68,26 @@ mod tests {
 
         assert!(stats.count > 0, "Expected at least one matched pathway.");
         let mean_rel_diff = stats.total_rel_diff / stats.count as f64;
-        let frac_le_10pct = (stats.bins[0] + stats.bins[1]) as f64 / stats.count as f64;
-
+        let median_rel_diff = stats.median();
         assert!(
-            mean_rel_diff < 0.05,
-            "Mean relative p-value diff too high: {:.4}",
+            mean_rel_diff < 1e-12,
+            "Mean relative p-value diff too high: {:.16}",
             mean_rel_diff
         );
         assert!(
-            frac_le_10pct >= 0.85,
-            "Too few pathways within 10% relative p-value diff: {:.1}%",
-            frac_le_10pct * 100.0
+            median_rel_diff < 1e-12,
+            "Median relative p-value diff too high: {:.16}",
+            median_rel_diff
         );
         assert_eq!(
+            stats.bins[0], stats.count,
+            "Expected all pathways to fall within 0.1% relative p-value diff."
+        );
+        assert_eq!(stats.bins[1], 0, "Unexpected pathways in 0.1%-1% diff bin.");
+        assert_eq!(stats.bins[2], 0, "Unexpected pathways in 1%-5% diff bin.");
+        assert_eq!(
             stats.bins[3], 0,
-            "Unexpected pathways with >50% relative p-value diff."
+            "Unexpected pathways with >5% relative p-value diff."
         );
 
         stats.print();
@@ -92,7 +96,8 @@ mod tests {
     struct DiffStats {
         total_rel_diff: f64,
         count: usize,
-        bins: [usize; 4], // <1%, 1-10%, 10-50%, >50%
+        bins: [usize; 4], // <0.1%, 0.1-1%, 1-5%, >5%
+        values: Vec<f64>,
     }
 
     impl DiffStats {
@@ -101,48 +106,57 @@ mod tests {
                 total_rel_diff: 0.0,
                 count: 0,
                 bins: [0; 4],
+                values: Vec::new(),
             }
         }
 
         fn update(&mut self, diff: f64) {
             self.total_rel_diff += diff;
             self.count += 1;
-            if diff <= 0.01 {
+            self.values.push(diff);
+            if diff <= 0.001 {
                 self.bins[0] += 1;
-            } else if diff <= 0.10 {
+            } else if diff <= 0.01 {
                 self.bins[1] += 1;
-            } else if diff <= 0.50 {
+            } else if diff <= 0.05 {
                 self.bins[2] += 1;
             } else {
                 self.bins[3] += 1;
             }
         }
 
+        fn median(&self) -> f64 {
+            let mut values = self.values.clone();
+            values.sort_by(|a, b| a.partial_cmp(b).unwrap());
+            values[values.len() / 2]
+        }
+
         fn print(&self) {
             println!("\nR vs RSFGSEA Relative P-value Differences (n_perm=5000):");
             if self.count > 0 {
+                println!("  Median Relative Diff: {:.2}%", self.median() * 100.0);
                 println!(
                     "  Mean Relative Diff:   {:.2}%",
                     (self.total_rel_diff / self.count as f64) * 100.0
                 );
                 println!("  Distribution:");
                 println!(
-                    "    < 1% diff:          {} ({:.1}%)",
+                    "    < 0.1% diff:        {} ({:.1}%)",
                     self.bins[0],
                     (self.bins[0] as f64 / self.count as f64) * 100.0
                 );
                 println!(
-                    "    1% - 10% diff:      {} ({:.1}%)",
+                    "    0.1% - 1% diff:     {} ({:.1}%)",
                     self.bins[1],
                     (self.bins[1] as f64 / self.count as f64) * 100.0
                 );
                 println!(
-                    "    10% - 50% diff:     {} ({:.1}%)",
+                    "    1% - 5% diff:       {} ({:.1}%)",
                     self.bins[2],
                     (self.bins[2] as f64 / self.count as f64) * 100.0
                 );
                 println!(
-                    "    > 50% diff:         {} ({:.1}%)",
+                    "    > 5% diff:          {} ({:.1}%)",
                     self.bins[3],
                     (self.bins[3] as f64 / self.count as f64) * 100.0
                 );
@@ -151,22 +165,28 @@ mod tests {
     }
 
     fn read_r_csv(path: &str) -> HashMap<String, (f64, f64)> {
-        let file = File::open(path).expect("Failed to open R reference");
-        let reader = BufReader::new(file);
+        let mut reader = csv::Reader::from_path(path).expect("Failed to open R reference");
         let mut map = HashMap::new();
-        let lines = reader.lines().skip(1); // skip header
-
-        for line in lines {
-            let line = line.unwrap();
-            let parts: Vec<&str> = line.split(',').collect();
-            // R CSV: pathway,pval,padj,ES,NES,nMoreExtreme,size,leadingEdge
-            if parts.len() >= 4 {
-                let pathway = parts[0].trim_matches('"').to_string();
-                let es: f64 = parts[3].parse().unwrap();
-                let map_val = (es, parts[1].parse::<f64>().unwrap_or(1.0)); // Store (ES, pval)
-                map.insert(pathway, map_val);
-            }
+        for record in reader.records() {
+            let record = record.expect("Failed to parse R reference row");
+            let (pathway, es, pval) = parse_r_reference_row(&record);
+            map.insert(pathway, (es, pval));
         }
         map
+    }
+
+    fn parse_r_reference_row(record: &StringRecord) -> (String, f64, f64) {
+        let pathway = record.get(0).expect("Missing pathway column").to_string();
+        let pval = record
+            .get(1)
+            .expect("Missing pval column")
+            .parse()
+            .expect("Failed to parse pval");
+        let es = record
+            .get(3)
+            .expect("Missing ES column")
+            .parse()
+            .expect("Failed to parse ES");
+        (pathway, es, pval)
     }
 }

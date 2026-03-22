@@ -191,4 +191,15 @@ fn plot_table_cli_writes_png() {
 
     let bytes = fs::read(&png).unwrap();
     assert!(bytes.starts_with(&[0x89, b'P', b'N', b'G']));
+    let width = u32::from_be_bytes(bytes[16..20].try_into().unwrap());
+    let height = u32::from_be_bytes(bytes[20..24].try_into().unwrap());
+    assert!(
+        width >= 1680,
+        "expected table plot width >= 1680 px, got {width}"
+    );
+    assert!(
+        height >= 200,
+        "expected table plot height >= 200 px, got {height}"
+    );
+    assert!(width > height, "expected table plot to be wider than tall");
 }

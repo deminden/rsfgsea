@@ -8,10 +8,9 @@ all: $(SHLIB) rust_clean
 .PHONY: $(STATLIB)
 
 $(SHLIB): $(STATLIB)
-
-CARGOTMP = $(CURDIR)/.cargo
-VENDOR_DIR = $(CURDIR)/vendor
-
+	@if [ -n "$(STRIP_SHARED_LIB)" ]; then \
+		$(STRIP_SHARED_LIB) $(SHLIB); \
+	fi
 
 # RUSTFLAGS appends --print=native-static-libs to ensure that 
 # the correct linkers are used. Use this for debugging if need. 
@@ -21,22 +20,18 @@ VENDOR_DIR = $(CURDIR)/vendor
 #
 # vendor.tar.xz, if present, is unzipped and used for offline compilation.
 $(STATLIB):
-
+	TMP_CARGO_HOME=$$(mktemp -d) && \
+	trap 'rm -rf "$$TMP_CARGO_HOME"' EXIT INT TERM && \
 	if [ -f ./rust/vendor.tar.xz ]; then \
-		mkdir -p $(CARGOTMP) && \
-		tar xf rust/vendor.tar.xz -C $(CARGOTMP) && \
-		printf '%s\n' '[source.crates-io]' 'replace-with = "vendored-sources"' '' '[source.vendored-sources]' 'directory = "$(CARGOTMP)/vendor"' > $(CARGOTMP)/config.toml; \
-	fi
-
-	export CARGO_HOME=$(CARGOTMP) && \
+		tar xf rust/vendor.tar.xz -C "$$TMP_CARGO_HOME" && \
+		printf '%s\n' '[source.crates-io]' 'replace-with = "vendored-sources"' '' '[source.vendored-sources]' "directory = \"$$TMP_CARGO_HOME\"" > "$$TMP_CARGO_HOME/config.toml"; \
+	fi && \
+	export CARGO_HOME="$$TMP_CARGO_HOME" && \
 	export PATH="$(PATH):$(HOME)/.cargo/bin" && \
 	@PANIC_EXPORTS@RUSTFLAGS="$(RUSTFLAGS) --print=native-static-libs" cargo build @CRAN_FLAGS@ @CARGO_FEATURES@ --locked --lib @PROFILE@ --manifest-path=./rust/Cargo.toml --target-dir $(TARGET_DIR) @TARGET@
 
-	# Always clean up CARGOTMP
-	rm -Rf $(CARGOTMP);
-
 rust_clean: $(SHLIB)
-	rm -Rf $(CARGOTMP) $(VENDOR_DIR) @CLEAN_TARGET@
+	rm -Rf @CLEAN_TARGET@
 
 clean:
-	rm -Rf $(SHLIB) $(STATLIB) $(OBJECTS) $(TARGET_DIR) $(VENDOR_DIR)
+	rm -Rf $(SHLIB) $(STATLIB) $(OBJECTS) $(TARGET_DIR)
