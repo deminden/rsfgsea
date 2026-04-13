@@ -11,7 +11,7 @@ use crate::fastgsea_compat::{
 #[cfg(feature = "gpu")]
 use crate::gpu_algo::run_gsea_gpu_with_config_impl;
 use crate::multilevel::run_multilevel_gsea_group_impl;
-use crate::rng_compat::{RLecuyerCmrgSeedCompat, RMt19937SeedCompat};
+use crate::rng_compat::{RLecuyerCmrgSeedCompat, RMt19937SeedCompat, RSampleKind};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 
@@ -106,11 +106,45 @@ pub fn calculate_es_fgsea(
     }
 }
 
-fn derive_fgsea_simple_seed(seed: u64) -> (u64, RMt19937SeedCompat) {
+fn derive_fgsea_simple_seed(seed: u64, sample_kind: RSampleKind) -> (u64, RMt19937SeedCompat) {
     // Mirrors first sample.int(1e9, 1) draw in fgseaMultilevel().
     let mut rng = RMt19937SeedCompat::from_r_set_seed(seed as u32);
-    let simple_seed = rng.sample_int_one(1_000_000_000) as u64;
+    let simple_seed = rng.sample_int_one_with_kind(1_000_000_000, sample_kind) as u64;
     (simple_seed, rng)
+}
+
+fn fgsea_simple_perm_per_proc(n_perm: usize) -> Vec<usize> {
+    if n_perm == 0 {
+        return Vec::new();
+    }
+
+    // Mirrors fgseaSimple():
+    // granularity <- max(1000, ceiling(nperm / 128))
+    // permPerProc <- rep(granularity, floor(nperm / granularity))
+    // if (nperm - sum(permPerProc) > 0) append remainder
+    let granularity = 1000usize.max(n_perm.div_ceil(128));
+    let mut perm_per_proc = vec![granularity; n_perm / granularity];
+    let used = perm_per_proc.len() * granularity;
+    if n_perm > used {
+        perm_per_proc.push(n_perm - used);
+    }
+    perm_per_proc
+}
+
+fn derive_fgsea_simple_chunk_plan(
+    seed: u64,
+    n_perm: usize,
+    sample_kind: RSampleKind,
+) -> Vec<(usize, u64)> {
+    let perm_per_proc = fgsea_simple_perm_per_proc(n_perm);
+    let mut rng = RMt19937SeedCompat::from_r_set_seed(seed as u32);
+    perm_per_proc
+        .into_iter()
+        .map(|chunk_perm| {
+            let chunk_seed = rng.sample_int_one_with_kind(1_000_000_000, sample_kind) as u64;
+            (chunk_perm, chunk_seed)
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -126,6 +160,35 @@ pub fn fgsea_multilevel_with_sample_size<S: IntoSeed>(
     gsea_param: f64,
     sample_size: usize,
 ) -> Vec<EnrichmentResult> {
+    fgsea_multilevel_with_sample_size_and_kind(
+        ranks,
+        pathways,
+        n_perm,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        sample_size,
+        RSampleKind::Rejection,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_multilevel_with_sample_size_and_kind<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    n_perm: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+    sample_kind: RSampleKind,
+) -> Vec<EnrichmentResult> {
     let seed = resolve_rng_seed(seed.into_seed());
     run_gsea_internal(
         ranks,
@@ -139,6 +202,7 @@ pub fn fgsea_multilevel_with_sample_size<S: IntoSeed>(
         gsea_param,
         true,
         sample_size,
+        sample_kind,
     )
 }
 
@@ -155,6 +219,35 @@ pub fn fgsea_simple_with_sample_size<S: IntoSeed>(
     gsea_param: f64,
     sample_size: usize,
 ) -> Vec<EnrichmentResult> {
+    fgsea_simple_with_sample_size_and_kind(
+        ranks,
+        pathways,
+        n_perm,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        sample_size,
+        RSampleKind::Rejection,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_simple_with_sample_size_and_kind<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    n_perm: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+    sample_kind: RSampleKind,
+) -> Vec<EnrichmentResult> {
     let seed = resolve_rng_seed(seed.into_seed());
     run_gsea_internal(
         ranks,
@@ -168,6 +261,7 @@ pub fn fgsea_simple_with_sample_size<S: IntoSeed>(
         gsea_param,
         false,
         sample_size,
+        sample_kind,
     )
 }
 
@@ -184,7 +278,7 @@ pub fn fgsea<S: IntoSeed + Copy>(
     score_type: ScoreType,
     gsea_param: f64,
 ) -> Vec<EnrichmentResult> {
-    fgsea_with_sample_size(
+    fgsea_with_sample_size_and_kind(
         ranks,
         pathways,
         nperm,
@@ -196,6 +290,7 @@ pub fn fgsea<S: IntoSeed + Copy>(
         score_type,
         gsea_param,
         101,
+        RSampleKind::Rejection,
     )
 }
 
@@ -213,8 +308,39 @@ pub fn fgsea_with_sample_size<S: IntoSeed + Copy>(
     gsea_param: f64,
     sample_size: usize,
 ) -> Vec<EnrichmentResult> {
+    fgsea_with_sample_size_and_kind(
+        ranks,
+        pathways,
+        nperm,
+        n_perm_simple,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        sample_size,
+        RSampleKind::Rejection,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_with_sample_size_and_kind<S: IntoSeed + Copy>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    nperm: Option<usize>,
+    n_perm_simple: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+    sample_kind: RSampleKind,
+) -> Vec<EnrichmentResult> {
     if let Some(nperm_simple_mode) = nperm {
-        fgsea_simple_with_sample_size(
+        fgsea_simple_with_sample_size_and_kind(
             ranks,
             pathways,
             nperm_simple_mode,
@@ -225,9 +351,10 @@ pub fn fgsea_with_sample_size<S: IntoSeed + Copy>(
             score_type,
             gsea_param,
             sample_size,
+            sample_kind,
         )
     } else {
-        fgsea_multilevel_with_sample_size(
+        fgsea_multilevel_with_sample_size_and_kind(
             ranks,
             pathways,
             n_perm_simple,
@@ -238,6 +365,7 @@ pub fn fgsea_with_sample_size<S: IntoSeed + Copy>(
             score_type,
             gsea_param,
             sample_size,
+            sample_kind,
         )
     }
 }
@@ -255,6 +383,7 @@ fn run_gsea_internal(
     gsea_param: f64,
     allow_multilevel: bool,
     sample_size: usize,
+    sample_kind: RSampleKind,
 ) -> Vec<EnrichmentResult> {
     struct Working {
         pathway_name: String,
@@ -291,7 +420,8 @@ fn run_gsea_internal(
     // fgsea simple/multilevel wrapper path operates on prepareStats()-scaled integer stats.
     // Use the same scaled values (as f64) for observed ES and simple permutation stage.
     let simple_stats: Vec<f64> = scaled_scores.iter().map(|&v| v as f64).collect();
-    let (simple_seed, mut r_seed_rng) = derive_fgsea_simple_seed(seed);
+    let mut r_seed_rng = None;
+    let mut simple_seed_for_multilevel = None;
 
     // Heavy pathway preprocessing is independent per pathway; use parallel map
     // while preserving deterministic input order.
@@ -328,66 +458,81 @@ fn run_gsea_internal(
         .collect();
 
     if n_perm > 0 && !work.is_empty() {
+        let simple_chunk_plan = if allow_multilevel {
+            let (simple_seed, rng) = derive_fgsea_simple_seed(seed, sample_kind);
+            r_seed_rng = Some(rng);
+            simple_seed_for_multilevel = Some(simple_seed);
+            vec![(n_perm, simple_seed)]
+        } else {
+            derive_fgsea_simple_chunk_plan(seed, n_perm, sample_kind)
+        };
+
         if work.len() == 1 {
             // Upstream fgseaSimpleImpl special-cases a single pathway and runs
             // `sample.int()` inside `bplapply(..., SerialParam())`, which uses
-            // R's L'Ecuyer-CMRG worker RNG rather than boost::mt19937.
+            // R's L'Ecuyer-CMRG worker RNG rather than boost::mt19937. Each
+            // simple-mode chunk uses its own sampled worker seed.
             let w = &mut work[0];
-            let mut rng = RLecuyerCmrgSeedCompat::from_r_set_seed(simple_seed as u32);
-            for _ in 0..n_perm {
-                let mut selected = rng.sample_int_no_replace(n_total, w.size);
-                for idx in &mut selected {
-                    *idx -= 1;
-                }
-                selected.sort_unstable();
-                let (rand_es, _) =
-                    calculate_es_fgsea(&simple_stats, &selected, n_total, score_type);
-                if rand_es <= w.es {
-                    w.n_le_es += 1;
-                }
-                if rand_es >= w.es {
-                    w.n_ge_es += 1;
-                }
-                if rand_es <= 0.0 {
-                    w.n_le_zero += 1;
-                    w.le_zero_sum += rand_es;
-                }
-                if rand_es >= 0.0 {
-                    w.n_ge_zero += 1;
-                    w.ge_zero_sum += rand_es;
+            for (chunk_perm, chunk_seed) in simple_chunk_plan {
+                let mut rng = RLecuyerCmrgSeedCompat::from_r_set_seed(chunk_seed as u32);
+                for _ in 0..chunk_perm {
+                    let mut selected =
+                        rng.sample_int_no_replace_with_kind(n_total, w.size, sample_kind);
+                    for idx in &mut selected {
+                        *idx -= 1;
+                    }
+                    selected.sort_unstable();
+                    let (rand_es, _) =
+                        calculate_es_fgsea(&simple_stats, &selected, n_total, score_type);
+                    if rand_es <= w.es {
+                        w.n_le_es += 1;
+                    }
+                    if rand_es >= w.es {
+                        w.n_ge_es += 1;
+                    }
+                    if rand_es <= 0.0 {
+                        w.n_le_zero += 1;
+                        w.le_zero_sum += rand_es;
+                    }
+                    if rand_es >= 0.0 {
+                        w.n_ge_zero += 1;
+                        w.ge_zero_sum += rand_es;
+                    }
                 }
             }
         } else {
             let pathway_scores: Vec<f64> = work.iter().map(|w| w.es).collect();
             let pathways_sizes: Vec<usize> = work.iter().map(|w| w.size).collect();
-            let counts = if rayon::current_num_threads() > 1 && work.len() >= 128 {
-                calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
-                    &simple_stats,
-                    1.0,
-                    &pathway_scores,
-                    &pathways_sizes,
-                    n_perm,
-                    simple_seed,
-                    score_type,
-                )
-            } else {
-                calc_gsea_stat_cumulative_batch_f64(
-                    &simple_stats,
-                    1.0,
-                    &pathway_scores,
-                    &pathways_sizes,
-                    n_perm,
-                    simple_seed,
-                    score_type,
-                )
-            };
-            for (i, w) in work.iter_mut().enumerate() {
-                w.n_le_es = counts.le_es[i];
-                w.n_ge_es = counts.ge_es[i];
-                w.n_le_zero = counts.le_zero[i];
-                w.n_ge_zero = counts.ge_zero[i];
-                w.le_zero_sum = counts.le_zero_sum[i];
-                w.ge_zero_sum = counts.ge_zero_sum[i];
+            for (chunk_perm, chunk_seed) in simple_chunk_plan {
+                let counts = if rayon::current_num_threads() > 1 && work.len() >= 128 {
+                    calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
+                        &simple_stats,
+                        1.0,
+                        &pathway_scores,
+                        &pathways_sizes,
+                        chunk_perm,
+                        chunk_seed,
+                        score_type,
+                    )
+                } else {
+                    calc_gsea_stat_cumulative_batch_f64(
+                        &simple_stats,
+                        1.0,
+                        &pathway_scores,
+                        &pathways_sizes,
+                        chunk_perm,
+                        chunk_seed,
+                        score_type,
+                    )
+                };
+                for (i, w) in work.iter_mut().enumerate() {
+                    w.n_le_es += counts.le_es[i];
+                    w.n_ge_es += counts.ge_es[i];
+                    w.n_le_zero += counts.le_zero[i];
+                    w.n_ge_zero += counts.ge_zero[i];
+                    w.le_zero_sum += counts.le_zero_sum[i];
+                    w.ge_zero_sum += counts.ge_zero_sum[i];
+                }
             }
         }
     }
@@ -458,12 +603,19 @@ fn run_gsea_internal(
             // fgseaMultilevel.R samples pathway-size group order before taking multilevel seed:
             // indxs <- sample(1:length(multilevelPathwaysList))
             // seed <- sample.int(1e9, 1)
-            r_seed_rng.consume_sample_shuffle(multilevel_groups.len());
-            Some(r_seed_rng.sample_int_one(1_000_000_000) as u64)
+            let r_seed_rng = r_seed_rng
+                .as_mut()
+                .expect("multilevel seed state must be present when allow_multilevel is true");
+            r_seed_rng.consume_sample_shuffle_with_kind(multilevel_groups.len(), sample_kind);
+            Some(r_seed_rng.sample_int_one_with_kind(1_000_000_000, sample_kind) as u64)
         };
 
         let multilevel_groups_vec: Vec<Vec<usize>> = multilevel_groups.into_values().collect();
-        let group_seed = multilevel_seed.unwrap_or(simple_seed);
+        let group_seed =
+            multilevel_seed
+                .unwrap_or(simple_seed_for_multilevel.expect(
+                    "simple multilevel seed must be present when allow_multilevel is true",
+                ));
         let run_group = |idxs: Vec<usize>| {
             let k = work[idxs[0]].size;
             let denom_prob_min = idxs

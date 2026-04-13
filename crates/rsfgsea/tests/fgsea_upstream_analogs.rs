@@ -146,6 +146,46 @@ fn simple_results_are_reproducible_for_fixed_seed() {
 }
 
 #[test]
+fn simple_results_match_upstream_reference_when_chunked() {
+    // Upstream fgseaSimple() uses permPerProc plus one sampled worker seed per
+    // chunk. nperm=5000 exercises that chunked path instead of the single-seed
+    // shortcut used at nperm<=1000.
+    let ranks = ranked_list_from_scores(&[4.0, 3.0, 2.0, 1.0, -1.0, -2.0, -3.0, -4.0]);
+    let pathways = vec![
+        pathway_from_indices("p1", &[0, 1, 2], &ranks),
+        pathway_from_indices("p2", &[5, 6, 7], &ranks),
+    ];
+
+    let res = fgsea_simple_with_sample_size(
+        &ranks,
+        &pathways,
+        5000,
+        42,
+        1,
+        ranks.len() - 1,
+        1e-50,
+        ScoreType::Std,
+        1.0,
+        101,
+    );
+
+    let p1 = res.iter().find(|r| r.pathway_name == "p1").unwrap();
+    let p2 = res.iter().find(|r| r.pathway_name == "p2").unwrap();
+
+    // Reference values from instrumented upstream fgsea_src with:
+    // set.seed(42); fgseaSimple(pathways, stats, nperm=5000, minSize=1, maxSize=7, nproc=1)
+    assert!((p1.es - 1.0).abs() < 1e-12);
+    assert!((p1.p_value - 0.028_164_231_532_609).abs() < 5e-9);
+    assert!((p1.padj.unwrap() - 0.028_164_231_532_609).abs() < 5e-9);
+    assert!((p1.nes.unwrap() - 2.088_935_832_732_302).abs() < 2e-7);
+
+    assert!((p2.es + 1.0).abs() < 1e-12);
+    assert!((p2.p_value - 0.025_622_251_021_450_2).abs() < 5e-9);
+    assert!((p2.padj.unwrap() - 0.028_164_231_532_609).abs() < 5e-9);
+    assert!((p2.nes.unwrap() + 2.148_421_052_631_579).abs() < 2e-7);
+}
+
+#[test]
 fn multilevel_results_are_reproducible_for_fixed_seed() {
     let ranks = ranked_list_from_scores(&[1.1, 1.0, 0.9, 0.5, 0.0, -0.1, -0.5, -0.9, -1.0]);
     let pathways = vec![Pathway {

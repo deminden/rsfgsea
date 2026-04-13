@@ -43,7 +43,7 @@ Add to `Cargo.toml`:
 rsfgsea = "0.3.2"
 ```
 
-Or use the repository directly during development:
+Or use the repository directly:
 
 ```toml
 [dependencies]
@@ -94,7 +94,7 @@ Usage example:
 ```python
 import rsfgseapy
 
-# Minimal wrapper-style run for light users.
+# Minimal wrapper-style run
 results = rsfgseapy.run_gsea_py(
     ranks={"GENE_A": 2.0, "GENE_B": 1.0, "GENE_C": -1.0, "GENE_D": -2.0},
     gmt_path="pathways.gmt",
@@ -237,11 +237,6 @@ let results = rsfgsea::algo::run_gsea_gpu(
     1.0             // gsea_param
 )?;
 ```
-
-**Hardware Selection (Environment Variables):**
-- `WGPU_BACKEND=vulkan`: recommended first on Linux/WSL2 to prefer stable native Vulkan adapters.
-- `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`: on WSL2, helps pick the discrete GPU when D3D12 translation is used.
-- `RSFGSEA_GPU_ALLOW_GL=1`: opt-in fallback only; GL-translated adapters can be unstable on some Mesa/WSL stacks.
 
 ## Documentation
 

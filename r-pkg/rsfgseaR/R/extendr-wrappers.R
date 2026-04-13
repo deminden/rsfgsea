@@ -20,7 +20,7 @@ supported_modes <- function() .Call(wrap__supported_modes)
 
 #' Run fgsea-compatible enrichment using a named stats vector and a GMT file.
 #' @noRd
-fgsea_rust <- function(stats, genes, gmt_path, n_perm_simple, seed, nproc, min_size, max_size, eps, score_type, gsea_param, mode, nperm, sample_size, gpu) .Call(wrap__fgsea_rust, stats, genes, gmt_path, n_perm_simple, seed, nproc, min_size, max_size, eps, score_type, gsea_param, mode, nperm, sample_size, gpu)
+fgsea_rust <- function(stats, genes, gmt_path, n_perm_simple, seed, nproc, min_size, max_size, eps, score_type, gsea_param, mode, nperm, sample_size, sample_kind, gpu) .Call(wrap__fgsea_rust, stats, genes, gmt_path, n_perm_simple, seed, nproc, min_size, max_size, eps, score_type, gsea_param, mode, nperm, sample_size, sample_kind, gpu)
 
 #' Write a single-pathway enrichment plot as PNG.
 #' @noRd
