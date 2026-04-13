@@ -19,6 +19,13 @@ pub struct RLecuyerCmrgSeedCompat {
     s: [u32; 6],
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RSampleKind {
+    Rounding,
+    #[default]
+    Rejection,
+}
+
 impl Mt19937Compat {
     pub fn new(seed: u32) -> Self {
         let mut mt = [0u32; 624];
@@ -155,7 +162,15 @@ impl RMt19937SeedCompat {
         }
     }
 
-    fn r_unif_index(&mut self, dn: u64) -> u64 {
+    fn r_unif_index_rounding(&mut self, dn: u64) -> u64 {
+        if dn == 0 {
+            return 0;
+        }
+        let dv = (self.next_unif_r() * dn as f64).floor() as u64;
+        dv.min(dn - 1)
+    }
+
+    fn r_unif_index_rejection(&mut self, dn: u64) -> u64 {
         if dn == 0 {
             return 0;
         }
@@ -168,11 +183,31 @@ impl RMt19937SeedCompat {
         }
     }
 
+    fn r_unif_index_with_kind(&mut self, dn: u64, sample_kind: RSampleKind) -> u64 {
+        match sample_kind {
+            RSampleKind::Rounding => self.r_unif_index_rounding(dn),
+            RSampleKind::Rejection => self.r_unif_index_rejection(dn),
+        }
+    }
+
     pub fn sample_int_one(&mut self, n: usize) -> usize {
-        (self.r_unif_index(n as u64) + 1) as usize
+        self.sample_int_one_with_kind(n, RSampleKind::Rejection)
+    }
+
+    pub fn sample_int_one_with_kind(&mut self, n: usize, sample_kind: RSampleKind) -> usize {
+        (self.r_unif_index_with_kind(n as u64, sample_kind) + 1) as usize
     }
 
     pub fn sample_int_no_replace(&mut self, n: usize, size: usize) -> Vec<usize> {
+        self.sample_int_no_replace_with_kind(n, size, RSampleKind::Rejection)
+    }
+
+    pub fn sample_int_no_replace_with_kind(
+        &mut self,
+        n: usize,
+        size: usize,
+        sample_kind: RSampleKind,
+    ) -> Vec<usize> {
         assert!(
             size <= n,
             "sample_int_no_replace: size ({size}) must be <= n ({n})"
@@ -184,7 +219,7 @@ impl RMt19937SeedCompat {
         // j in [0, n-i-1], output pool[j], then move pool[n-i-1] into j.
         for i in 0..size {
             let dn = n - i;
-            let j = self.r_unif_index(dn as u64) as usize;
+            let j = self.r_unif_index_with_kind(dn as u64, sample_kind) as usize;
             out.push(pool[j]);
             pool[j] = pool[dn - 1];
         }
@@ -193,10 +228,14 @@ impl RMt19937SeedCompat {
     }
 
     pub fn consume_sample_shuffle(&mut self, n: usize) {
+        self.consume_sample_shuffle_with_kind(n, RSampleKind::Rejection);
+    }
+
+    pub fn consume_sample_shuffle_with_kind(&mut self, n: usize, sample_kind: RSampleKind) {
         // Mirrors R's sample(1:n) uniform no-replacement path in do_sample():
         // draws R_unif_index(dn) for dn = n, n-1, ..., 1.
         for dn in (1..=n).rev() {
-            let _ = self.r_unif_index(dn as u64);
+            let _ = self.r_unif_index_with_kind(dn as u64, sample_kind);
         }
     }
 }
@@ -271,7 +310,15 @@ impl RLecuyerCmrgSeedCompat {
         }
     }
 
-    fn r_unif_index(&mut self, dn: u64) -> u64 {
+    fn r_unif_index_rounding(&mut self, dn: u64) -> u64 {
+        if dn == 0 {
+            return 0;
+        }
+        let dv = (self.next_unif_r() * dn as f64).floor() as u64;
+        dv.min(dn - 1)
+    }
+
+    fn r_unif_index_rejection(&mut self, dn: u64) -> u64 {
         if dn == 0 {
             return 0;
         }
@@ -284,7 +331,23 @@ impl RLecuyerCmrgSeedCompat {
         }
     }
 
+    fn r_unif_index_with_kind(&mut self, dn: u64, sample_kind: RSampleKind) -> u64 {
+        match sample_kind {
+            RSampleKind::Rounding => self.r_unif_index_rounding(dn),
+            RSampleKind::Rejection => self.r_unif_index_rejection(dn),
+        }
+    }
+
     pub fn sample_int_no_replace(&mut self, n: usize, size: usize) -> Vec<usize> {
+        self.sample_int_no_replace_with_kind(n, size, RSampleKind::Rejection)
+    }
+
+    pub fn sample_int_no_replace_with_kind(
+        &mut self,
+        n: usize,
+        size: usize,
+        sample_kind: RSampleKind,
+    ) -> Vec<usize> {
         assert!(
             size <= n,
             "sample_int_no_replace: size ({size}) must be <= n ({n})"
@@ -294,7 +357,7 @@ impl RLecuyerCmrgSeedCompat {
 
         for i in 0..size {
             let dn = n - i;
-            let j = self.r_unif_index(dn as u64) as usize;
+            let j = self.r_unif_index_with_kind(dn as u64, sample_kind) as usize;
             out.push(pool[j]);
             pool[j] = pool[dn - 1];
         }
@@ -361,7 +424,7 @@ pub fn sample_int_one(n: usize, rng: &mut Mt19937Compat) -> usize {
 
 #[cfg(test)]
 mod tests {
-    use super::{RLecuyerCmrgSeedCompat, RMt19937SeedCompat};
+    use super::{RLecuyerCmrgSeedCompat, RMt19937SeedCompat, RSampleKind};
 
     #[test]
     fn r_seed_sequence_matches_sample_int_onee9_reference() {
@@ -396,6 +459,30 @@ mod tests {
     }
 
     #[test]
+    fn rounding_sample_kind_matches_r_reference() {
+        // Reference generated in R 4.4.3 with:
+        // RNGkind("Mersenne-Twister", "Inversion", "Rounding")
+        // set.seed(42); sample.int(1e9, 1)
+        // set.seed(20260322); sample.int(1e9, 1); sample.int(20, 5)
+        let mut seed42 = RMt19937SeedCompat::from_r_set_seed(42u32);
+        assert_eq!(
+            seed42.sample_int_one_with_kind(1_000_000_000, RSampleKind::Rounding),
+            914_806_044usize
+        );
+
+        let mut seed20260322 = RMt19937SeedCompat::from_r_set_seed(20_260_322u32);
+        assert_eq!(
+            seed20260322.sample_int_one_with_kind(1_000_000_000, RSampleKind::Rounding),
+            367_440_000usize
+        );
+        let mut seed20260322_fresh = RMt19937SeedCompat::from_r_set_seed(20_260_322u32);
+        assert_eq!(
+            seed20260322_fresh.sample_int_no_replace_with_kind(20, 5, RSampleKind::Rounding),
+            vec![8usize, 9, 11, 17, 1]
+        );
+    }
+
+    #[test]
     fn mt_sample_int_no_replace_matches_r_reference() {
         // Reference generated in R:
         // set.seed(707850213); sample.int(500, 14)
@@ -426,6 +513,19 @@ mod tests {
         let got = r.sample_int_no_replace(500, 14);
         let expected = vec![
             440usize, 272, 418, 57, 391, 245, 150, 93, 488, 293, 232, 163, 212, 378,
+        ];
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn lecuyer_rounding_sample_kind_matches_r_reference() {
+        // Reference generated in R 4.4.3 with:
+        // RNGkind("L'Ecuyer-CMRG", "Inversion", "Rounding")
+        // set.seed(707850213); sample.int(500, 14)
+        let mut r = RLecuyerCmrgSeedCompat::from_r_set_seed(707_850_213u32);
+        let got = r.sample_int_no_replace_with_kind(500, 14, RSampleKind::Rounding);
+        let expected = vec![
+            156usize, 303, 190, 94, 372, 153, 461, 124, 77, 72, 90, 349, 311, 281,
         ];
         assert_eq!(got, expected);
     }

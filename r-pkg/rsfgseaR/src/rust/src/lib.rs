@@ -16,6 +16,16 @@ fn parse_score_type(score_type: &str) -> std::result::Result<ScoreType, String> 
     }
 }
 
+fn parse_sample_kind(sample_kind: &str) -> std::result::Result<RSampleKind, String> {
+    match sample_kind.to_lowercase().as_str() {
+        "rejection" => Ok(RSampleKind::Rejection),
+        "rounding" => Ok(RSampleKind::Rounding),
+        other => Err(format!(
+            "Invalid sampleKind '{other}'. Expected one of: Rejection, Rounding."
+        )),
+    }
+}
+
 fn normalize_seed(seed: Nullable<i32>) -> std::result::Result<Option<u64>, String> {
     match seed.into_option() {
         Some(seed) if seed < 0 => Err("seed must be greater than or equal to 0.".to_string()),
@@ -292,6 +302,7 @@ fn fgsea_rust_impl(
     mode: &str,
     nperm: i32,
     sample_size: i32,
+    sample_kind: &str,
     gpu: bool,
 ) -> std::result::Result<Robj, String> {
     if stats.len() != genes.len() {
@@ -323,6 +334,7 @@ fn fgsea_rust_impl(
         read_gmt(gmt_path).map_err(|err| format!("Failed to read GMT file '{gmt_path}': {err}"))?;
 
     let score_type = parse_score_type(score_type)?;
+    let sample_kind = parse_sample_kind(sample_kind)?;
     let seed = normalize_seed(seed)?;
     let mode = parse_interface_mode(mode).map_err(|err| err.to_string())?;
     let nperm = (nperm >= 0).then_some(nperm as usize);
@@ -358,7 +370,7 @@ fn fgsea_rust_impl(
             nproc,
         )?,
         _ => run_with_optional_thread_pool(nproc, || match exec_mode {
-            ExecutionPlan::Cpu(InterfaceMode::Fgsea) => fgsea_with_sample_size(
+            ExecutionPlan::Cpu(InterfaceMode::Fgsea) => fgsea_with_sample_size_and_kind(
                 &ranks,
                 &pathways.pathways,
                 nperm,
@@ -370,8 +382,9 @@ fn fgsea_rust_impl(
                 score_type,
                 gsea_param,
                 sample_size as usize,
+                sample_kind,
             ),
-            ExecutionPlan::Cpu(InterfaceMode::Simple) => fgsea_simple_with_sample_size(
+            ExecutionPlan::Cpu(InterfaceMode::Simple) => fgsea_simple_with_sample_size_and_kind(
                 &ranks,
                 &pathways.pathways,
                 nperm.unwrap_or(n_perm_simple as usize),
@@ -382,8 +395,10 @@ fn fgsea_rust_impl(
                 score_type,
                 gsea_param,
                 sample_size as usize,
+                sample_kind,
             ),
-            ExecutionPlan::Cpu(InterfaceMode::Multilevel) => fgsea_multilevel_with_sample_size(
+            ExecutionPlan::Cpu(InterfaceMode::Multilevel) => {
+                fgsea_multilevel_with_sample_size_and_kind(
                 &ranks,
                 &pathways.pathways,
                 n_perm_simple as usize,
@@ -394,7 +409,9 @@ fn fgsea_rust_impl(
                 score_type,
                 gsea_param,
                 sample_size as usize,
-            ),
+                sample_kind,
+            )
+            }
             ExecutionPlan::Gpu { .. } => unreachable!(),
         })?,
     };
@@ -450,6 +467,7 @@ fn fgsea_rust(
     mode: &str,
     nperm: i32,
     sample_size: i32,
+    sample_kind: &str,
     gpu: bool,
 ) -> Robj {
     match fgsea_rust_impl(
@@ -467,6 +485,7 @@ fn fgsea_rust(
         mode,
         nperm,
         sample_size,
+        sample_kind,
         gpu,
     ) {
         Ok(obj) => obj,

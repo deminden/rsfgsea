@@ -46,6 +46,50 @@ test_that("fgseaSimple and fgseaMultilevel run", {
   expect_equal(nrow(multi_res), 2L)
 })
 
+test_that("fgseaSimple respects the active R sample.kind", {
+  skip_if_not_installed("fgsea")
+
+  old_kind <- RNGkind()
+  on.exit(do.call(RNGkind, as.list(old_kind)), add = TRUE)
+
+  stats <- stats::setNames(seq(30, 1), paste0("g", seq_len(30)))
+  pathways <- list(
+    PW_A = paste0("g", c(1, 2, 3, 8, 10)),
+    PW_B = paste0("g", c(20, 22, 24, 26, 28)),
+    PW_C = paste0("g", c(5, 7, 11, 13, 17))
+  )
+
+  RNGkind("Mersenne-Twister", "Inversion", "Rounding")
+  set.seed(20260322)
+  fg_res <- fgsea::fgseaSimple(
+    pathways = pathways,
+    stats = stats,
+    nperm = 1000L,
+    minSize = 1L,
+    maxSize = length(stats) - 1L,
+    nproc = 1L,
+    scoreType = "std",
+    gseaParam = 1
+  )
+
+  rs_res <- rsfgseaR::fgseaSimple(
+    pathways = pathways,
+    stats = stats,
+    nperm = 1000L,
+    seed = 20260322L,
+    nproc = 1L,
+    minSize = 1L,
+    maxSize = length(stats) - 1L,
+    scoreType = "std",
+    gseaParam = 1
+  )
+
+  merged <- merge(as.data.frame(fg_res), as.data.frame(rs_res), by = "pathway", suffixes = c("_fg", "_rs"))
+  expect_equal(merged$pval_fg, merged$pval_rs, tolerance = 1e-12)
+  expect_equal(merged$padj_fg, merged$padj_rs, tolerance = 1e-12)
+  expect_equal(merged$NES, merged$nes, tolerance = 1e-12)
+})
+
 test_that("fgsea enforces CLI-equivalent option rules", {
   stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
   pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))

@@ -61,6 +61,14 @@ NULL
   }
 }
 
+.resolve_sample_kind <- function() {
+  kinds <- RNGkind()
+  if (length(kinds) >= 3L && is.character(kinds[[3L]]) && nzchar(kinds[[3L]])) {
+    return(kinds[[3L]])
+  }
+  "Rounding"
+}
+
 .normalize_stats <- function(stats) {
   if (is.character(stats) && length(stats) == 1L) {
     if (!file.exists(stats)) {
@@ -482,6 +490,7 @@ fgsea <- function(
     mode,
     if (is.null(nperm)) -1L else as.integer(nperm),
     as.integer(sampleSize),
+    .resolve_sample_kind(),
     gpu
   )
 

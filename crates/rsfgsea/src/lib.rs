@@ -21,3 +21,4 @@ pub use crate::algo::*;
 pub use crate::bindings::*;
 pub use crate::core::*;
 pub use crate::plot::*;
+pub use crate::rng_compat::RSampleKind;

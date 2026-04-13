@@ -9,7 +9,9 @@ Before every commit and before every push, run all checks below from repo root a
 3. `cargo fmt --all -- --check`
 4. `cargo clippy --workspace --all-targets --all-features -- -D warnings`
 5. `cargo test --workspace --all-features`
-6. `R CMD check r-pkg/rsfgseaR --no-manual`
+6. `R CMD build r-pkg/rsfgseaR`
+7. `R CMD check rsfgseaR_<version>.tar.gz --no-manual`
+8. Remove the built tarball and `rsfgseaR.Rcheck/` after validation
 
 ## Rules
 
@@ -22,7 +24,7 @@ Before every commit and before every push, run all checks below from repo root a
 - The vendored R Rust core under `r-pkg/rsfgseaR/src/rust/vendor/rsfgsea` must stay in sync with `crates/rsfgsea`.
 - After sync, the R package source tree should contain `r-pkg/rsfgseaR/src/rust/vendor/rsfgsea` and `r-pkg/rsfgseaR/src/rust/vendor.tar.xz`, but not a live `r-pkg/rsfgseaR/src/vendor` tree or `r-pkg/rsfgseaR/src/.cargo`.
 - Do not commit if required checks fail or if cleanup leaves build artifacts in `r-pkg/rsfgseaR/src` or `r-pkg/rsfgseaR/src/rust/target`.
-- Built R source tarballs such as `rsfgseaR_*.tar.gz` are local packaging artifacts and must not be committed.
+- Built R source tarballs such as `rsfgseaR_*.tar.gz` and local `rsfgseaR.Rcheck/` directories are packaging artifacts and must not be committed.
 - If a check fails, fix it and rerun the full mandatory sequence.
 - If tests fail due to environment/hardware constraints (for example GPU-only runtime tests), report this clearly in the commit/PR notes.
 
@@ -30,11 +32,10 @@ Before every commit and before every push, run all checks below from repo root a
 
 During development you may run targeted checks, but final commit/push still requires the full mandatory sequence above.
 
-## Release Verification (Recommended for CRAN-style cleanliness)
+## Optional local speed-up details
 
-For release preparation or CRAN-style validation, also run:
-
-1. `R CMD build r-pkg/rsfgseaR`
-2. `R CMD check rsfgseaR_<version>.tar.gz --no-manual`
-
-The built tarball should be treated as a local artifact, removed after validation, and not committed.
+If you need a quicker local signal during iteration, a directory-based check such as
+`R CMD check r-pkg/rsfgseaR --no-manual` is acceptable as a temporary shortcut, but it
+does not replace the mandatory tarball-based validation above because it bypasses
+`.Rbuildignore` filtering and can produce packaging notes that are not relevant to the
+built source package.
