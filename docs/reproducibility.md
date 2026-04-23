@@ -51,6 +51,40 @@ When you need to validate behavior against R:
 
 Benchmarked on **AMD Ryzen 9 7950X3D**. Times are **median of 5 runs** after one warmup run.
 
+### Local Optimization Benchmark
+
+This is the fast Criterion benchmark used for Rust-core optimization. It is
+synthetic but real-shaped: 10k ranked genes, overlapping pathways, pathway sizes
+in the 15-500 range, smooth score tails, and seeded enriched regions.
+
+Run:
+
+```bash
+cargo bench -p rsfgsea --bench gsea_bench
+```
+
+Latest local Criterion snapshot, release bench mode, median of 10 samples:
+
+| Benchmark | Workload | Median |
+| :--- | :--- | ---: |
+| `calculate_es_10k_100` | ES kernel, 10k genes / 100 hits | `435 ns` |
+| `representative_simple` | 10k genes / 1k pathways / 10k permutations | `2.411 s` |
+| `representative_multilevel` | 10k genes / 1k pathways / `nPermSimple=1000` | `2.739 s` |
+
+For larger thread-scaling checks, run the opt-in 5k-pathway matrix:
+
+```bash
+for t in 1 2 4 8 16; do
+  RAYON_NUM_THREADS=$t RSFGSEA_THREAD_MATRIX_BENCH=1 \
+    cargo bench -p rsfgsea --bench gsea_bench
+done
+```
+
+Use `RSFGSEA_PERM_HEAVY_BENCH=1` for the 100k-permutation simple-mode profile,
+and `RSFGSEA_HEAVY_BENCH=1` for the larger 20k-gene / 15k-pathway profile.
+
+### R fgsea Comparison Benchmark
+
 Benchmark setup:
 
 - ranked list: `data/pearson_symbols.rnk` (356 genes)
@@ -67,8 +101,8 @@ Parameters: `eps=1e-50`, `sampleSize=101`, `nPermSimple=1000`.
 
 | Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
-| Small (50 pathways) | 2 | 43 | 3 | 69 | 4 | 72 | 16w: 0.67x, 32w: 0.50x | 16w: 0.62x, 32w: 0.60x | 21.50x | 23.00x | 18.00x |
-| Large (29,705 pathways) | 276 | 1,190 | 104 | 939 | 116 | 1,030 | 16w: 2.65x, 32w: 2.38x | 16w: 1.27x, 32w: 1.16x | 4.31x | 9.03x | 8.88x |
+| Small (50 pathways) | 2 | 43 | 3 | 74 | 4 | 72 | 16w: 0.67x, 32w: 0.50x | 16w: 0.58x, 32w: 0.60x | 21.50x | 24.67x | 18.00x |
+| Large (29,705 pathways) | 276 | 1,179 | 109 | 934 | 116 | 1,055 | 16w: 2.53x, 32w: 2.38x | 16w: 1.26x, 32w: 1.12x | 4.27x | 8.57x | 9.09x |
 
 ### Simple Mode
 
@@ -76,8 +110,8 @@ Parameters: `nPermSimple=1,000,000` for the small workload and `10,000` for the 
 
 | Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
-| Small (50 pathways, 1M perms) | 814 | 2,544 | 829 | 406 | 847 | 468 | 16w: 0.98x, 32w: 0.96x | 16w: 6.27x, 32w: 5.44x | 3.13x | 0.49x | 0.55x |
-| Large (29,705 pathways, 10k perms) | 948 | 2,875 | 687 | 774 | 797 | 829 | 16w: 1.38x, 32w: 1.19x | 16w: 3.71x, 32w: 3.47x | 3.03x | 1.13x | 1.04x |
+| Small (50 pathways, 1M perms) | 812 | 2,528 | 832 | 492 | 819 | 620 | 16w: 0.98x, 32w: 0.99x | 16w: 5.14x, 32w: 4.08x | 3.11x | 0.59x | 0.76x |
+| Large (29,705 pathways, 10k perms) | 944 | 2,902 | 739 | 835 | 803 | 811 | 16w: 1.28x, 32w: 1.18x | 16w: 3.48x, 32w: 3.58x | 3.07x | 1.13x | 1.01x |
 
 ### Rust Thread-Scaling Sweep
 
@@ -85,10 +119,10 @@ Additional Rust-only sweep across `1/2/4/8/16/32` workers, median of 3 runs afte
 
 | Workload | 1w (ms) | 2w (ms) | 4w (ms) | 8w (ms) | 16w (ms) | 32w (ms) | Best scaling vs 1w |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
-| Multilevel / Small | 2 | 2 | 2 | 2 | 3 | 4 | 1.00x (2w) |
-| Multilevel / Large | 280 | 175 | 126 | 108 | 106 | 118 | 2.64x (16w) |
-| Simple / Small (1M perms) | 850 | 845 | 827 | 849 | 826 | 808 | 1.05x (32w) |
-| Simple / Large (10k perms) | 959 | 698 | 686 | 728 | 715 | 800 | 1.40x (4w) |
+| Multilevel / Small | 2 | 2 | 2 | 2 | 3 | 4 | 1.00x (1w) |
+| Multilevel / Large | 271 | 172 | 129 | 110 | 106 | 116 | 2.56x (16w) |
+| Simple / Small (1M perms) | 810 | 810 | 826 | 818 | 805 | 823 | 1.01x (16w) |
+| Simple / Large (10k perms) | 955 | 727 | 713 | 700 | 731 | 797 | 1.36x (8w) |
 
 ## Precision Reference
 

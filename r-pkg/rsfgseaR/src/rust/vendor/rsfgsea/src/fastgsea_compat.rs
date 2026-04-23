@@ -4,6 +4,7 @@
 use crate::core::ScoreType;
 use crate::rng_compat::{Mt19937Compat, combination, uid_wrapper};
 use rayon::prelude::*;
+use std::collections::BTreeMap;
 
 const EPS: f64 = 1e-13;
 
@@ -717,6 +718,39 @@ pub fn calc_gsea_stat_cumulative_batch_f64(
     out
 }
 
+#[derive(Clone, Copy, Default)]
+struct PathwayAcc {
+    le_es: usize,
+    ge_es: usize,
+    le_zero: usize,
+    ge_zero: usize,
+    le_zero_sum: f64,
+    ge_zero_sum: f64,
+}
+
+struct SizeGroup {
+    score_index: usize,
+    pathway_indices: Vec<usize>,
+}
+
+fn grouped_score_indices(pathways_sizes: &[usize]) -> Vec<SizeGroup> {
+    let mut by_score_index: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+    for (pathway_idx, &pathway_size) in pathways_sizes.iter().enumerate() {
+        by_score_index
+            .entry(pathway_size - 1)
+            .or_default()
+            .push(pathway_idx);
+    }
+
+    by_score_index
+        .into_iter()
+        .map(|(score_index, pathway_indices)| SizeGroup {
+            score_index,
+            pathway_indices,
+        })
+        .collect()
+}
+
 pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
     stats: &[f64],
     gsea_param: f64,
@@ -726,16 +760,6 @@ pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
     seed: u64,
     score_type: ScoreType,
 ) -> BatchCounts {
-    #[derive(Clone, Copy, Default)]
-    struct PathwayAcc {
-        le_es: usize,
-        ge_es: usize,
-        le_zero: usize,
-        ge_zero: usize,
-        le_zero_sum: f64,
-        ge_zero_sum: f64,
-    }
-
     let n = stats.len();
     let k = *pathways_sizes.iter().max().unwrap_or(&0);
     let m = pathways_sizes.len();
@@ -743,8 +767,11 @@ pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
         return empty_batch_counts(m);
     }
 
-    let score_indices: Vec<usize> = pathways_sizes.iter().map(|&x| x - 1).collect();
-    let mut accs = vec![PathwayAcc::default(); m];
+    let size_groups = grouped_score_indices(pathways_sizes);
+    let mut group_accs: Vec<Vec<PathwayAcc>> = size_groups
+        .iter()
+        .map(|group| vec![PathwayAcc::default(); group.pathway_indices.len()])
+        .collect();
     let mut rng = Mt19937Compat::new(seed as u32);
     const BLOCK_ITERS: usize = 128;
     let mut done = 0usize;
@@ -753,6 +780,8 @@ pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
     // Thread-invariant strategy:
     // - keep RNG and iteration order exactly serial
     // - parallelize pathway updates over blocks of iterations
+    // - group pathways by size so each cumulative ES vector is indexed once
+    //   per unique size instead of once per pathway
     // This preserves single-core numerical behavior while using multiple cores.
     while done < iterations {
         rand_es_block.clear();
@@ -764,38 +793,44 @@ pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
             ));
         }
 
-        accs.par_iter_mut().enumerate().for_each(|(i, acc)| {
-            let idx = score_indices[i];
-            let pathway_score = pathway_scores[i];
-            for rand_es in &rand_es_block {
-                let v = rand_es[idx];
-                if v <= pathway_score {
-                    acc.le_es += 1;
+        group_accs
+            .par_iter_mut()
+            .zip(size_groups.par_iter())
+            .for_each(|(accs, group)| {
+                for rand_es in &rand_es_block {
+                    let v = rand_es[group.score_index];
+                    for (local_i, acc) in accs.iter_mut().enumerate() {
+                        let pathway_score = pathway_scores[group.pathway_indices[local_i]];
+                        if v <= pathway_score {
+                            acc.le_es += 1;
+                        }
+                        if v >= pathway_score {
+                            acc.ge_es += 1;
+                        }
+                        if v <= 0.0 {
+                            acc.le_zero += 1;
+                            acc.le_zero_sum += v;
+                        }
+                        if v >= 0.0 {
+                            acc.ge_zero += 1;
+                            acc.ge_zero_sum += v;
+                        }
+                    }
                 }
-                if v >= pathway_score {
-                    acc.ge_es += 1;
-                }
-                if v <= 0.0 {
-                    acc.le_zero += 1;
-                    acc.le_zero_sum += v;
-                }
-                if v >= 0.0 {
-                    acc.ge_zero += 1;
-                    acc.ge_zero_sum += v;
-                }
-            }
-        });
+            });
         done = block_end;
     }
 
     let mut out = empty_batch_counts(m);
-    for (i, acc) in accs.into_iter().enumerate() {
-        out.le_es[i] = acc.le_es;
-        out.ge_es[i] = acc.ge_es;
-        out.le_zero[i] = acc.le_zero;
-        out.ge_zero[i] = acc.ge_zero;
-        out.le_zero_sum[i] = acc.le_zero_sum;
-        out.ge_zero_sum[i] = acc.ge_zero_sum;
+    for (group, accs) in size_groups.iter().zip(group_accs) {
+        for (&pathway_idx, acc) in group.pathway_indices.iter().zip(accs) {
+            out.le_es[pathway_idx] = acc.le_es;
+            out.ge_es[pathway_idx] = acc.ge_es;
+            out.le_zero[pathway_idx] = acc.le_zero;
+            out.ge_zero[pathway_idx] = acc.ge_zero;
+            out.le_zero_sum[pathway_idx] = acc.le_zero_sum;
+            out.ge_zero_sum[pathway_idx] = acc.ge_zero_sum;
+        }
     }
     out
 }

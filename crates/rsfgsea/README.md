@@ -11,10 +11,18 @@ What it focuses on:
 
 Headline results from the main project benchmarks:
 
+- local representative Criterion benchmark, simple: `2.411 s` for 10k genes, 1k pathways, 10k permutations
+- local representative Criterion benchmark, multilevel: `2.739 s` for 10k genes, 1k pathways, `nPermSimple=1000`
 - multilevel, small workload, 1 worker: `2 ms` vs R `43 ms` (`21.5x` faster)
-- multilevel, large workload, 16 workers: `104 ms` vs R `939 ms` (`9.0x` faster)
-- simple, small workload, 1 worker: `814 ms` vs R `2544 ms` (`3.1x` faster)
-- simple, large workload, 16 workers: `687 ms` vs R `774 ms` (`1.13x` faster)
+- multilevel, large workload, 16 workers: `109 ms` vs R `934 ms` (`8.6x` faster)
+- simple, small workload, 1 worker: `812 ms` vs R `2528 ms` (`3.1x` faster)
+- simple, large workload, 16 workers: `739 ms` vs R `835 ms` (`1.13x` faster)
+
+Run the local optimization benchmark with:
+
+```bash
+cargo bench -p rsfgsea --bench gsea_bench
+```
 
 Current CPU multilevel parity vs R is near floating-point noise in this repo's validation setup:
 

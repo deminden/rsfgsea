@@ -5,7 +5,7 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 ## Features
 
 - **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
-- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on large 1-worker benchmark workloads, `rsfgsea` is about **3.0x-4.3x faster** than R `fgsea` in this repo's current benchmark setup.
+- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on current large 1-worker comparison workloads, `rsfgsea` is about **3.1x faster** in simple mode and **4.3x faster** in multilevel mode than R `fgsea`.
 - **Built-In Plotting**: Writes single-pathway enrichment plots and multi-pathway GSEA table plots as PNG directly from Rust, CLI, Python, and R.
 - **Hybrid CPU/GPU Engine (Experimental)**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 
@@ -267,6 +267,43 @@ PATHWAY_B  description  GENE4  GENE5
 
 ## Performance Comparison
 
+### Local Optimization Benchmark
+
+This is the fast benchmark used while optimizing the Rust core. It is synthetic,
+but shaped like real GSEA workloads: 10k ranked genes, 1k overlapping pathways,
+pathway sizes concentrated in the 15-500 range, smooth score tails, and a few
+seeded enriched regions. It is separate from the file-backed R-vs-Rust
+comparison benchmark below.
+
+Run it with:
+
+```bash
+cargo bench -p rsfgsea --bench gsea_bench
+```
+
+Latest local Criterion snapshot, **AMD Ryzen 7950X3D**, release bench mode,
+median of 10 samples:
+
+| Benchmark | Workload | Median |
+| :--- | :--- | ---: |
+| `calculate_es_10k_100` | ES kernel, 10k genes / 100 hits | `435 ns` |
+| `representative_simple` | 10k genes / 1k pathways / 10k permutations | `2.411 s` |
+| `representative_multilevel` | 10k genes / 1k pathways / `nPermSimple=1000` | `2.739 s` |
+
+For thread-scaling work, use the opt-in 5k-pathway matrix:
+
+```bash
+for t in 1 2 4 8 16; do
+  RAYON_NUM_THREADS=$t RSFGSEA_THREAD_MATRIX_BENCH=1 \
+    cargo bench -p rsfgsea --bench gsea_bench
+done
+```
+
+Use `RSFGSEA_PERM_HEAVY_BENCH=1` for the 100k-permutation simple-mode profile,
+and `RSFGSEA_HEAVY_BENCH=1` for the larger 20k-gene / 15k-pathway profile.
+
+### R fgsea Comparison Benchmark
+
 Benchmarked on **AMD Ryzen 7950X3D**. Times are **median of 5 runs** (after one warmup run).
 
 **Benchmark setup**:
@@ -283,9 +320,9 @@ Headline results:
 | Workload | Rust | R fgsea | Result |
 | :--- | ---: | ---: | :--- |
 | Multilevel, small, 1 worker | 2 ms | 43 ms | Rust `21.5x` faster |
-| Multilevel, large, 16 workers | 104 ms | 939 ms | Rust `9.0x` faster |
-| Simple, small, 1 worker | 814 ms | 2544 ms | Rust `3.1x` faster |
-| Simple, large, 16 workers | 687 ms | 774 ms | Rust `1.13x` faster |
+| Multilevel, large, 16 workers | 109 ms | 934 ms | Rust `8.6x` faster |
+| Simple, small, 1 worker | 812 ms | 2528 ms | Rust `3.1x` faster |
+| Simple, large, 16 workers | 739 ms | 835 ms | Rust `1.13x` faster |
 
 - Large multilevel workloads show the strongest CPU scaling in the current parity-preserving path.
 - Small workloads are overhead-dominated and do not benefit much from more threads.

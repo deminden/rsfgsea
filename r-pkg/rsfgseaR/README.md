@@ -18,6 +18,17 @@ GPU note:
 - GPU is currently supported only for wrapper mode, not `fgseaSimple()` or `fgseaMultilevel()`
 - an actual compatible GPU/driver/runtime is still required at execution time
 
+Performance snapshot:
+
+- representative Rust-core Criterion benchmark, simple: `2.411 s` for 10k genes, 1k pathways, 10k permutations
+- representative Rust-core Criterion benchmark, multilevel: `2.739 s` for 10k genes, 1k pathways, `nPermSimple=1000`
+- file-backed comparison, multilevel large workload, 16 workers: Rust `109 ms` vs R `934 ms` (`8.6x` faster)
+- file-backed comparison, simple large workload, 16 workers: Rust `739 ms` vs R `835 ms` (`1.13x` faster)
+
+Full benchmark setup, thread-scaling tables, and parity notes are in:
+
+- <https://github.com/deminden/rsfgsea/blob/main/docs/reproducibility.md>
+
 Minimal example:
 
 ```r
