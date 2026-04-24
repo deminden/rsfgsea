@@ -5,7 +5,7 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 ## Features
 
 - **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
-- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on current large 1-worker comparison workloads, `rsfgsea` is about **3.1x faster** in simple mode and **4.3x faster** in multilevel mode than R `fgsea`.
+- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on current large 1-worker comparison workloads, `rsfgsea` is about **3.1x faster** in simple mode and **3.6x faster** in multilevel mode than R `fgsea`.
 - **Built-In Plotting**: Writes single-pathway enrichment plots and multi-pathway GSEA table plots as PNG directly from Rust, CLI, Python, and R.
 - **Hybrid CPU/GPU Engine (Experimental)**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 
@@ -40,7 +40,7 @@ cargo build --workspace --release
 Add to `Cargo.toml`:
 ```toml
 [dependencies]
-rsfgsea = "0.3.2"
+rsfgsea = "0.3.4"
 ```
 
 Or use the repository directly:
@@ -286,9 +286,9 @@ median of 10 samples:
 
 | Benchmark | Workload | Median |
 | :--- | :--- | ---: |
-| `calculate_es_10k_100` | ES kernel, 10k genes / 100 hits | `435 ns` |
-| `representative_simple` | 10k genes / 1k pathways / 10k permutations | `2.411 s` |
-| `representative_multilevel` | 10k genes / 1k pathways / `nPermSimple=1000` | `2.739 s` |
+| `calculate_es_10k_100` | ES kernel, 10k genes / 100 hits | `208 ns` |
+| `representative_simple` | 10k genes / 1k pathways / 10k permutations | `2.201 s` |
+| `representative_multilevel` | 10k genes / 1k pathways / `nPermSimple=1000` | `2.540 s` |
 
 For thread-scaling work, use the opt-in 5k-pathway matrix:
 
@@ -319,13 +319,16 @@ Headline results:
 
 | Workload | Rust | R fgsea | Result |
 | :--- | ---: | ---: | :--- |
-| Multilevel, small, 1 worker | 2 ms | 43 ms | Rust `21.5x` faster |
-| Multilevel, large, 16 workers | 109 ms | 934 ms | Rust `8.6x` faster |
-| Simple, small, 1 worker | 812 ms | 2528 ms | Rust `3.1x` faster |
-| Simple, large, 16 workers | 739 ms | 835 ms | Rust `1.13x` faster |
+| Multilevel, small, 1 worker | 2 ms | 80 ms | Rust `40.0x` faster |
+| Multilevel, large, 16 workers | 99 ms | 1039 ms | Rust `10.5x` faster |
+| Simple, small, 1 worker | 717 ms | 2560 ms | Rust `3.6x` faster |
+| Simple, large, 16 workers | 653 ms | 916 ms | Rust `1.40x` faster |
 
 - Large multilevel workloads show the strongest CPU scaling in the current parity-preserving path.
 - Small workloads are overhead-dominated and do not benefit much from more threads.
+- On the committed muscle-comparison real-data validation workload, Rust used
+  `81 MB` peak RSS versus R `fgseaMultilevel` at `328 MB` peak RSS, about
+  `4.0x` lower memory, while running `0.33 s` versus `3.03 s`.
 - Full benchmark matrices and thread-scaling tables are in [`docs/reproducibility.md`](./docs/reproducibility.md).
 
 ## Precision vs R

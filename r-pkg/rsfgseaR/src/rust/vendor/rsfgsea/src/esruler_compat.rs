@@ -387,15 +387,16 @@ impl EsRulerCompat {
                 break;
             }
 
+            let mut median_buf = vec![0usize; self.sample_size];
             for i in 0..(self.chunks_number - 1) {
                 let pos = (0..=i)
                     .map(|j| (self.pathway_size + j) / self.chunks_number)
                     .sum::<usize>();
-                let mut tmp: Vec<usize> = (0..self.sample_size)
-                    .map(|j| self.current_samples[j][pos])
-                    .collect();
-                tmp.select_nth_unstable(self.sample_size / 2);
-                self.chunk_last_element[i] = tmp[self.sample_size / 2];
+                for j in 0..self.sample_size {
+                    median_buf[j] = self.current_samples[j][pos];
+                }
+                median_buf.select_nth_unstable(self.sample_size / 2);
+                self.chunk_last_element[i] = median_buf[self.sample_size / 2];
             }
 
             let mut samples_chunks: Vec<SampleChunks> = (0..self.sample_size)
@@ -601,19 +602,27 @@ impl EsRulerCompat {
         let mut moves = 0_i32;
         let mut iters = 0_i32;
 
+        let nk_diff = (n - k) as i64;
         while !stop(moves, iters) {
             iters += 1;
             let old_ind = uid_wrapper(0, k - 1, rng);
 
+            // Find chunk containing old_ind using cumulative lengths.
             let mut old_chunk_ind = 0usize;
             let mut old_ind_in_chunk = 0usize;
             let old_val: usize;
             {
                 let mut tmp = old_ind;
-                while sample_chunks.chunks[old_chunk_ind].len() <= tmp {
-                    tmp -= sample_chunks.chunks[old_chunk_ind].len();
-                    old_chunk_ind += 1;
-                }
+                while {
+                    let chunk_len = sample_chunks.chunks[old_chunk_ind].len();
+                    if tmp < chunk_len {
+                        false
+                    } else {
+                        tmp -= chunk_len;
+                        old_chunk_ind += 1;
+                        true
+                    }
+                } {}
                 old_ind_in_chunk = tmp;
                 old_val = sample_chunks.chunks[old_chunk_ind][old_ind_in_chunk];
             }
@@ -649,13 +658,6 @@ impl EsRulerCompat {
             sample_chunks.chunk_sum[new_chunk] += self.ranks[new_val];
 
             let strictly = cur_hash <= bound.hash;
-            let check = |score: Score| {
-                if strictly {
-                    score > bound.score
-                } else {
-                    score >= bound.score
-                }
-            };
 
             if has_cand && old_val as isize == cand_val {
                 has_cand = false;
@@ -671,14 +673,19 @@ impl EsRulerCompat {
                 }
             }
 
-            if has_cand
-                && check(Score {
+            if has_cand && {
+                let s = Score {
                     ns,
                     coef_ns: cand_y,
-                    diff: (n - k) as i64,
+                    diff: nk_diff,
                     coef_const: cand_x,
-                })
-            {
+                };
+                if strictly {
+                    s.gt_cpp(bound.score)
+                } else {
+                    s.ge_cpp(bound.score)
+                }
+            } {
                 moves += 1;
                 continue;
             }
@@ -689,12 +696,18 @@ impl EsRulerCompat {
             let mut last = -1_i64;
 
             for i in 0..sample_chunks.chunks.len() {
-                if !check(Score {
+                let chunk_score = Score {
                     ns,
                     coef_ns: cur_y + sample_chunks.chunk_sum[i],
-                    diff: (n - k) as i64,
+                    diff: nk_diff,
                     coef_const: cur_x,
-                }) {
+                };
+                let above = if strictly {
+                    chunk_score.gt_cpp(bound.score)
+                } else {
+                    chunk_score.ge_cpp(bound.score)
+                };
+                if !above {
                     cur_y += sample_chunks.chunk_sum[i];
                     cur_x += (self.chunk_last_element[i] as i64)
                         - last
@@ -705,12 +718,17 @@ impl EsRulerCompat {
                     for &pos in &sample_chunks.chunks[i] {
                         cur_y += self.ranks[pos];
                         cur_x += pos as i64 - last - 1;
-                        if check(Score {
+                        let elem_score = Score {
                             ns,
                             coef_ns: cur_y,
-                            diff: (n - k) as i64,
+                            diff: nk_diff,
                             coef_const: cur_x,
-                        }) {
+                        };
+                        if if strictly {
+                            elem_score.gt_cpp(bound.score)
+                        } else {
+                            elem_score.ge_cpp(bound.score)
+                        } {
                             ok = true;
                             has_cand = true;
                             cand_x = cur_x;

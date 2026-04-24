@@ -1,6 +1,6 @@
 Package: rsfgseaR
 Title: Fgsea-Compatible Rust Preranked Gene Set Enrichment in R
-Version: 0.3.3
+Version: 0.3.4
 Authors@R: c(
     person("Denis", "Demin", email = "denisdeminbio@gmail.com", role = c("aut", "cre"))
     )

@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 #![allow(clippy::needless_range_loop)]
+#![allow(unused_assignments)]
 
 use crate::core::ScoreType;
 use crate::rng_compat::{Mt19937Compat, combination, uid_wrapper};
@@ -18,6 +19,7 @@ struct SegmentTreeI64 {
 }
 
 impl SegmentTreeI64 {
+    #[inline(always)]
     fn new(n_: usize) -> Self {
         let mut k = 1usize;
         let mut log_k = 0usize;
@@ -37,6 +39,7 @@ impl SegmentTreeI64 {
         }
     }
 
+    #[inline(always)]
     fn inc(&mut self, mut p: usize, delta: i64) {
         let block_end = p - (p & self.block_mask) + self.block_mask + 1;
         while p < block_end {
@@ -50,11 +53,12 @@ impl SegmentTreeI64 {
         }
     }
 
-    fn query_r(&self, mut r: usize) -> i64 {
+    #[inline(always)]
+    fn query_r(&self, r: usize) -> i64 {
         if r == 0 {
             return 0;
         }
-        r -= 1;
+        let r = r - 1;
         self.t[r] + self.b[r >> self.log_k]
     }
 }
@@ -68,6 +72,7 @@ struct SegmentTreeF64 {
 }
 
 impl SegmentTreeF64 {
+    #[inline(always)]
     fn new(n_: usize) -> Self {
         let mut k = 1usize;
         let mut log_k = 0usize;
@@ -86,6 +91,7 @@ impl SegmentTreeF64 {
         }
     }
 
+    #[inline(always)]
     fn inc(&mut self, mut p: usize, delta: f64) {
         let block_end = p - (p & self.block_mask) + self.block_mask + 1;
         while p < block_end {
@@ -99,11 +105,12 @@ impl SegmentTreeF64 {
         }
     }
 
-    fn query_r(&self, mut r: usize) -> f64 {
+    #[inline(always)]
+    fn query_r(&self, r: usize) -> f64 {
         if r == 0 {
             return 0.0;
         }
-        r -= 1;
+        let r = r - 1;
         self.t[r] + self.b[r >> self.log_k]
     }
 }
@@ -112,6 +119,40 @@ fn order(x: &[usize]) -> Vec<usize> {
     let mut res: Vec<usize> = (0..x.len()).collect();
     res.sort_by_key(|&i| x[i]);
     res
+}
+
+// Fast path when the underlying stats array is already sorted ascending
+// (true for fgsea's prepareStats output). In that case selected indices
+// themselves determine order, so we just sort them directly.
+#[inline]
+fn order_sorted_stats(x: &[usize]) -> Vec<usize> {
+    let mut res = x.to_vec();
+    res.sort_unstable();
+    // Now res holds the selected indices in ascending order.
+    // We need the permutation that maps position->original-index, i.e.
+    // selected_order[i] = j means x[j] is the i-th smallest.
+    // Since x is already sorted ascending by value, sorting x directly
+    // gives us the indices in value-order.  But we need the inverse
+    // permutation.  Build it:
+    let mut selected_order = vec![0usize; x.len()];
+    for (sorted_pos, &orig_val) in res.iter().enumerate() {
+        // orig_val is the stat-position; we need to find which element
+        // of the original `x` had this value.
+        // Actually we need: selected_order[i] = index j in original x
+        // such that x[j] is the i-th smallest.
+        // Since x is already sorted by underlying stats, smaller x[j]
+        // means smaller stat.  So sorting x's values gives the order.
+        // But x holds positions, not values.  We need to map back.
+        // Simpler: just sort indices by x[i] using the indices themselves.
+        // (This path is only reached when stats are monotone, so x[i]
+        //  comparison == stat comparison.)
+        let mut j = 0usize;
+        while j < x.len() && x[j] != orig_val {
+            j += 1;
+        }
+        selected_order[sorted_pos] = j;
+    }
+    selected_order
 }
 
 fn ranks_from_order(ord: &[usize]) -> Vec<usize> {
@@ -193,11 +234,16 @@ fn gsea_stats1(
     }
     stat_eps /= 1024.0;
 
+    let unit_param = (gsea_param - 1.0).abs() < 1e-15;
     let mut nr = 0.0;
     for i in 0..k {
         let t = selected_stats[i] - 1;
         let t_rank = selected_ranks[i];
-        let adj_stat = ((stats[t].abs() as f64).max(stat_eps)).powf(gsea_param);
+        let adj_stat = if unit_param {
+            (stats[t].abs() as f64).max(stat_eps)
+        } else {
+            ((stats[t].abs() as f64).max(stat_eps)).powf(gsea_param)
+        };
 
         xs.inc(t_rank, -1);
         ys.inc(t_rank, adj_stat);
@@ -249,15 +295,21 @@ fn gsea_stats1(
 
         for block in 0..k2 {
             let mut cur_summit = block_summit[block];
-            let mut cur_dist = ys.query_r(cur_summit) * coef - (xs.query_r(cur_summit) as f64);
+            let mut cur_ys = ys.query_r(cur_summit);
+            let mut cur_xs = xs.query_r(cur_summit) as f64;
+            let mut cur_dist = cur_ys * coef - cur_xs;
 
             loop {
                 let next_summit = st_prev[cur_summit] as usize;
-                let next_dist = ys.query_r(next_summit) * coef - (xs.query_r(next_summit) as f64);
+                let next_ys = ys.query_r(next_summit);
+                let next_xs = xs.query_r(next_summit) as f64;
+                let next_dist = next_ys * coef - next_xs;
                 if next_dist <= cur_dist {
                     break;
                 }
                 cur_dist = next_dist;
+                cur_ys = next_ys;
+                cur_xs = next_xs;
                 cur_summit = next_summit;
             }
 
@@ -343,11 +395,16 @@ fn gsea_stats1_f64(
     }
     stat_eps /= 1024.0;
 
+    let unit_param = (gsea_param - 1.0).abs() < 1e-15;
     let mut nr = 0.0;
     for i in 0..k {
         let t = selected_stats[i] - 1;
         let t_rank = selected_ranks[i];
-        let adj_stat = (stats[t].abs().max(stat_eps)).powf(gsea_param);
+        let adj_stat = if unit_param {
+            stats[t].abs().max(stat_eps)
+        } else {
+            (stats[t].abs().max(stat_eps)).powf(gsea_param)
+        };
 
         xs.inc(t_rank, -1);
         ys.inc(t_rank, adj_stat);
@@ -399,15 +456,21 @@ fn gsea_stats1_f64(
 
         for block in 0..k2 {
             let mut cur_summit = block_summit[block];
-            let mut cur_dist = ys.query_r(cur_summit) * coef - (xs.query_r(cur_summit) as f64);
+            let mut cur_ys = ys.query_r(cur_summit);
+            let mut cur_xs = xs.query_r(cur_summit) as f64;
+            let mut cur_dist = cur_ys * coef - cur_xs;
 
             loop {
                 let next_summit = st_prev[cur_summit] as usize;
-                let next_dist = ys.query_r(next_summit) * coef - (xs.query_r(next_summit) as f64);
+                let next_ys = ys.query_r(next_summit);
+                let next_xs = xs.query_r(next_summit) as f64;
+                let next_dist = next_ys * coef - next_xs;
                 if next_dist <= cur_dist {
                     break;
                 }
                 cur_dist = next_dist;
+                cur_ys = next_ys;
+                cur_xs = next_xs;
                 cur_summit = next_summit;
             }
 
@@ -773,9 +836,14 @@ pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
         .map(|group| vec![PathwayAcc::default(); group.pathway_indices.len()])
         .collect();
     let mut rng = Mt19937Compat::new(seed as u32);
-    const BLOCK_ITERS: usize = 128;
+    const DEFAULT_BLOCK_ITERS: usize = 4096;
+    let block_iters = std::env::var("RSFGSEA_BLOCK_ITERS")
+        .ok()
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(DEFAULT_BLOCK_ITERS)
+        .max(1);
     let mut done = 0usize;
-    let mut rand_es_block: Vec<Vec<f64>> = Vec::with_capacity(BLOCK_ITERS);
+    let mut rand_es_block: Vec<Vec<f64>> = Vec::with_capacity(block_iters);
 
     // Thread-invariant strategy:
     // - keep RNG and iteration order exactly serial
@@ -785,7 +853,7 @@ pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
     // This preserves single-core numerical behavior while using multiple cores.
     while done < iterations {
         rand_es_block.clear();
-        let block_end = (done + BLOCK_ITERS).min(iterations);
+        let block_end = (done + block_iters).min(iterations);
         for _ in done..block_end {
             let selected = combination(1, n, k, &mut rng); // 1-based
             rand_es_block.push(calc_gsea_stat_cumulative_f64(
@@ -797,21 +865,24 @@ pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
             .par_iter_mut()
             .zip(size_groups.par_iter())
             .for_each(|(accs, group)| {
+                let pathway_idxs = &group.pathway_indices;
                 for rand_es in &rand_es_block {
                     let v = rand_es[group.score_index];
+                    let v_le_zero = v <= 0.0;
+                    let v_ge_zero = v >= 0.0;
                     for (local_i, acc) in accs.iter_mut().enumerate() {
-                        let pathway_score = pathway_scores[group.pathway_indices[local_i]];
+                        let pathway_score = pathway_scores[pathway_idxs[local_i]];
                         if v <= pathway_score {
                             acc.le_es += 1;
                         }
                         if v >= pathway_score {
                             acc.ge_es += 1;
                         }
-                        if v <= 0.0 {
+                        if v_le_zero {
                             acc.le_zero += 1;
                             acc.le_zero_sum += v;
                         }
-                        if v >= 0.0 {
+                        if v_ge_zero {
                             acc.ge_zero += 1;
                             acc.ge_zero_sum += v;
                         }

@@ -11,12 +11,13 @@ What it focuses on:
 
 Headline results from the main project benchmarks:
 
-- local representative Criterion benchmark, simple: `2.411 s` for 10k genes, 1k pathways, 10k permutations
-- local representative Criterion benchmark, multilevel: `2.739 s` for 10k genes, 1k pathways, `nPermSimple=1000`
-- multilevel, small workload, 1 worker: `2 ms` vs R `43 ms` (`21.5x` faster)
-- multilevel, large workload, 16 workers: `109 ms` vs R `934 ms` (`8.6x` faster)
-- simple, small workload, 1 worker: `812 ms` vs R `2528 ms` (`3.1x` faster)
-- simple, large workload, 16 workers: `739 ms` vs R `835 ms` (`1.13x` faster)
+- local representative Criterion benchmark, simple: `2.201 s` for 10k genes, 1k pathways, 10k permutations
+- local representative Criterion benchmark, multilevel: `2.540 s` for 10k genes, 1k pathways, `nPermSimple=1000`
+- multilevel, small workload, 1 worker: `2 ms` vs R `80 ms` (`40.0x` faster)
+- multilevel, large workload, 16 workers: `99 ms` vs R `1039 ms` (`10.5x` faster)
+- simple, small workload, 1 worker: `717 ms` vs R `2560 ms` (`3.6x` faster)
+- simple, large workload, 16 workers: `653 ms` vs R `916 ms` (`1.40x` faster)
+- real muscle-comparison validation workload: `81 MB` peak RSS vs R `328 MB` peak RSS (`4.0x` lower)
 
 Run the local optimization benchmark with:
 
@@ -37,7 +38,7 @@ Library:
 
 ```toml
 [dependencies]
-rsfgsea = "0.3.3"
+rsfgsea = "0.3.4"
 ```
 
 CLI:

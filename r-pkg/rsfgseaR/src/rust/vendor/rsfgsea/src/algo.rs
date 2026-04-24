@@ -37,6 +37,7 @@ impl IntoSeed for Option<u64> {
 }
 
 // Rust port of fgsea::calcGseaStat behavior (for gseaParam=1 used in fgseaSimpleImpl).
+#[inline]
 pub fn calculate_es_fgsea(
     stats: &[f64],
     hits: &[usize],
@@ -54,12 +55,10 @@ pub fn calculate_es_fgsea(
 
     // Match fgsea::calcGseaStat exactly (gseaParam=1):
     // rAdj <- abs(r[S]); NR <- sum(rAdj)
-    let mut adj = Vec::with_capacity(m);
+    // Two-pass: first compute nr, then iterate. Avoids adj Vec allocation.
     let mut nr = 0.0_f64;
     for &idx in hits {
-        let a = stats[idx].abs();
-        adj.push(a);
-        nr += a;
+        nr += stats[idx].abs();
     }
 
     let mut max_p = f64::NEG_INFINITY;
@@ -67,20 +66,24 @@ pub fn calculate_es_fgsea(
     let mut max_i = 0usize;
     let mut min_i = 0usize;
     let mut csum = 0.0;
+    let denom = (n_total - m) as f64;
+    let inv_m = 1.0 / m as f64;
+    let nr_is_zero = nr == 0.0;
 
     for i in 0..m {
-        csum += adj[i];
-        let r_cum = if nr == 0.0 {
-            (i + 1) as f64 / m as f64
+        let adj_i = stats[hits[i]].abs();
+        csum += adj_i;
+        let r_cum = if nr_is_zero {
+            (i + 1) as f64 * inv_m
         } else {
             csum / nr
         };
-        let miss = (hits[i] - i) as f64 / (n_total - m) as f64;
+        let miss = (hits[i] - i) as f64 / denom;
         let top = r_cum - miss;
-        let bottom = if nr == 0.0 {
-            top - 1.0 / m as f64
+        let bottom = if nr_is_zero {
+            top - inv_m
         } else {
-            top - adj[i] / nr
+            top - adj_i / nr
         };
         if top > max_p {
             max_p = top;

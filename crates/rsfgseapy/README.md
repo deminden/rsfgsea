@@ -56,10 +56,11 @@ The Python package calls the same Rust backend as the CLI and R wrapper.
 Current local benchmark snapshots from the main repository, measured on an AMD
 Ryzen 7950X3D:
 
-- representative Criterion benchmark, simple: `2.411 s` for 10k genes, 1k pathways, 10k permutations
-- representative Criterion benchmark, multilevel: `2.739 s` for 10k genes, 1k pathways, `nPermSimple=1000`
-- file-backed comparison, multilevel large workload, 16 workers: Rust `109 ms` vs R `934 ms` (`8.6x` faster)
-- file-backed comparison, simple large workload, 16 workers: Rust `739 ms` vs R `835 ms` (`1.13x` faster)
+- representative Criterion benchmark, simple: `2.201 s` for 10k genes, 1k pathways, 10k permutations
+- representative Criterion benchmark, multilevel: `2.540 s` for 10k genes, 1k pathways, `nPermSimple=1000`
+- file-backed comparison, multilevel large workload, 16 workers: Rust `99 ms` vs R `1039 ms` (`10.5x` faster)
+- file-backed comparison, simple large workload, 16 workers: Rust `653 ms` vs R `916 ms` (`1.40x` faster)
+- real muscle-comparison validation workload: Rust `81 MB` peak RSS vs R `328 MB` peak RSS (`4.0x` lower)
 
 Full benchmark setup, thread-scaling tables, and parity notes are in:
 
