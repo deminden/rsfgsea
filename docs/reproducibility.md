@@ -67,9 +67,9 @@ Latest local Criterion snapshot, release bench mode, median of 10 samples:
 
 | Benchmark | Workload | Median |
 | :--- | :--- | ---: |
-| `calculate_es_10k_100` | ES kernel, 10k genes / 100 hits | `208 ns` |
-| `representative_simple` | 10k genes / 1k pathways / 10k permutations | `2.201 s` |
-| `representative_multilevel` | 10k genes / 1k pathways / `nPermSimple=1000` | `2.540 s` |
+| `calculate_es_10k_100` | ES kernel, 10k genes / 100 hits | `294 ns` |
+| `representative_simple` | 10k genes / 1k pathways / 10k permutations | `2.282 s` |
+| `representative_multilevel` | 10k genes / 1k pathways / `nPermSimple=1000` | `3.438 s` |
 
 For larger thread-scaling checks, run the opt-in 5k-pathway matrix:
 
@@ -101,8 +101,8 @@ Parameters: `eps=1e-50`, `sampleSize=101`, `nPermSimple=1000`.
 
 | Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
-| Small (50 pathways) | 2 | 80 | 3 | 203 | 4 | 205 | 16w: 0.67x, 32w: 0.50x | 16w: 0.39x, 32w: 0.39x | 40.00x | 67.67x | 51.25x |
-| Large (29,705 pathways) | 262 | 934 | 99 | 1,039 | 100 | 1,166 | 16w: 2.65x, 32w: 2.62x | 16w: 0.90x, 32w: 0.80x | 3.56x | 10.49x | 11.66x |
+| Small (50 pathways) | 2 | 42 | 3 | 75 | 3 | 72 | 16w: 0.67x, 32w: 0.67x | 16w: 0.56x, 32w: 0.58x | 21.00x | 25.00x | 24.00x |
+| Large (29,705 pathways) | 282 | 1,158 | 105 | 977 | 106 | 1,030 | 16w: 2.69x, 32w: 2.66x | 16w: 1.19x, 32w: 1.12x | 4.11x | 9.30x | 9.72x |
 
 ### Simple Mode
 
@@ -110,17 +110,17 @@ Parameters: `nPermSimple=1,000,000` for the small workload and `10,000` for the 
 
 | Workload | Rust 1 worker (ms) | R 1 worker (ms) | Rust 16 workers (ms) | R 16 workers (ms) | Rust 32 workers (ms) | R 32 workers (ms) | Rust scale vs 1w | R scale vs 1w | Rust vs R (1w) | Rust vs R (16w) | Rust vs R (32w) |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- | :--- | ---: | ---: | ---: |
-| Small (50 pathways, 1M perms) | 698 | 2,560 | 695 | 574 | 693 | 750 | 16w: 1.00x, 32w: 1.01x | 16w: 4.46x, 32w: 3.41x | 3.67x | 0.83x | 1.08x |
-| Large (29,705 pathways, 10k perms) | 918 | 2,842 | 659 | 916 | 655 | 914 | 16w: 1.39x, 32w: 1.40x | 16w: 3.10x, 32w: 3.11x | 3.10x | 1.39x | 1.40x |
+| Small (50 pathways, 1M perms) | 720 | 2,597 | 722 | 423 | 726 | 564 | 16w: 1.00x, 32w: 0.99x | 16w: 6.14x, 32w: 4.60x | 3.61x | 0.59x | 0.78x |
+| Large (29,705 pathways, 10k perms) | 962 | 2,864 | 674 | 798 | 683 | 799 | 16w: 1.43x, 32w: 1.41x | 16w: 3.59x, 32w: 3.58x | 2.98x | 1.18x | 1.17x |
 
 ### Real-Data Memory Snapshot
 
 On the committed muscle-comparison validation workload
 (`h.all.v2025.1.Hs.symbols.gmt`, 12 `.rnk` files, `nPermSimple=1000`,
 `sampleSize=101`, `seed=42`, `minSize=15`, `maxSize=500`, `eps=1e-10`),
-Rust release validation used `81 MB` peak RSS and completed in `0.33 s`.
-The matched R `fgseaMultilevel` run used `328 MB` peak RSS and completed in
-`3.03 s`. That is about `4.0x` lower peak memory for Rust on this real-data
+Rust release validation used `81 MB` peak RSS and completed in `0.21 s`.
+The matched R `fgseaMultilevel` run used `329 MB` peak RSS and completed in
+`2.56 s`. That is about `4.1x` lower peak memory for Rust on this real-data
 check.
 
 ### Rust Thread-Scaling Sweep
@@ -129,10 +129,10 @@ Additional Rust-only sweep across `1/2/4/8/16/32` workers, median of 3 runs afte
 
 | Workload | 1w (ms) | 2w (ms) | 4w (ms) | 8w (ms) | 16w (ms) | 32w (ms) | Best scaling vs 1w |
 | :--- | ---: | ---: | ---: | ---: | ---: | ---: | :--- |
-| Multilevel / Small | 2 | 2 | 2 | 2 | 3 | 4 | 1.00x (1w) |
-| Multilevel / Large | 262 | 163 | 124 | 102 | 99 | 100 | 2.65x (16w) |
-| Simple / Small (1M perms) | 698 | 692 | 695 | 696 | 695 | 693 | 1.01x (2w) |
-| Simple / Large (10k perms) | 918 | 673 | 666 | 647 | 659 | 655 | 1.42x (8w) |
+| Multilevel / Small | 2 | 2 | 2 | 2 | 3 | 3 | 1.00x (1-8w) |
+| Multilevel / Large | 273 | 171 | 127 | 105 | 101 | 100 | 2.73x (32w) |
+| Simple / Small (1M perms) | 707 | 704 | 707 | 684 | 706 | 708 | 1.03x (8w) |
+| Simple / Large (10k perms) | 909 | 676 | 653 | 644 | 653 | 660 | 1.41x (8w) |
 
 ## Precision Reference
 

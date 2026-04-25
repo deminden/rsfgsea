@@ -20,11 +20,11 @@ GPU note:
 
 Performance snapshot:
 
-- representative Rust-core Criterion benchmark, simple: `2.201 s` for 10k genes, 1k pathways, 10k permutations
-- representative Rust-core Criterion benchmark, multilevel: `2.540 s` for 10k genes, 1k pathways, `nPermSimple=1000`
-- file-backed comparison, multilevel large workload, 16 workers: Rust `99 ms` vs R `1039 ms` (`10.5x` faster)
-- file-backed comparison, simple large workload, 16 workers: Rust `653 ms` vs R `916 ms` (`1.40x` faster)
-- real muscle-comparison validation workload: Rust `81 MB` peak RSS vs R `328 MB` peak RSS (`4.0x` lower)
+- representative Rust-core Criterion benchmark, simple: `2.282 s` for 10k genes, 1k pathways, 10k permutations
+- representative Rust-core Criterion benchmark, multilevel: `3.438 s` for 10k genes, 1k pathways, `nPermSimple=1000`
+- file-backed comparison, multilevel large workload, 16 workers: Rust `105 ms` vs R `977 ms` (`9.3x` faster)
+- file-backed comparison, simple large workload, 16 workers: Rust `674 ms` vs R `798 ms` (`1.18x` faster)
+- real muscle-comparison validation workload: Rust `81 MB` peak RSS vs R `329 MB` peak RSS (`4.1x` lower)
 
 Full benchmark setup, thread-scaling tables, and parity notes are in:
 

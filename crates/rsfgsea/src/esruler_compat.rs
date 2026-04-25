@@ -35,16 +35,49 @@ impl Score {
         (self.coef_ns as f64 / self.ns as f64) - (self.coef_const as f64 / self.diff as f64)
     }
 
-    pub fn numerator(self) -> i64 {
-        self.coef_ns * self.diff - self.coef_const * self.ns
+    pub fn numerator(self) -> i128 {
+        self.coef_ns as i128 * self.diff as i128 - self.coef_const as i128 * self.ns as i128
     }
 
     pub fn compare_raw(self, other: Self) -> i128 {
-        let p1 = self.coef_ns * self.diff + self.ns * (other.coef_const - self.coef_const);
-        let q1 = self.ns * self.diff;
-        let p2 = other.coef_ns;
-        let q2 = other.ns;
-        (p1 as i128) * (q2 as i128) - (p2 as i128) * (q1 as i128)
+        // Try the common small-value case in i64, then fall back to the exact
+        // i128 formula used for large or adversarial values.
+        let s_ns = self.ns;
+        let s_cns = self.coef_ns;
+        let s_diff = self.diff;
+        let s_cc = self.coef_const;
+        let o_ns = other.ns;
+        let o_cns = other.coef_ns;
+        let o_cc = other.coef_const;
+
+        let fast = (|| {
+            let delta_cc = o_cc.checked_sub(s_cc)?;
+            let t1 = s_cns.checked_mul(s_diff)?;
+            let t2 = s_ns.checked_mul(delta_cc)?;
+            let p1 = t1.checked_add(t2)?;
+            let q1 = s_ns.checked_mul(s_diff)?;
+            let t3 = p1.checked_mul(o_ns)?;
+            let t4 = o_cns.checked_mul(q1)?;
+            t3.checked_sub(t4)
+        })();
+
+        if let Some(res) = fast {
+            return res as i128;
+        }
+
+        // Slow path: i128 arithmetic for large inputs
+        let s_ns = s_ns as i128;
+        let s_cns = s_cns as i128;
+        let s_diff = s_diff as i128;
+        let s_cc = s_cc as i128;
+        let o_ns = o_ns as i128;
+        let o_cns = o_cns as i128;
+        let o_cc = o_cc as i128;
+        let p1 = s_cns * s_diff + s_ns * (o_cc - s_cc);
+        let q1 = s_ns * s_diff;
+        let p2 = o_cns;
+        let q2 = o_ns;
+        p1 * q2 - p2 * q1
     }
 
     pub fn lt_cpp(self, other: Self) -> bool {
@@ -784,5 +817,110 @@ impl EsRulerCompat {
         }
 
         PerturbateResult { moves, iters }
+    }
+}
+
+#[cfg(test)]
+mod compare_raw_tests {
+    use super::Score;
+
+    fn compare_raw_reference(a: Score, b: Score) -> i128 {
+        let p1 = a.coef_ns as i128 * a.diff as i128
+            + a.ns as i128 * (b.coef_const as i128 - a.coef_const as i128);
+        let q1 = a.ns as i128 * a.diff as i128;
+        let p2 = b.coef_ns as i128;
+        let q2 = b.ns as i128;
+        p1 * q2 - p2 * q1
+    }
+
+    fn compare_raw_i64_reference(a: Score, b: Score) -> Option<i64> {
+        let delta_cc = b.coef_const.checked_sub(a.coef_const)?;
+        let t1 = a.coef_ns.checked_mul(a.diff)?;
+        let t2 = a.ns.checked_mul(delta_cc)?;
+        let p1 = t1.checked_add(t2)?;
+        let q1 = a.ns.checked_mul(a.diff)?;
+        let t3 = p1.checked_mul(b.ns)?;
+        let t4 = b.coef_ns.checked_mul(q1)?;
+        t3.checked_sub(t4)
+    }
+
+    #[test]
+    fn compare_raw_fast_path_small_values() {
+        let a = Score {
+            ns: 100,
+            coef_ns: 50,
+            diff: 90,
+            coef_const: 10,
+        };
+        let b = Score {
+            ns: 101,
+            coef_ns: 49,
+            diff: 89,
+            coef_const: 11,
+        };
+        let diff = a.compare_raw(b);
+        assert_eq!(
+            compare_raw_i64_reference(a, b),
+            Some(compare_raw_reference(a, b) as i64)
+        );
+        assert_eq!(diff, compare_raw_reference(a, b));
+    }
+
+    #[test]
+    fn compare_raw_i64_overflow_falls_back_to_i128() {
+        // Construct two Score values whose intermediate products in compare_raw
+        // exceed i64::MAX, forcing the i128 slow path.  With fields near 1e9 the
+        // product p1*q2 is on the order of 1e27, well above 2^63 ~ 9e18.
+        let a = Score {
+            ns: 1_000_000_000,
+            coef_ns: 999_999_999,
+            diff: 1_000_000_000,
+            coef_const: 500_000_000,
+        };
+        let b = Score {
+            ns: 1_000_000_001,
+            coef_ns: 999_999_998,
+            diff: 1_000_000_000,
+            coef_const: 500_000_001,
+        };
+
+        let diff = a.compare_raw(b);
+        assert_eq!(compare_raw_i64_reference(a, b), None);
+        assert_eq!(diff, compare_raw_reference(a, b));
+    }
+
+    #[test]
+    fn compare_raw_subtraction_overflow_falls_back() {
+        // o_cc - s_cc would underflow i64, so the fast path must bail out.
+        let a = Score {
+            ns: 100,
+            coef_ns: 50,
+            diff: 90,
+            coef_const: i64::MAX - 10,
+        };
+        let b = Score {
+            ns: 101,
+            coef_ns: 49,
+            diff: 89,
+            coef_const: i64::MIN + 10,
+        };
+
+        assert_eq!(compare_raw_i64_reference(a, b), None);
+        assert_eq!(a.compare_raw(b), compare_raw_reference(a, b));
+    }
+
+    #[test]
+    fn numerator_uses_i128_for_large_values() {
+        let score = Score {
+            ns: 1_000_000_001,
+            coef_ns: 999_999_999,
+            diff: 1_000_000_000,
+            coef_const: 1,
+        };
+
+        assert_eq!(
+            score.numerator(),
+            999_999_999_i128 * 1_000_000_000_i128 - 1_000_000_001_i128
+        );
     }
 }

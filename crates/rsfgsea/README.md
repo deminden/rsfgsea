@@ -11,13 +11,13 @@ What it focuses on:
 
 Headline results from the main project benchmarks:
 
-- local representative Criterion benchmark, simple: `2.201 s` for 10k genes, 1k pathways, 10k permutations
-- local representative Criterion benchmark, multilevel: `2.540 s` for 10k genes, 1k pathways, `nPermSimple=1000`
-- multilevel, small workload, 1 worker: `2 ms` vs R `80 ms` (`40.0x` faster)
-- multilevel, large workload, 16 workers: `99 ms` vs R `1039 ms` (`10.5x` faster)
-- simple, small workload, 1 worker: `717 ms` vs R `2560 ms` (`3.6x` faster)
-- simple, large workload, 16 workers: `653 ms` vs R `916 ms` (`1.40x` faster)
-- real muscle-comparison validation workload: `81 MB` peak RSS vs R `328 MB` peak RSS (`4.0x` lower)
+- local representative Criterion benchmark, simple: `2.282 s` for 10k genes, 1k pathways, 10k permutations
+- local representative Criterion benchmark, multilevel: `3.438 s` for 10k genes, 1k pathways, `nPermSimple=1000`
+- multilevel, small workload, 1 worker: `2 ms` vs R `42 ms` (`21.0x` faster)
+- multilevel, large workload, 16 workers: `105 ms` vs R `977 ms` (`9.3x` faster)
+- simple, small workload, 1 worker: `720 ms` vs R `2597 ms` (`3.6x` faster)
+- simple, large workload, 16 workers: `674 ms` vs R `798 ms` (`1.18x` faster)
+- real muscle-comparison validation workload: `81 MB` peak RSS vs R `329 MB` peak RSS (`4.1x` lower)
 
 Run the local optimization benchmark with:
 
