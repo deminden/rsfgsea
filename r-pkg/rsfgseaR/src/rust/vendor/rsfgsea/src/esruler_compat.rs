@@ -35,16 +35,49 @@ impl Score {
         (self.coef_ns as f64 / self.ns as f64) - (self.coef_const as f64 / self.diff as f64)
     }
 
-    pub fn numerator(self) -> i64 {
-        self.coef_ns * self.diff - self.coef_const * self.ns
+    pub fn numerator(self) -> i128 {
+        self.coef_ns as i128 * self.diff as i128 - self.coef_const as i128 * self.ns as i128
     }
 
     pub fn compare_raw(self, other: Self) -> i128 {
-        let p1 = self.coef_ns * self.diff + self.ns * (other.coef_const - self.coef_const);
-        let q1 = self.ns * self.diff;
-        let p2 = other.coef_ns;
-        let q2 = other.ns;
-        (p1 as i128) * (q2 as i128) - (p2 as i128) * (q1 as i128)
+        // Try the common small-value case in i64, then fall back to the exact
+        // i128 formula used for large or adversarial values.
+        let s_ns = self.ns;
+        let s_cns = self.coef_ns;
+        let s_diff = self.diff;
+        let s_cc = self.coef_const;
+        let o_ns = other.ns;
+        let o_cns = other.coef_ns;
+        let o_cc = other.coef_const;
+
+        let fast = (|| {
+            let delta_cc = o_cc.checked_sub(s_cc)?;
+            let t1 = s_cns.checked_mul(s_diff)?;
+            let t2 = s_ns.checked_mul(delta_cc)?;
+            let p1 = t1.checked_add(t2)?;
+            let q1 = s_ns.checked_mul(s_diff)?;
+            let t3 = p1.checked_mul(o_ns)?;
+            let t4 = o_cns.checked_mul(q1)?;
+            t3.checked_sub(t4)
+        })();
+
+        if let Some(res) = fast {
+            return res as i128;
+        }
+
+        // Slow path: i128 arithmetic for large inputs
+        let s_ns = s_ns as i128;
+        let s_cns = s_cns as i128;
+        let s_diff = s_diff as i128;
+        let s_cc = s_cc as i128;
+        let o_ns = o_ns as i128;
+        let o_cns = o_cns as i128;
+        let o_cc = o_cc as i128;
+        let p1 = s_cns * s_diff + s_ns * (o_cc - s_cc);
+        let q1 = s_ns * s_diff;
+        let p2 = o_cns;
+        let q2 = o_ns;
+        p1 * q2 - p2 * q1
     }
 
     pub fn lt_cpp(self, other: Self) -> bool {
@@ -387,15 +420,16 @@ impl EsRulerCompat {
                 break;
             }
 
+            let mut median_buf = vec![0usize; self.sample_size];
             for i in 0..(self.chunks_number - 1) {
                 let pos = (0..=i)
                     .map(|j| (self.pathway_size + j) / self.chunks_number)
                     .sum::<usize>();
-                let mut tmp: Vec<usize> = (0..self.sample_size)
-                    .map(|j| self.current_samples[j][pos])
-                    .collect();
-                tmp.select_nth_unstable(self.sample_size / 2);
-                self.chunk_last_element[i] = tmp[self.sample_size / 2];
+                for j in 0..self.sample_size {
+                    median_buf[j] = self.current_samples[j][pos];
+                }
+                median_buf.select_nth_unstable(self.sample_size / 2);
+                self.chunk_last_element[i] = median_buf[self.sample_size / 2];
             }
 
             let mut samples_chunks: Vec<SampleChunks> = (0..self.sample_size)
@@ -601,19 +635,27 @@ impl EsRulerCompat {
         let mut moves = 0_i32;
         let mut iters = 0_i32;
 
+        let nk_diff = (n - k) as i64;
         while !stop(moves, iters) {
             iters += 1;
             let old_ind = uid_wrapper(0, k - 1, rng);
 
+            // Find chunk containing old_ind using cumulative lengths.
             let mut old_chunk_ind = 0usize;
             let mut old_ind_in_chunk = 0usize;
             let old_val: usize;
             {
                 let mut tmp = old_ind;
-                while sample_chunks.chunks[old_chunk_ind].len() <= tmp {
-                    tmp -= sample_chunks.chunks[old_chunk_ind].len();
-                    old_chunk_ind += 1;
-                }
+                while {
+                    let chunk_len = sample_chunks.chunks[old_chunk_ind].len();
+                    if tmp < chunk_len {
+                        false
+                    } else {
+                        tmp -= chunk_len;
+                        old_chunk_ind += 1;
+                        true
+                    }
+                } {}
                 old_ind_in_chunk = tmp;
                 old_val = sample_chunks.chunks[old_chunk_ind][old_ind_in_chunk];
             }
@@ -649,13 +691,6 @@ impl EsRulerCompat {
             sample_chunks.chunk_sum[new_chunk] += self.ranks[new_val];
 
             let strictly = cur_hash <= bound.hash;
-            let check = |score: Score| {
-                if strictly {
-                    score > bound.score
-                } else {
-                    score >= bound.score
-                }
-            };
 
             if has_cand && old_val as isize == cand_val {
                 has_cand = false;
@@ -671,14 +706,19 @@ impl EsRulerCompat {
                 }
             }
 
-            if has_cand
-                && check(Score {
+            if has_cand && {
+                let s = Score {
                     ns,
                     coef_ns: cand_y,
-                    diff: (n - k) as i64,
+                    diff: nk_diff,
                     coef_const: cand_x,
-                })
-            {
+                };
+                if strictly {
+                    s.gt_cpp(bound.score)
+                } else {
+                    s.ge_cpp(bound.score)
+                }
+            } {
                 moves += 1;
                 continue;
             }
@@ -689,12 +729,18 @@ impl EsRulerCompat {
             let mut last = -1_i64;
 
             for i in 0..sample_chunks.chunks.len() {
-                if !check(Score {
+                let chunk_score = Score {
                     ns,
                     coef_ns: cur_y + sample_chunks.chunk_sum[i],
-                    diff: (n - k) as i64,
+                    diff: nk_diff,
                     coef_const: cur_x,
-                }) {
+                };
+                let above = if strictly {
+                    chunk_score.gt_cpp(bound.score)
+                } else {
+                    chunk_score.ge_cpp(bound.score)
+                };
+                if !above {
                     cur_y += sample_chunks.chunk_sum[i];
                     cur_x += (self.chunk_last_element[i] as i64)
                         - last
@@ -705,12 +751,17 @@ impl EsRulerCompat {
                     for &pos in &sample_chunks.chunks[i] {
                         cur_y += self.ranks[pos];
                         cur_x += pos as i64 - last - 1;
-                        if check(Score {
+                        let elem_score = Score {
                             ns,
                             coef_ns: cur_y,
-                            diff: (n - k) as i64,
+                            diff: nk_diff,
                             coef_const: cur_x,
-                        }) {
+                        };
+                        if if strictly {
+                            elem_score.gt_cpp(bound.score)
+                        } else {
+                            elem_score.ge_cpp(bound.score)
+                        } {
                             ok = true;
                             has_cand = true;
                             cand_x = cur_x;
@@ -766,5 +817,110 @@ impl EsRulerCompat {
         }
 
         PerturbateResult { moves, iters }
+    }
+}
+
+#[cfg(test)]
+mod compare_raw_tests {
+    use super::Score;
+
+    fn compare_raw_reference(a: Score, b: Score) -> i128 {
+        let p1 = a.coef_ns as i128 * a.diff as i128
+            + a.ns as i128 * (b.coef_const as i128 - a.coef_const as i128);
+        let q1 = a.ns as i128 * a.diff as i128;
+        let p2 = b.coef_ns as i128;
+        let q2 = b.ns as i128;
+        p1 * q2 - p2 * q1
+    }
+
+    fn compare_raw_i64_reference(a: Score, b: Score) -> Option<i64> {
+        let delta_cc = b.coef_const.checked_sub(a.coef_const)?;
+        let t1 = a.coef_ns.checked_mul(a.diff)?;
+        let t2 = a.ns.checked_mul(delta_cc)?;
+        let p1 = t1.checked_add(t2)?;
+        let q1 = a.ns.checked_mul(a.diff)?;
+        let t3 = p1.checked_mul(b.ns)?;
+        let t4 = b.coef_ns.checked_mul(q1)?;
+        t3.checked_sub(t4)
+    }
+
+    #[test]
+    fn compare_raw_fast_path_small_values() {
+        let a = Score {
+            ns: 100,
+            coef_ns: 50,
+            diff: 90,
+            coef_const: 10,
+        };
+        let b = Score {
+            ns: 101,
+            coef_ns: 49,
+            diff: 89,
+            coef_const: 11,
+        };
+        let diff = a.compare_raw(b);
+        assert_eq!(
+            compare_raw_i64_reference(a, b),
+            Some(compare_raw_reference(a, b) as i64)
+        );
+        assert_eq!(diff, compare_raw_reference(a, b));
+    }
+
+    #[test]
+    fn compare_raw_i64_overflow_falls_back_to_i128() {
+        // Construct two Score values whose intermediate products in compare_raw
+        // exceed i64::MAX, forcing the i128 slow path.  With fields near 1e9 the
+        // product p1*q2 is on the order of 1e27, well above 2^63 ~ 9e18.
+        let a = Score {
+            ns: 1_000_000_000,
+            coef_ns: 999_999_999,
+            diff: 1_000_000_000,
+            coef_const: 500_000_000,
+        };
+        let b = Score {
+            ns: 1_000_000_001,
+            coef_ns: 999_999_998,
+            diff: 1_000_000_000,
+            coef_const: 500_000_001,
+        };
+
+        let diff = a.compare_raw(b);
+        assert_eq!(compare_raw_i64_reference(a, b), None);
+        assert_eq!(diff, compare_raw_reference(a, b));
+    }
+
+    #[test]
+    fn compare_raw_subtraction_overflow_falls_back() {
+        // o_cc - s_cc would underflow i64, so the fast path must bail out.
+        let a = Score {
+            ns: 100,
+            coef_ns: 50,
+            diff: 90,
+            coef_const: i64::MAX - 10,
+        };
+        let b = Score {
+            ns: 101,
+            coef_ns: 49,
+            diff: 89,
+            coef_const: i64::MIN + 10,
+        };
+
+        assert_eq!(compare_raw_i64_reference(a, b), None);
+        assert_eq!(a.compare_raw(b), compare_raw_reference(a, b));
+    }
+
+    #[test]
+    fn numerator_uses_i128_for_large_values() {
+        let score = Score {
+            ns: 1_000_000_001,
+            coef_ns: 999_999_999,
+            diff: 1_000_000_000,
+            coef_const: 1,
+        };
+
+        assert_eq!(
+            score.numerator(),
+            999_999_999_i128 * 1_000_000_000_i128 - 1_000_000_001_i128
+        );
     }
 }

@@ -56,6 +56,7 @@ impl Mt19937Compat {
         self.idx = 0;
     }
 
+    #[inline(always)]
     pub fn next_u32(&mut self) -> u32 {
         if self.idx >= 624 {
             self.twist();
@@ -366,6 +367,7 @@ impl RLecuyerCmrgSeedCompat {
     }
 }
 
+#[inline(always)]
 pub fn uid_wrapper(from: usize, to: usize, rng: &mut Mt19937Compat) -> usize {
     let len = to - from + 1;
     let max_val = u32::MAX;
@@ -379,40 +381,61 @@ pub fn uid_wrapper(from: usize, to: usize, rng: &mut Mt19937Compat) -> usize {
 }
 
 // Generates k unique integers in [a, b] (inclusive), preserving fgsea util.cpp behavior.
+// Uses a stamp-based marker array to avoid per-call allocation of `used`.
 pub fn combination(a: usize, b: usize, k: usize, rng: &mut Mt19937Compat) -> Vec<usize> {
     let n = b - a + 1;
     let mut v = Vec::with_capacity(k);
-    let mut used = vec![false; n];
 
-    if (k as f64) < (n as f64) / 2.0 {
-        for _ in 0..k {
-            loop {
-                let x = uid_wrapper(a, b, rng);
-                let idx = x - a;
-                if !used[idx] {
-                    used[idx] = true;
-                    v.push(x);
-                    break;
+    // Thread-local stamp array to avoid allocating `used` every call.
+    thread_local!(static COMB_MARKER: std::cell::RefCell<Option<(Vec<u32>, u32)>> = const { std::cell::RefCell::new(None) });
+
+    COMB_MARKER.with(|marker| {
+        let mut guard = marker.borrow_mut();
+        let (marks, stamp_ref) = guard.get_or_insert_with(|| (vec![0u32; n.max(10000)], 0u32));
+
+        // Resize if needed (shouldn't happen after first real call).
+        if marks.len() < n {
+            marks.resize(n, 0);
+        }
+
+        // Increment stamp; reset if overflow.
+        let mut stamp = stamp_ref.wrapping_add(1);
+        if stamp == 0 {
+            marks.fill(0);
+            stamp = 1;
+        }
+        *stamp_ref = stamp;
+
+        if (k as f64) < (n as f64) / 2.0 {
+            for _ in 0..k {
+                loop {
+                    let x = uid_wrapper(a, b, rng);
+                    let idx = x - a;
+                    if marks[idx] != stamp {
+                        marks[idx] = stamp;
+                        v.push(x);
+                        break;
+                    }
                 }
             }
-        }
-    } else {
-        for r in (n - k)..n {
-            let x = uid_wrapper(0, r, rng);
-            if !used[x] {
-                used[x] = true;
-                v.push(a + x);
-            } else {
-                used[r] = true;
-                v.push(a + r);
+        } else {
+            for r in (n - k)..n {
+                let x = uid_wrapper(0, r, rng);
+                if marks[x] != stamp {
+                    marks[x] = stamp;
+                    v.push(a + x);
+                } else {
+                    marks[r] = stamp;
+                    v.push(a + r);
+                }
+            }
+            // Fisher-Yates shuffle implemented explicitly for platform reproducibility.
+            for i in (1..v.len()).rev() {
+                let j = uid_wrapper(0, i, rng);
+                v.swap(i, j);
             }
         }
-        // Fisher-Yates shuffle implemented explicitly for platform reproducibility.
-        for i in (1..v.len()).rev() {
-            let j = uid_wrapper(0, i, rng);
-            v.swap(i, j);
-        }
-    }
+    });
 
     v
 }

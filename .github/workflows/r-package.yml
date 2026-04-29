@@ -42,8 +42,15 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Install R dependencies
+        uses: r-lib/actions/setup-r-dependencies@v2
+        with:
+          working-directory: r-pkg/rsfgseaR
+          extra-packages: any::testthat
+          needs: check
+
+      - name: Verify R test dependencies
         run: |
-          Rscript -e 'install.packages("testthat", repos = "https://cloud.r-project.org")'
+          Rscript -e 'stopifnot(requireNamespace("testthat", quietly = TRUE)); packageVersion("testthat")'
 
       - name: Build source package
         run: |

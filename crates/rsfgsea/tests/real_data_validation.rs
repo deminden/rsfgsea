@@ -5,6 +5,16 @@ mod tests {
     use std::collections::HashMap;
     use std::path::Path;
 
+    #[derive(Debug, Clone)]
+    struct ReferenceRow {
+        gene: String,
+        pathway: String,
+        es: f64,
+        nes: f64,
+        pval: f64,
+        padj: f64,
+    }
+
     #[test]
     fn test_muscle_data_comparison() {
         let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
@@ -148,6 +158,62 @@ mod tests {
         );
     }
 
+    #[test]
+    fn real_muscle_precision_guard_checks_representative_outputs() {
+        let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+        let root = Path::new(&manifest_dir);
+        let data_dir = root.join("tests/data/muscle_comparison");
+        let ref_csv_path = data_dir.join("r_fgsea_results.csv");
+        let gmt_path = data_dir.join("h.all.v2025.1.Hs.symbols.gmt");
+        let selected_genes = ["ACYP2", "CNN1", "NUP188"];
+
+        let ref_data = read_r_reference_rows(ref_csv_path.to_str().unwrap());
+        let pathway_db =
+            rsfgsea::io::read_gmt(gmt_path.to_str().unwrap()).expect("Failed to load GMT");
+        let mut total_checked = 0usize;
+
+        for gene in selected_genes {
+            let rnk_path = data_dir.join(format!("{gene}.rnk"));
+            let ranks = rsfgsea::io::read_ranked_list(rnk_path.to_str().unwrap())
+                .expect("Failed to read ranks");
+            let results = fgsea_multilevel_with_sample_size(
+                &ranks,
+                &pathway_db.pathways,
+                1000,
+                42,
+                15,
+                500,
+                1e-10,
+                ScoreType::Std,
+                1.0,
+                101,
+            );
+            let result_map: HashMap<_, _> = results
+                .into_iter()
+                .map(|result| (result.pathway_name.clone(), result))
+                .collect();
+
+            for reference in ref_data.iter().filter(|row| row.gene == gene) {
+                let result = result_map.get(&reference.pathway).unwrap_or_else(|| {
+                    panic!(
+                        "Missing Rust result for {}:{}",
+                        reference.gene, reference.pathway
+                    )
+                });
+                assert_close("ES", reference, reference.es, result.es, 1e-12);
+                assert_option_close("NES", reference, reference.nes, result.nes, 1e-12);
+                assert_close("pval", reference, reference.pval, result.p_value, 1e-12);
+                assert_option_close("padj", reference, reference.padj, result.padj, 1e-12);
+                total_checked += 1;
+            }
+        }
+
+        assert_eq!(
+            total_checked, 10,
+            "Expected the precision guard to compare all selected reference rows."
+        );
+    }
+
     fn read_r_csv(path: &str) -> Vec<(String, String, f64, f64)> {
         let mut reader = csv::Reader::from_path(path).expect("Failed to open R reference");
         let mut data = Vec::new();
@@ -176,5 +242,88 @@ mod tests {
             .to_string();
 
         (gene, pathway, es, pval)
+    }
+
+    fn read_r_reference_rows(path: &str) -> Vec<ReferenceRow> {
+        let mut reader = csv::Reader::from_path(path).expect("Failed to open R reference");
+        reader
+            .records()
+            .map(|record| {
+                let record = record.expect("Failed to parse R reference row");
+                parse_reference_row(&record)
+            })
+            .collect()
+    }
+
+    fn parse_reference_row(record: &StringRecord) -> ReferenceRow {
+        ReferenceRow {
+            pathway: record.get(0).expect("Missing pathway column").to_string(),
+            pval: record
+                .get(1)
+                .expect("Missing pval column")
+                .parse()
+                .expect("Failed to parse pval"),
+            padj: record
+                .get(2)
+                .expect("Missing padj column")
+                .parse()
+                .expect("Failed to parse padj"),
+            es: record
+                .get(3)
+                .expect("Missing ES column")
+                .parse()
+                .expect("Failed to parse ES"),
+            nes: record
+                .get(4)
+                .expect("Missing NES column")
+                .parse()
+                .expect("Failed to parse NES"),
+            gene: record
+                .get(6)
+                .expect("Missing TargetGene column")
+                .to_string(),
+        }
+    }
+
+    fn assert_close(
+        metric: &str,
+        reference: &ReferenceRow,
+        expected: f64,
+        actual: f64,
+        tolerance: f64,
+    ) {
+        if expected.is_nan() || actual.is_nan() {
+            assert!(
+                expected.is_nan() && actual.is_nan(),
+                "{} NaN mismatch for {}:{} R={} Rust={}",
+                metric,
+                reference.gene,
+                reference.pathway,
+                expected,
+                actual
+            );
+            return;
+        }
+
+        assert!(
+            (expected - actual).abs() <= tolerance,
+            "{} mismatch for {}:{} R={:.16} Rust={:.16}",
+            metric,
+            reference.gene,
+            reference.pathway,
+            expected,
+            actual
+        );
+    }
+
+    fn assert_option_close(
+        metric: &str,
+        reference: &ReferenceRow,
+        expected: f64,
+        actual: Option<f64>,
+        tolerance: f64,
+    ) {
+        let actual = actual.unwrap_or(f64::NAN);
+        assert_close(metric, reference, expected, actual, tolerance);
     }
 }

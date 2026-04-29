@@ -5,7 +5,7 @@ use crate::algo_support::{
 };
 use crate::core::{EnrichmentResult, Pathway, RankedList, ScoreType};
 use crate::fastgsea_compat::{
-    calc_gsea_stat_cumulative_batch_f64,
+    calc_gsea_stat_cumulative_batch_f64, calc_gsea_stat_cumulative_batch_f64_parallel,
     calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel,
 };
 #[cfg(feature = "gpu")]
@@ -14,6 +14,7 @@ use crate::multilevel::run_multilevel_gsea_group_impl;
 use crate::rng_compat::{RLecuyerCmrgSeedCompat, RMt19937SeedCompat, RSampleKind};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
+use std::time::Instant;
 
 pub fn resolve_rng_seed(seed: Option<u64>) -> u64 {
     seed.unwrap_or_else(rand::random)
@@ -36,6 +37,7 @@ impl IntoSeed for Option<u64> {
 }
 
 // Rust port of fgsea::calcGseaStat behavior (for gseaParam=1 used in fgseaSimpleImpl).
+#[inline]
 pub fn calculate_es_fgsea(
     stats: &[f64],
     hits: &[usize],
@@ -53,12 +55,10 @@ pub fn calculate_es_fgsea(
 
     // Match fgsea::calcGseaStat exactly (gseaParam=1):
     // rAdj <- abs(r[S]); NR <- sum(rAdj)
-    let mut adj = Vec::with_capacity(m);
+    // Two-pass: first compute nr, then iterate. Avoids adj Vec allocation.
     let mut nr = 0.0_f64;
     for &idx in hits {
-        let a = stats[idx].abs();
-        adj.push(a);
-        nr += a;
+        nr += stats[idx].abs();
     }
 
     let mut max_p = f64::NEG_INFINITY;
@@ -66,20 +66,24 @@ pub fn calculate_es_fgsea(
     let mut max_i = 0usize;
     let mut min_i = 0usize;
     let mut csum = 0.0;
+    let denom = (n_total - m) as f64;
+    let inv_m = 1.0 / m as f64;
+    let nr_is_zero = nr == 0.0;
 
     for i in 0..m {
-        csum += adj[i];
-        let r_cum = if nr == 0.0 {
-            (i + 1) as f64 / m as f64
+        let adj_i = stats[hits[i]].abs();
+        csum += adj_i;
+        let r_cum = if nr_is_zero {
+            (i + 1) as f64 * inv_m
         } else {
             csum / nr
         };
-        let miss = (hits[i] - i) as f64 / (n_total - m) as f64;
+        let miss = (hits[i] - i) as f64 / denom;
         let top = r_cum - miss;
-        let bottom = if nr == 0.0 {
-            top - 1.0 / m as f64
+        let bottom = if nr_is_zero {
+            top - inv_m
         } else {
-            top - adj[i] / nr
+            top - adj_i / nr
         };
         if top > max_p {
             max_p = top;
@@ -145,6 +149,23 @@ fn derive_fgsea_simple_chunk_plan(
             (chunk_perm, chunk_seed)
         })
         .collect()
+}
+
+fn timing_enabled() -> bool {
+    std::env::var_os("RSFGSEA_STAGE_TIMING").is_some()
+}
+
+fn log_stage_timing(enabled: bool, stage: &str, start: Instant) {
+    if enabled {
+        eprintln!(
+            "RSFGSEA_STAGE\t{stage}\t{:.6}",
+            start.elapsed().as_secs_f64()
+        );
+    }
+}
+
+fn fast_nonexact_simple_enabled() -> bool {
+    std::env::var_os("RSFGSEA_FAST_NONEXACT_SIMPLE").is_some()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -385,6 +406,9 @@ fn run_gsea_internal(
     sample_size: usize,
     sample_kind: RSampleKind,
 ) -> Vec<EnrichmentResult> {
+    let timing = timing_enabled();
+    let total_start = Instant::now();
+
     struct Working {
         pathway_name: String,
         size: usize,
@@ -404,6 +428,7 @@ fn run_gsea_internal(
         log2err: Option<f64>,
     }
 
+    let stage_start = Instant::now();
     let gene_to_idx = build_gene_index(ranks);
     let n_total = ranks.len();
 
@@ -422,9 +447,11 @@ fn run_gsea_internal(
     let simple_stats: Vec<f64> = scaled_scores.iter().map(|&v| v as f64).collect();
     let mut r_seed_rng = None;
     let mut simple_seed_for_multilevel = None;
+    log_stage_timing(timing, "setup", stage_start);
 
     // Heavy pathway preprocessing is independent per pathway; use parallel map
     // while preserving deterministic input order.
+    let stage_start = Instant::now();
     let mut work: Vec<Working> = pathways
         .par_iter()
         .map(|pw| {
@@ -456,8 +483,10 @@ fn run_gsea_internal(
         .into_iter()
         .flatten()
         .collect();
+    log_stage_timing(timing, "pathway_preprocessing", stage_start);
 
     if n_perm > 0 && !work.is_empty() {
+        let stage_start = Instant::now();
         let simple_chunk_plan = if allow_multilevel {
             let (simple_seed, rng) = derive_fgsea_simple_seed(seed, sample_kind);
             r_seed_rng = Some(rng);
@@ -504,7 +533,21 @@ fn run_gsea_internal(
             let pathway_scores: Vec<f64> = work.iter().map(|w| w.es).collect();
             let pathways_sizes: Vec<usize> = work.iter().map(|w| w.size).collect();
             for (chunk_perm, chunk_seed) in simple_chunk_plan {
-                let counts = if rayon::current_num_threads() > 1 && work.len() >= 128 {
+                let use_parallel_batch = rayon::current_num_threads() > 1 && work.len() >= 128;
+                let counts = if use_parallel_batch && fast_nonexact_simple_enabled() {
+                    // Experimental optimization route for scaling studies. It splits
+                    // permutation work across workers, so it does not preserve fgsea/R
+                    // RNG parity and must remain opt-in for correctness-sensitive runs.
+                    calc_gsea_stat_cumulative_batch_f64_parallel(
+                        &simple_stats,
+                        1.0,
+                        &pathway_scores,
+                        &pathways_sizes,
+                        chunk_perm,
+                        chunk_seed,
+                        score_type,
+                    )
+                } else if use_parallel_batch {
                     calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
                         &simple_stats,
                         1.0,
@@ -535,8 +578,10 @@ fn run_gsea_internal(
                 }
             }
         }
+        log_stage_timing(timing, "simple_stage", stage_start);
     }
 
+    let stage_start = Instant::now();
     let mut n_more_extreme_vec = vec![0usize; work.len()];
     let mut mode_fraction_vec = vec![0usize; work.len()];
 
@@ -580,8 +625,10 @@ fn run_gsea_internal(
             w.log2err = None;
         }
     }
+    log_stage_timing(timing, "simple_postprocessing", stage_start);
 
     if allow_multilevel && n_perm > 0 && !work.is_empty() {
+        let stage_start = Instant::now();
         let mut multilevel_groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for i in 0..work.len() {
             if work[i].p_value.is_finite()
@@ -665,8 +712,10 @@ fn run_gsea_internal(
                 }
             }
         }
+        log_stage_timing(timing, "multilevel_refinement", stage_start);
     }
 
+    let stage_start = Instant::now();
     let mut final_results: Vec<EnrichmentResult> = work
         .into_iter()
         .map(|w| EnrichmentResult {
@@ -683,6 +732,8 @@ fn run_gsea_internal(
 
     apply_bh_adjustment(&mut final_results);
     final_results.sort_by(|a, b| a.pathway_name.cmp(&b.pathway_name));
+    log_stage_timing(timing, "finalize_results", stage_start);
+    log_stage_timing(timing, "total", total_start);
     final_results
 }
 #[allow(clippy::too_many_arguments)]
