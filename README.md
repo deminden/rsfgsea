@@ -85,9 +85,6 @@ git clone https://github.com/deminden/rsfgsea
 cd rsfgsea
 cd crates/rsfgseapy
 maturin develop --release
-
-# Optional: run Python binding tests
-pytest tests
 ```
 
 Usage example:
@@ -150,7 +147,7 @@ print(res[, c("pathway", "nes", "pval")])
 ```
 
 Notes:
-- default installs are CPU-only and CRAN-friendly
+- default installs are CPU-only
 - local GPU builds are available with `RSFGSEAR_ENABLE_GPU=1 R CMD INSTALL r-pkg/rsfgseaR`
 - `pathways` can be a named list or a GMT path, and `stats` can be a named numeric vector or a ranked-list file path
 

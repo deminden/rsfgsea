@@ -836,14 +836,9 @@ pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
         .map(|group| vec![PathwayAcc::default(); group.pathway_indices.len()])
         .collect();
     let mut rng = Mt19937Compat::new(seed as u32);
-    const DEFAULT_BLOCK_ITERS: usize = 4096;
-    let block_iters = std::env::var("RSFGSEA_BLOCK_ITERS")
-        .ok()
-        .and_then(|v| v.parse::<usize>().ok())
-        .unwrap_or(DEFAULT_BLOCK_ITERS)
-        .max(1);
+    const BLOCK_ITERS: usize = 4096;
     let mut done = 0usize;
-    let mut rand_es_block: Vec<Vec<f64>> = Vec::with_capacity(block_iters);
+    let mut rand_es_block: Vec<Vec<f64>> = Vec::with_capacity(BLOCK_ITERS);
 
     // Thread-invariant strategy:
     // - keep RNG and iteration order exactly serial
@@ -853,7 +848,7 @@ pub fn calc_gsea_stat_cumulative_batch_f64_thread_invariant_parallel(
     // This preserves single-core numerical behavior while using multiple cores.
     while done < iterations {
         rand_es_block.clear();
-        let block_end = (done + block_iters).min(iterations);
+        let block_end = (done + BLOCK_ITERS).min(iterations);
         for _ in done..block_end {
             let selected = combination(1, n, k, &mut rng); // 1-based
             rand_es_block.push(calc_gsea_stat_cumulative_f64(
