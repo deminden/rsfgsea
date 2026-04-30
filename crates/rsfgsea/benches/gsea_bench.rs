@@ -2,7 +2,9 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use rand::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rsfgsea::decor::DecorPathwayScores;
 use rsfgsea::prelude::*;
+use std::collections::BTreeMap;
 use std::hint::black_box;
 use std::time::Duration;
 
@@ -33,7 +35,7 @@ fn benchmark_es(c: &mut Criterion) {
     });
 
     let penalty: Vec<f64> = (0..k)
-        .map(|i| 1.0 / (1.0 + 0.5 * (i as f64 / k as f64)))
+        .map(|i| 1.0 / (1.0 + 23.0 * (i as f64 / k as f64)))
         .collect();
     c.bench_function("calculate_es_decor_10k_100", |b| {
         b.iter(|| {
@@ -122,6 +124,52 @@ fn real_shaped_pathways(genes: &[String], pathway_count: usize, rng: &mut StdRng
         .collect()
 }
 
+fn synthetic_decor_cache(workload: &SyntheticWorkload) -> DecorCache {
+    let mut rows = 0usize;
+    let pathways = workload
+        .pathways
+        .iter()
+        .enumerate()
+        .map(|(pathway_idx, pathway)| {
+            rows += pathway.genes.len();
+            let redundancy = pathway
+                .genes
+                .iter()
+                .enumerate()
+                .map(|(gene_idx, _)| {
+                    let phase = ((pathway_idx + gene_idx) % 29) as f32 / 28.0;
+                    (0.05 + 0.75 * phase).min(1.0)
+                })
+                .collect();
+            (
+                pathway.name.clone(),
+                DecorPathwayScores {
+                    genes: pathway.genes.clone(),
+                    redundancy,
+                },
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+
+    DecorCache {
+        metadata: DecorCacheMetadata {
+            format: "rsfgsea-decor-cache".to_string(),
+            version: "1".to_string(),
+            created_by: "rsfgsea-benchmark".to_string(),
+            gmt_sha256: "synthetic".to_string(),
+            expression_sha256: "synthetic".to_string(),
+            correlation: DecorCorrelation::Pearson,
+            redundancy: DecorRedundancy::PositiveMean,
+            expression_gene_axis: "rows".to_string(),
+            expression_has_header: true,
+            gene_id_mode: "verbatim".to_string(),
+            n_pathways: pathways.len(),
+            n_rows: rows,
+        },
+        pathways,
+    }
+}
+
 fn sample_realistic_pathway_size(rng: &mut StdRng) -> usize {
     match rng.random_range(0..100) {
         0..=19 => rng.random_range(15..=30),
@@ -166,6 +214,14 @@ fn simple_permutations(workload_name: &str) -> usize {
     }
 }
 
+fn decor_simple_permutations(workload_name: &str) -> usize {
+    if workload_name.contains("perm_heavy") {
+        10_000
+    } else {
+        1_000
+    }
+}
+
 fn multilevel_permutations(_workload_name: &str) -> usize {
     1000
 }
@@ -179,14 +235,18 @@ fn configure_representative_group<'a>(
     name: &str,
 ) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
     let mut group = c.benchmark_group(name);
-    group.sample_size(10);
-    group.measurement_time(Duration::from_secs(5));
-    group.warm_up_time(Duration::from_millis(500));
+    group.sample_size(15);
+    group.measurement_time(Duration::from_secs(10));
+    group.warm_up_time(Duration::from_secs(1));
     group
 }
 
 fn benchmark_end_to_end(c: &mut Criterion) {
     let workloads = benchmark_workloads();
+    let decor_caches = workloads
+        .iter()
+        .map(synthetic_decor_cache)
+        .collect::<Vec<_>>();
 
     {
         let mut group = configure_representative_group(c, "representative_multilevel");
@@ -246,6 +306,37 @@ fn benchmark_end_to_end(c: &mut Criterion) {
         group.finish();
     }
 
+    {
+        let mut group = configure_representative_group(c, "representative_decor_simple_reuse");
+        for (workload, cache) in workloads.iter().zip(decor_caches.iter()) {
+            let permutations = decor_simple_permutations(workload.name);
+            group.throughput(Throughput::Elements(workload.pathways.len() as u64));
+            group.bench_with_input(
+                BenchmarkId::from_parameter(workload.name),
+                &(workload, cache),
+                |b, (workload, cache)| {
+                    b.iter(|| {
+                        fgsea_decor_simple_with_sample_size(
+                            black_box(&workload.ranks),
+                            black_box(&workload.pathways),
+                            black_box(cache),
+                            black_box(23.0),
+                            black_box(permutations),
+                            black_box(42),
+                            black_box(15),
+                            black_box(500),
+                            black_box(1e-10),
+                            black_box(ScoreType::Std),
+                            black_box(1.0),
+                            black_box(101),
+                        )
+                    })
+                },
+            );
+        }
+        group.finish();
+    }
+
     if wrapper_dispatch_enabled() {
         let mut group = configure_representative_group(c, "representative_wrapper_dispatch");
         for workload in &workloads {
@@ -280,9 +371,9 @@ fn benchmark_end_to_end(c: &mut Criterion) {
 criterion_group! {
     name = benches;
     config = Criterion::default()
-        .sample_size(10)
-        .measurement_time(Duration::from_secs(5))
-        .warm_up_time(Duration::from_millis(500));
+        .sample_size(15)
+        .measurement_time(Duration::from_secs(10))
+        .warm_up_time(Duration::from_secs(1));
     targets = benchmark_es, benchmark_end_to_end
 }
 criterion_main!(benches);

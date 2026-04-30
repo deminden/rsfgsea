@@ -23,6 +23,7 @@ use std::path::{Path, PathBuf};
 const CACHE_FORMAT: &str = "rsfgsea-decor-cache";
 const CACHE_VERSION: &str = "1";
 const GENE_ID_MODE: &str = "verbatim";
+const DECOR_BATCH_MIN_GROUP_PATHWAYS: usize = 16;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecorCacheStatus {
@@ -159,6 +160,29 @@ pub fn calculate_es_decor(
         return Ok((0.0, hits[0]));
     }
 
+    Ok(calculate_es_decor_prechecked(
+        stats, hits, penalty, n_total, score_type,
+    ))
+}
+
+#[inline]
+fn calculate_es_decor_prechecked(
+    stats: &[f64],
+    hits: &[usize],
+    penalty: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+) -> (f64, usize) {
+    debug_assert_eq!(hits.len(), penalty.len());
+    if hits.is_empty() {
+        return (0.0, 0);
+    }
+
+    let m = hits.len();
+    if m == n_total {
+        return (0.0, hits[0]);
+    }
+
     let mut nr = 0.0_f64;
     for i in 0..m {
         nr += stats[hits[i]].abs() * penalty[i];
@@ -198,7 +222,7 @@ pub fn calculate_es_decor(
         }
     }
 
-    Ok(match score_type {
+    match score_type {
         ScoreType::Std => {
             if max_p == -min_p {
                 (0.0, hits[0])
@@ -210,7 +234,224 @@ pub fn calculate_es_decor(
         }
         ScoreType::Pos => (max_p, hits[max_i]),
         ScoreType::Neg => (min_p, hits[min_i]),
-    })
+    }
+}
+
+#[inline]
+fn decor_pathway_seed(seed: u64, pathway_idx: usize) -> u32 {
+    let mut x = seed ^ ((pathway_idx as u64).wrapping_add(0x9e37_79b9_7f4a_7c15));
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    let mixed = (x as u32) ^ ((x >> 32) as u32);
+    if mixed == 0 { 1 } else { mixed }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct DecorNullCounts {
+    n_le_es: usize,
+    n_ge_es: usize,
+    n_le_zero: usize,
+    n_ge_zero: usize,
+    le_zero_sum: f64,
+    ge_zero_sum: f64,
+}
+
+#[derive(Default)]
+struct DecorBatchScratch {
+    nr: Vec<f64>,
+    csum: Vec<f64>,
+    max_p: Vec<f64>,
+    min_p: Vec<f64>,
+}
+
+struct DecorWorking {
+    pathway_name: String,
+    size: usize,
+    hits: Vec<usize>,
+    penalty: Vec<f64>,
+    es: f64,
+    peak_idx: usize,
+    n_le_es: usize,
+    n_ge_es: usize,
+    n_le_zero: usize,
+    n_ge_zero: usize,
+    le_zero_sum: f64,
+    ge_zero_sum: f64,
+    nes: Option<f64>,
+    p_value: f64,
+    padj: Option<f64>,
+    log2err: Option<f64>,
+}
+
+struct DecorRuntimeSizeGroup {
+    size: usize,
+    work_indices: Vec<usize>,
+    observed_es: Vec<f64>,
+    penalties_rank_major: Vec<f64>,
+    use_batched: bool,
+}
+
+impl DecorRuntimeSizeGroup {
+    fn from_indices(size: usize, work_indices: Vec<usize>, work: &[DecorWorking]) -> Self {
+        let use_batched = work_indices.len() >= DECOR_BATCH_MIN_GROUP_PATHWAYS;
+        let observed_es = if use_batched {
+            work_indices
+                .iter()
+                .map(|&idx| work[idx].es)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let mut penalties_rank_major = if use_batched {
+            Vec::with_capacity(size * work_indices.len())
+        } else {
+            Vec::new()
+        };
+        if use_batched {
+            for rank_idx in 0..size {
+                for &work_idx in &work_indices {
+                    penalties_rank_major.push(work[work_idx].penalty[rank_idx]);
+                }
+            }
+        }
+        Self {
+            size,
+            work_indices,
+            observed_es,
+            penalties_rank_major,
+            use_batched,
+        }
+    }
+}
+
+impl DecorBatchScratch {
+    fn reset(&mut self, n_pathways: usize) {
+        self.nr.clear();
+        self.nr.resize(n_pathways, 0.0);
+        self.csum.clear();
+        self.csum.resize(n_pathways, 0.0);
+        self.max_p.clear();
+        self.max_p.resize(n_pathways, f64::NEG_INFINITY);
+        self.min_p.clear();
+        self.min_p.resize(n_pathways, f64::INFINITY);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_decor_batched_counts(
+    stats_abs: &[f64],
+    selected: &[usize],
+    penalties_rank_major: &[f64],
+    observed_es: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+    counts: &mut [DecorNullCounts],
+    scratch: &mut DecorBatchScratch,
+) {
+    let m = selected.len();
+    let n_pathways = observed_es.len();
+    debug_assert_eq!(counts.len(), n_pathways);
+    debug_assert_eq!(penalties_rank_major.len(), m * n_pathways);
+    if m == 0 || n_pathways == 0 {
+        return;
+    }
+
+    scratch.reset(n_pathways);
+    for (rank_idx, &hit_idx) in selected.iter().enumerate() {
+        let base = stats_abs[hit_idx];
+        let row = &penalties_rank_major[rank_idx * n_pathways..(rank_idx + 1) * n_pathways];
+        for (nr, &penalty) in scratch.nr.iter_mut().zip(row) {
+            *nr += base * penalty;
+        }
+    }
+
+    let denom = (n_total - m) as f64;
+    let inv_m = 1.0 / m as f64;
+    for (rank_idx, &hit_idx) in selected.iter().enumerate() {
+        let base = stats_abs[hit_idx];
+        let miss = (hit_idx - rank_idx) as f64 / denom;
+        let row = &penalties_rank_major[rank_idx * n_pathways..(rank_idx + 1) * n_pathways];
+
+        for (pathway_idx, &penalty) in row.iter().enumerate() {
+            let adj = base * penalty;
+            scratch.csum[pathway_idx] += adj;
+            let nr = scratch.nr[pathway_idx];
+            let top = if nr == 0.0 {
+                (rank_idx + 1) as f64 * inv_m - miss
+            } else {
+                scratch.csum[pathway_idx] / nr - miss
+            };
+            let bottom = if nr == 0.0 {
+                top - inv_m
+            } else {
+                top - adj / nr
+            };
+            if top > scratch.max_p[pathway_idx] {
+                scratch.max_p[pathway_idx] = top;
+            }
+            if bottom < scratch.min_p[pathway_idx] {
+                scratch.min_p[pathway_idx] = bottom;
+            }
+        }
+    }
+
+    match score_type {
+        ScoreType::Std => {
+            for pathway_idx in 0..n_pathways {
+                let rand_es = if scratch.max_p[pathway_idx] == -scratch.min_p[pathway_idx] {
+                    0.0
+                } else if scratch.max_p[pathway_idx] > -scratch.min_p[pathway_idx] {
+                    scratch.max_p[pathway_idx]
+                } else {
+                    scratch.min_p[pathway_idx]
+                };
+                update_decor_null_count(
+                    &mut counts[pathway_idx],
+                    rand_es,
+                    observed_es[pathway_idx],
+                );
+            }
+        }
+        ScoreType::Pos => {
+            for pathway_idx in 0..n_pathways {
+                update_decor_null_count(
+                    &mut counts[pathway_idx],
+                    scratch.max_p[pathway_idx],
+                    observed_es[pathway_idx],
+                );
+            }
+        }
+        ScoreType::Neg => {
+            for pathway_idx in 0..n_pathways {
+                update_decor_null_count(
+                    &mut counts[pathway_idx],
+                    scratch.min_p[pathway_idx],
+                    observed_es[pathway_idx],
+                );
+            }
+        }
+    }
+}
+
+#[inline]
+fn update_decor_null_count(count: &mut DecorNullCounts, rand_es: f64, observed_es: f64) {
+    if rand_es <= observed_es {
+        count.n_le_es += 1;
+    }
+    if rand_es >= observed_es {
+        count.n_ge_es += 1;
+    }
+    if rand_es <= 0.0 {
+        count.n_le_zero += 1;
+        count.le_zero_sum += rand_es;
+    }
+    if rand_es >= 0.0 {
+        count.n_ge_zero += 1;
+        count.ge_zero_sum += rand_es;
+    }
 }
 
 pub fn file_sha256(path: &Path) -> Result<String> {
@@ -809,26 +1050,7 @@ fn run_decor_simple_internal(
     let (_abs_weights, scaled_scores, _ns_total) = ranks.prepare(gsea_param);
     let simple_stats: Vec<f64> = scaled_scores.iter().map(|&v| v as f64).collect();
 
-    struct Working {
-        pathway_name: String,
-        size: usize,
-        hits: Vec<usize>,
-        penalty: Vec<f64>,
-        es: f64,
-        peak_idx: usize,
-        n_le_es: usize,
-        n_ge_es: usize,
-        n_le_zero: usize,
-        n_ge_zero: usize,
-        le_zero_sum: f64,
-        ge_zero_sum: f64,
-        nes: Option<f64>,
-        p_value: f64,
-        padj: Option<f64>,
-        log2err: Option<f64>,
-    }
-
-    let mut work: Vec<Working> = pathways
+    let mut work: Vec<DecorWorking> = pathways
         .par_iter()
         .map(|pw| {
             let (hits, redundancy) = extract_decor_hits(pw, &gene_to_idx, cache);
@@ -840,8 +1062,8 @@ fn run_decor_simple_internal(
                 .map(|r| 1.0 / (1.0 + alpha * r))
                 .collect();
             let (es, peak_idx) =
-                calculate_es_decor(&simple_stats, &hits, &penalty, n_total, score_type)?;
-            Ok(Some(Working {
+                calculate_es_decor_prechecked(&simple_stats, &hits, &penalty, n_total, score_type);
+            Ok(Some(DecorWorking {
                 pathway_name: pw.name.clone(),
                 size: hits.len(),
                 hits,
@@ -866,31 +1088,74 @@ fn run_decor_simple_internal(
         .collect();
 
     if n_perm > 0 && !work.is_empty() {
-        let mut rng = RLecuyerCmrgSeedCompat::from_r_set_seed(seed as u32);
-        for _ in 0..n_perm {
-            for w in &mut work {
-                let mut selected =
-                    rng.sample_int_no_replace_with_kind(n_total, w.size, RSampleKind::Rejection);
-                for idx in &mut selected {
-                    *idx -= 1;
+        let simple_stats_abs: Vec<f64> = simple_stats.iter().map(|v| v.abs()).collect();
+        let mut size_groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (idx, w) in work.iter().enumerate() {
+            size_groups.entry(w.size).or_default().push(idx);
+        }
+        let runtime_groups = size_groups
+            .into_iter()
+            .map(|(size, indices)| DecorRuntimeSizeGroup::from_indices(size, indices, &work))
+            .collect::<Vec<_>>();
+
+        let grouped_counts = runtime_groups
+            .par_iter()
+            .enumerate()
+            .map(|(group_idx, group)| {
+                let n_pathways = group.work_indices.len();
+                let mut counts = vec![DecorNullCounts::default(); n_pathways];
+                let mut rng =
+                    RLecuyerCmrgSeedCompat::from_r_set_seed(decor_pathway_seed(seed, group.size));
+                let mut scratch = DecorBatchScratch::default();
+                for _ in 0..n_perm {
+                    let mut selected = rng.sample_int_no_replace_with_kind(
+                        n_total,
+                        group.size,
+                        RSampleKind::Rejection,
+                    );
+                    for idx in &mut selected {
+                        *idx -= 1;
+                    }
+                    selected.sort_unstable();
+                    if group.use_batched {
+                        update_decor_batched_counts(
+                            &simple_stats_abs,
+                            &selected,
+                            &group.penalties_rank_major,
+                            &group.observed_es,
+                            n_total,
+                            score_type,
+                            &mut counts,
+                            &mut scratch,
+                        );
+                    } else {
+                        for (count, work_idx) in counts.iter_mut().zip(group.work_indices.iter()) {
+                            let w = &work[*work_idx];
+                            let (rand_es, _) = calculate_es_decor_prechecked(
+                                &simple_stats,
+                                &selected,
+                                &w.penalty,
+                                n_total,
+                                score_type,
+                            );
+                            update_decor_null_count(count, rand_es, w.es);
+                        }
+                    }
                 }
-                selected.sort_unstable();
-                let (rand_es, _) =
-                    calculate_es_decor(&simple_stats, &selected, &w.penalty, n_total, score_type)?;
-                if rand_es <= w.es {
-                    w.n_le_es += 1;
-                }
-                if rand_es >= w.es {
-                    w.n_ge_es += 1;
-                }
-                if rand_es <= 0.0 {
-                    w.n_le_zero += 1;
-                    w.le_zero_sum += rand_es;
-                }
-                if rand_es >= 0.0 {
-                    w.n_ge_zero += 1;
-                    w.ge_zero_sum += rand_es;
-                }
+                (group_idx, counts)
+            })
+            .collect::<Vec<_>>();
+
+        for (group_idx, counts) in grouped_counts {
+            let group = &runtime_groups[group_idx];
+            for (&work_idx, counts) in group.work_indices.iter().zip(counts) {
+                let w = &mut work[work_idx];
+                w.n_le_es = counts.n_le_es;
+                w.n_ge_es = counts.n_ge_es;
+                w.n_le_zero = counts.n_le_zero;
+                w.n_ge_zero = counts.n_ge_zero;
+                w.le_zero_sum = counts.le_zero_sum;
+                w.ge_zero_sum = counts.ge_zero_sum;
             }
         }
     }
@@ -1022,6 +1287,230 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert!(err.contains("length mismatch"));
+    }
+
+    fn scalar_counts_for_selected(
+        stats: &[f64],
+        selected: &[usize],
+        penalties: &[Vec<f64>],
+        observed_es: &[f64],
+        score_type: ScoreType,
+    ) -> Vec<DecorNullCounts> {
+        let mut expected = vec![DecorNullCounts::default(); penalties.len()];
+        for (i, penalty) in penalties.iter().enumerate() {
+            let (rand_es, _) =
+                calculate_es_decor_prechecked(stats, selected, penalty, stats.len(), score_type);
+            update_decor_null_count(&mut expected[i], rand_es, observed_es[i]);
+        }
+        expected
+    }
+
+    fn rank_major_penalties(penalties: &[Vec<f64>]) -> Vec<f64> {
+        let size = penalties[0].len();
+        let mut out = Vec::with_capacity(size * penalties.len());
+        for rank_idx in 0..size {
+            for penalty in penalties {
+                out.push(penalty[rank_idx]);
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn decor_batched_counts_match_scalar_es_updates_for_all_score_types() {
+        let stats = vec![4.0, 3.0, 2.0, -1.0, -2.0, -3.0];
+        let stats_abs = stats.iter().map(|v: &f64| v.abs()).collect::<Vec<_>>();
+        let selected = vec![0, 2, 5];
+        let penalties = [vec![1.0, 0.5, 1.0], vec![0.2, 1.0, 0.8]];
+        let observed_es = vec![0.4, -0.1];
+        let penalties_rank_major = rank_major_penalties(&penalties);
+
+        for score_type in [ScoreType::Std, ScoreType::Pos, ScoreType::Neg] {
+            let mut counts = vec![DecorNullCounts::default(); 2];
+            let mut scratch = DecorBatchScratch::default();
+            update_decor_batched_counts(
+                &stats_abs,
+                &selected,
+                &penalties_rank_major,
+                &observed_es,
+                stats.len(),
+                score_type,
+                &mut counts,
+                &mut scratch,
+            );
+            let expected =
+                scalar_counts_for_selected(&stats, &selected, &penalties, &observed_es, score_type);
+            assert_eq!(counts, expected);
+        }
+    }
+
+    #[test]
+    fn decor_runtime_size_group_forces_batched_layout_at_threshold() {
+        let stats = vec![4.0, 3.0, 2.0, 1.0, -1.0, -2.0];
+        let hits = vec![0, 2, 5];
+        let work = (0..DECOR_BATCH_MIN_GROUP_PATHWAYS)
+            .map(|i| {
+                let penalty = vec![1.0 / (1.0 + i as f64 * 0.01), 0.8, 0.6 + i as f64 * 0.001];
+                let (es, peak_idx) = calculate_es_decor_prechecked(
+                    &stats,
+                    &hits,
+                    &penalty,
+                    stats.len(),
+                    ScoreType::Std,
+                );
+                DecorWorking {
+                    pathway_name: format!("PW_{i}"),
+                    size: hits.len(),
+                    hits: hits.clone(),
+                    penalty,
+                    es,
+                    peak_idx,
+                    n_le_es: 0,
+                    n_ge_es: 0,
+                    n_le_zero: 0,
+                    n_ge_zero: 0,
+                    le_zero_sum: 0.0,
+                    ge_zero_sum: 0.0,
+                    nes: None,
+                    p_value: f64::NAN,
+                    padj: None,
+                    log2err: None,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let indices = (0..work.len()).collect::<Vec<_>>();
+        let group = DecorRuntimeSizeGroup::from_indices(hits.len(), indices, &work);
+        assert!(group.use_batched);
+        assert_eq!(
+            group.penalties_rank_major.len(),
+            hits.len() * DECOR_BATCH_MIN_GROUP_PATHWAYS
+        );
+        for rank_idx in 0..hits.len() {
+            for (work_idx, w) in work.iter().enumerate().take(DECOR_BATCH_MIN_GROUP_PATHWAYS) {
+                assert_eq!(
+                    group.penalties_rank_major
+                        [rank_idx * DECOR_BATCH_MIN_GROUP_PATHWAYS + work_idx],
+                    w.penalty[rank_idx]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn decor_grouped_null_matches_scalar_reference_for_mixed_sizes() {
+        let stats = vec![5.0, 4.0, 3.0, 2.0, -1.0, -2.0, -3.0];
+        let stats_abs = stats.iter().map(|v: &f64| v.abs()).collect::<Vec<_>>();
+        let selected_by_size = BTreeMap::from([
+            (2usize, vec![0usize, 5usize]),
+            (3usize, vec![0usize, 3usize, 6usize]),
+        ]);
+        let mut work = vec![
+            test_working("PW2_A", &stats, vec![0, 2], vec![1.0, 0.7]),
+            test_working("PW3_A", &stats, vec![0, 3, 6], vec![1.0, 0.8, 0.6]),
+            test_working("PW2_B", &stats, vec![1, 5], vec![0.5, 1.0]),
+            test_working("PW3_B", &stats, vec![2, 4, 6], vec![0.9, 0.4, 1.0]),
+        ];
+
+        let mut size_groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (idx, w) in work.iter().enumerate() {
+            size_groups.entry(w.size).or_default().push(idx);
+        }
+        let runtime_groups = size_groups
+            .into_iter()
+            .map(|(size, indices)| DecorRuntimeSizeGroup::from_indices(size, indices, &work))
+            .collect::<Vec<_>>();
+        for group in &runtime_groups {
+            let selected = selected_by_size.get(&group.size).unwrap();
+            let mut counts = vec![DecorNullCounts::default(); group.work_indices.len()];
+            if group.use_batched {
+                let mut scratch = DecorBatchScratch::default();
+                update_decor_batched_counts(
+                    &stats_abs,
+                    selected,
+                    &group.penalties_rank_major,
+                    &group.observed_es,
+                    stats.len(),
+                    ScoreType::Std,
+                    &mut counts,
+                    &mut scratch,
+                );
+            } else {
+                for (count, work_idx) in counts.iter_mut().zip(group.work_indices.iter()) {
+                    let w = &work[*work_idx];
+                    let (rand_es, _) = calculate_es_decor_prechecked(
+                        &stats,
+                        selected,
+                        &w.penalty,
+                        stats.len(),
+                        ScoreType::Std,
+                    );
+                    update_decor_null_count(count, rand_es, w.es);
+                }
+            }
+
+            for (&work_idx, count) in group.work_indices.iter().zip(counts) {
+                let w = &mut work[work_idx];
+                w.n_le_es += count.n_le_es;
+                w.n_ge_es += count.n_ge_es;
+                w.n_le_zero += count.n_le_zero;
+                w.n_ge_zero += count.n_ge_zero;
+                w.le_zero_sum += count.le_zero_sum;
+                w.ge_zero_sum += count.ge_zero_sum;
+            }
+        }
+
+        for w in &work {
+            let selected = selected_by_size.get(&w.size).unwrap();
+            let expected = scalar_counts_for_selected(
+                &stats,
+                selected,
+                std::slice::from_ref(&w.penalty),
+                &[w.es],
+                ScoreType::Std,
+            );
+            assert_eq!(
+                DecorNullCounts {
+                    n_le_es: w.n_le_es,
+                    n_ge_es: w.n_ge_es,
+                    n_le_zero: w.n_le_zero,
+                    n_ge_zero: w.n_ge_zero,
+                    le_zero_sum: w.le_zero_sum,
+                    ge_zero_sum: w.ge_zero_sum,
+                },
+                expected[0],
+                "{}",
+                w.pathway_name
+            );
+        }
+    }
+
+    fn test_working(
+        pathway_name: &str,
+        stats: &[f64],
+        hits: Vec<usize>,
+        penalty: Vec<f64>,
+    ) -> DecorWorking {
+        let (es, peak_idx) =
+            calculate_es_decor_prechecked(stats, &hits, &penalty, stats.len(), ScoreType::Std);
+        DecorWorking {
+            pathway_name: pathway_name.to_string(),
+            size: hits.len(),
+            hits,
+            penalty,
+            es,
+            peak_idx,
+            n_le_es: 0,
+            n_ge_es: 0,
+            n_le_zero: 0,
+            n_ge_zero: 0,
+            le_zero_sum: 0.0,
+            ge_zero_sum: 0.0,
+            nes: None,
+            p_value: f64::NAN,
+            padj: None,
+            log2err: None,
+        }
     }
 
     #[test]

@@ -169,6 +169,50 @@ fn synthetic_decor_simple_snapshot_preserves_conditional_null_parity() {
     );
 }
 
+fn synthetic_decor_output_with_threads(thread_count: &str) -> String {
+    let dir = tempdir().unwrap();
+    let output = dir.path().join("decor.tsv");
+    let cache = dir.path().join("decor-cache.tsv");
+
+    cli_bin()
+        .env("RAYON_NUM_THREADS", thread_count)
+        .args([
+            "--method",
+            "decor",
+            "--mode",
+            "simple",
+            "--nperm",
+            "128",
+            "--seed",
+            "20260322",
+            "--ranks",
+            "tests/data/decor_ranks.rnk",
+            "--gmt",
+            "tests/data/decor_pathways.gmt",
+            "--output",
+            output.to_str().unwrap(),
+            "--decor-cache",
+            cache.to_str().unwrap(),
+            "--decor-expression",
+            "tests/data/decor_expression.tsv",
+            "--minSize",
+            "1",
+            "--maxSize",
+            "10",
+        ])
+        .assert()
+        .success();
+
+    fs::read_to_string(output).unwrap().replace("\r\n", "\n")
+}
+
+#[test]
+fn synthetic_decor_simple_snapshot_is_thread_count_independent() {
+    let one_thread = synthetic_decor_output_with_threads("1");
+    let four_threads = synthetic_decor_output_with_threads("4");
+    assert_eq!(one_thread, four_threads);
+}
+
 #[test]
 fn decor_cli_rejects_multilevel() {
     let dir = tempdir().unwrap();
