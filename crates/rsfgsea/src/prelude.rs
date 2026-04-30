@@ -11,7 +11,12 @@ pub use crate::bindings::{
     ExecutionPlan, InterfaceMode, parse_interface_mode, resolve_execution_plan,
 };
 pub use crate::core::{
+    DecorCacheMode, DecorCorrelation, DecorOptions, DecorRedundancy, EnrichmentMethod,
     EnrichmentResult, EnrichmentResultExport, Pathway, PathwayDb, RankedList, ScoreType,
+};
+pub use crate::decor::{
+    DecorCache, DecorCacheMetadata, DecorCacheStatus, calculate_es_decor,
+    ensure_decor_cache_for_paths, fgsea_decor_simple_with_sample_size,
 };
 pub use crate::io::{read_gmt, read_ranked_list};
 pub use crate::plot::{

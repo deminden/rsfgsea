@@ -26,6 +26,47 @@ fn parse_sample_kind(sample_kind: &str) -> std::result::Result<RSampleKind, Stri
     }
 }
 
+fn parse_method(method: &str) -> std::result::Result<EnrichmentMethod, String> {
+    match method.to_lowercase().as_str() {
+        "classic" => Ok(EnrichmentMethod::Classic),
+        "decor" => Ok(EnrichmentMethod::Decor),
+        other => Err(format!(
+            "Invalid method '{other}'. Expected one of: classic, decor."
+        )),
+    }
+}
+
+fn parse_decor_cache_mode(mode: &str) -> std::result::Result<DecorCacheMode, String> {
+    match mode.to_lowercase().as_str() {
+        "auto" => Ok(DecorCacheMode::Auto),
+        "reuse" => Ok(DecorCacheMode::Reuse),
+        "rebuild" => Ok(DecorCacheMode::Rebuild),
+        other => Err(format!(
+            "Invalid decor.cache.mode '{other}'. Expected one of: auto, reuse, rebuild."
+        )),
+    }
+}
+
+fn parse_decor_correlation(correlation: &str) -> std::result::Result<DecorCorrelation, String> {
+    match correlation.to_lowercase().as_str() {
+        "pearson" => Ok(DecorCorrelation::Pearson),
+        "spearman" => Ok(DecorCorrelation::Spearman),
+        other => Err(format!(
+            "Invalid decor.correlation '{other}'. Expected one of: pearson, spearman."
+        )),
+    }
+}
+
+fn parse_decor_redundancy(redundancy: &str) -> std::result::Result<DecorRedundancy, String> {
+    match redundancy.to_lowercase().as_str() {
+        "positive_mean" => Ok(DecorRedundancy::PositiveMean),
+        "abs_mean" => Ok(DecorRedundancy::AbsMean),
+        other => Err(format!(
+            "Invalid decor.redundancy '{other}'. Expected one of: positive_mean, abs_mean."
+        )),
+    }
+}
+
 fn normalize_seed(seed: Nullable<i32>) -> std::result::Result<Option<u64>, String> {
     match seed.into_option() {
         Some(seed) if seed < 0 => Err("seed must be greater than or equal to 0.".to_string()),
@@ -304,6 +345,13 @@ fn fgsea_rust_impl(
     sample_size: i32,
     sample_kind: &str,
     gpu: bool,
+    method: &str,
+    decor_cache: Nullable<&str>,
+    decor_expression: Nullable<&str>,
+    decor_alpha: f64,
+    decor_cache_mode: &str,
+    decor_correlation: &str,
+    decor_redundancy: &str,
 ) -> std::result::Result<Robj, String> {
     if stats.len() != genes.len() {
         return Err("stats and gene names must have the same length.".to_string());
@@ -335,9 +383,65 @@ fn fgsea_rust_impl(
 
     let score_type = parse_score_type(score_type)?;
     let sample_kind = parse_sample_kind(sample_kind)?;
+    let method = parse_method(method)?;
     let seed = normalize_seed(seed)?;
     let mode = parse_interface_mode(mode).map_err(|err| err.to_string())?;
     let nperm = (nperm >= 0).then_some(nperm as usize);
+    if decor_alpha < 0.0 || !decor_alpha.is_finite() {
+        return Err("decor.alpha must be a finite numeric value >= 0.".to_string());
+    }
+    if method == EnrichmentMethod::Decor {
+        if gpu || mode == InterfaceMode::Multilevel || (mode == InterfaceMode::Fgsea && nperm.is_none()) {
+            return Err(
+                "decor currently supports CPU simple-mode null only; use mode = 'simple' or provide nperm without gpu."
+                    .to_string(),
+            );
+        }
+        let cache_path = decor_cache
+            .into_option()
+            .ok_or_else(|| "method = 'decor' requires decor.cache.".to_string())?;
+        let options = DecorOptions {
+            alpha: decor_alpha,
+            cache_path: Some(std::path::PathBuf::from(cache_path)),
+            expression_path: decor_expression
+                .into_option()
+                .map(std::path::PathBuf::from),
+            cache_mode: parse_decor_cache_mode(decor_cache_mode)?,
+            correlation: parse_decor_correlation(decor_correlation)?,
+            redundancy: parse_decor_redundancy(decor_redundancy)?,
+        };
+        let (cache, _) = ensure_decor_cache_for_paths(
+            &pathways.pathways,
+            std::path::Path::new(gmt_path),
+            &options,
+            true,
+        )
+        .map_err(|err| err.to_string())?;
+        let max_size = if max_size > 0 {
+            max_size as usize
+        } else {
+            ranks.len().saturating_sub(1)
+        };
+        let results = run_with_optional_thread_pool(nproc, || {
+            fgsea_decor_simple_with_sample_size(
+                &ranks,
+                &pathways.pathways,
+                &cache,
+                decor_alpha,
+                nperm.unwrap_or(n_perm_simple as usize),
+                seed,
+                min_size as usize,
+                max_size,
+                eps,
+                score_type,
+                gsea_param,
+                sample_size as usize,
+            )
+        })?
+        .map_err(|err| err.to_string())?;
+
+        return results_to_robj(results);
+    }
     let exec_mode =
         resolve_execution_plan(mode, gpu, nperm, n_perm_simple as usize).map_err(|e| e.to_string())?;
     let max_size = if max_size > 0 {
@@ -416,6 +520,10 @@ fn fgsea_rust_impl(
         })?,
     };
 
+    results_to_robj(results)
+}
+
+fn results_to_robj(results: Vec<EnrichmentResult>) -> std::result::Result<Robj, String> {
     let pathway: Vec<String> = results.iter().map(|row| row.pathway_name.clone()).collect();
     let size: Vec<i32> = results.iter().map(|row| row.size as i32).collect();
     let es: Vec<f64> = results.iter().map(|row| row.es).collect();
@@ -469,6 +577,13 @@ fn fgsea_rust(
     sample_size: i32,
     sample_kind: &str,
     gpu: bool,
+    method: &str,
+    decor_cache: Nullable<&str>,
+    decor_expression: Nullable<&str>,
+    decor_alpha: f64,
+    decor_cache_mode: &str,
+    decor_correlation: &str,
+    decor_redundancy: &str,
 ) -> Robj {
     match fgsea_rust_impl(
         stats,
@@ -487,6 +602,13 @@ fn fgsea_rust(
         sample_size,
         sample_kind,
         gpu,
+        method,
+        decor_cache,
+        decor_expression,
+        decor_alpha,
+        decor_cache_mode,
+        decor_correlation,
+        decor_redundancy,
     ) {
         Ok(obj) => obj,
         Err(err) => throw_r_error(err),

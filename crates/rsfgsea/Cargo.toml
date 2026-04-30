@@ -44,6 +44,7 @@ rand = "0.10.0"
 rand_chacha = "0.10.0"
 rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
+sha2 = "0.10.9"
 special = "0.13.0"
 statrs = "0.18.0"
 thiserror = "2.0.18"

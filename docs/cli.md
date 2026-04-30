@@ -69,6 +69,11 @@ GMT:
 
 ## Important Arguments
 
+`--method`
+
+- `classic`: default fgsea-compatible method
+- `decor`: experimental redundancy-aware method
+
 `--nPermSimple`
 
 - simple-stage permutation count
@@ -105,6 +110,17 @@ GMT:
 - enables the hybrid GPU path
 - currently only supported with `--mode fgsea`
 
+Decor options:
+
+- `--decor-cache`: path to the decor cache containing redundancy scores
+- `--decor-expression`: normalized tab-separated expression matrix used to build the cache
+- `--decor-alpha`: non-negative redundancy penalty strength, default `23`
+- `--decor-cache-mode`: `auto`, `reuse`, or `rebuild`
+- `--decor-correlation`: `pearson` or `spearman`; only Pearson is currently implemented
+- `--decor-redundancy`: `positive_mean` or `abs_mean`
+- `--decor-expression-format`: `auto` or `tsv`; CSV is parsed as an option but not implemented yet
+- `--decor-expression-has-header`: `true` or `false`, default `true`
+
 ## Typical Commands
 
 Wrapper mode:
@@ -136,6 +152,34 @@ Wrapper mode forced to simple:
   --mode fgsea \
   --nperm 10000 \
   --output results.tsv
+```
+
+Experimental decor first run:
+
+```bash
+rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.decor.tsv \
+  --method decor \
+  --mode simple \
+  --nperm 10000 \
+  --decor-cache cache/pathways.decor.tsv \
+  --decor-expression data/expression.tsv \
+  --decor-alpha 23
+```
+
+Experimental decor reuse run:
+
+```bash
+rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.decor.tsv \
+  --method decor \
+  --mode simple \
+  --nperm 10000 \
+  --decor-cache cache/pathways.decor.tsv
 ```
 
 Hybrid GPU mode:
@@ -181,6 +225,9 @@ The CLI writes a TSV with these columns:
 - `leading_edge`
 
 `leading_edge` is written as a comma-separated gene list.
+
+For decor runs, `es`, `nes`, `pval`, `padj`, `log2err`, and `leading_edge`
+refer to the decor statistic and its conditional redundancy-profile null.
 
 ## GPU Notes
 

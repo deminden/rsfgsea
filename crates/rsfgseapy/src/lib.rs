@@ -3,6 +3,7 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use rsfgsea::prelude::*;
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 fn parse_score_type(score_type: &str) -> PyResult<ScoreType> {
     match score_type.to_lowercase().as_str() {
@@ -16,10 +17,55 @@ fn parse_score_type(score_type: &str) -> PyResult<ScoreType> {
     }
 }
 
+fn parse_method(method: &str) -> PyResult<EnrichmentMethod> {
+    match method.to_lowercase().as_str() {
+        "classic" => Ok(EnrichmentMethod::Classic),
+        "decor" => Ok(EnrichmentMethod::Decor),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid method '{}'. Expected one of: classic, decor.",
+            other
+        ))),
+    }
+}
+
+fn parse_decor_cache_mode(mode: &str) -> PyResult<DecorCacheMode> {
+    match mode.to_lowercase().as_str() {
+        "auto" => Ok(DecorCacheMode::Auto),
+        "reuse" => Ok(DecorCacheMode::Reuse),
+        "rebuild" => Ok(DecorCacheMode::Rebuild),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid decor_cache_mode '{}'. Expected one of: auto, reuse, rebuild.",
+            other
+        ))),
+    }
+}
+
+fn parse_decor_correlation(correlation: &str) -> PyResult<DecorCorrelation> {
+    match correlation.to_lowercase().as_str() {
+        "pearson" => Ok(DecorCorrelation::Pearson),
+        "spearman" => Ok(DecorCorrelation::Spearman),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid decor_correlation '{}'. Expected one of: pearson, spearman.",
+            other
+        ))),
+    }
+}
+
+fn parse_decor_redundancy(redundancy: &str) -> PyResult<DecorRedundancy> {
+    match redundancy.to_lowercase().as_str() {
+        "positive_mean" => Ok(DecorRedundancy::PositiveMean),
+        "abs_mean" => Ok(DecorRedundancy::AbsMean),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid decor_redundancy '{}'. Expected one of: positive_mean, abs_mean.",
+            other
+        ))),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false, method="classic", decor_cache=None, decor_expression=None, decor_alpha=23.0, decor_cache_mode="auto", decor_correlation="pearson", decor_redundancy="positive_mean"))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
@@ -36,6 +82,13 @@ fn run_gsea_py(
     nperm: Option<usize>,
     sampleSize: usize,
     gpu: bool,
+    method: &str,
+    decor_cache: Option<String>,
+    decor_expression: Option<String>,
+    decor_alpha: f64,
+    decor_cache_mode: &str,
+    decor_correlation: &str,
+    decor_redundancy: &str,
 ) -> PyResult<Vec<HashMap<String, Py<PyAny>>>> {
     if sampleSize == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -61,7 +114,62 @@ fn run_gsea_py(
         read_gmt(&gmt_path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     let st = parse_score_type(scoreType)?;
+    let method = parse_method(method)?;
     let mode = parse_interface_mode(mode).map_err(pyo3::exceptions::PyValueError::new_err)?;
+    if decor_alpha < 0.0 || !decor_alpha.is_finite() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "decor_alpha must be >= 0.",
+        ));
+    }
+    if method == EnrichmentMethod::Decor {
+        if gpu
+            || mode == InterfaceMode::Multilevel
+            || (mode == InterfaceMode::Fgsea && nperm.is_none())
+        {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "decor currently supports CPU simple-mode null only; use mode='simple' or provide nperm without gpu.",
+            ));
+        }
+        let cache_path = decor_cache.ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("method='decor' requires decor_cache.")
+        })?;
+        let options = DecorOptions {
+            alpha: decor_alpha,
+            cache_path: Some(PathBuf::from(cache_path)),
+            expression_path: decor_expression.map(PathBuf::from),
+            cache_mode: parse_decor_cache_mode(decor_cache_mode)?,
+            correlation: parse_decor_correlation(decor_correlation)?,
+            redundancy: parse_decor_redundancy(decor_redundancy)?,
+        };
+        let (cache, _) = ensure_decor_cache_for_paths(
+            &pd.pathways,
+            PathBuf::from(&gmt_path).as_path(),
+            &options,
+            true,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let max_size = maxSize.unwrap_or_else(|| rs_ranks.len().saturating_sub(1));
+        let results = fgsea_decor_simple_with_sample_size(
+            &rs_ranks,
+            &pd.pathways,
+            &cache,
+            decor_alpha,
+            nperm.unwrap_or(nPermSimple),
+            seed,
+            minSize,
+            max_size,
+            eps,
+            st,
+            gseaParam,
+            sampleSize,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        return results_to_py(py, results);
+    } else if decor_cache.is_some() || decor_expression.is_some() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "decor arguments require method='decor'.",
+        ));
+    }
     let exec_mode = if gpu {
         #[cfg(not(feature = "gpu"))]
         {
@@ -145,6 +253,13 @@ fn run_gsea_py(
         }
     };
 
+    results_to_py(py, results)
+}
+
+fn results_to_py(
+    py: Python<'_>,
+    results: Vec<EnrichmentResult>,
+) -> PyResult<Vec<HashMap<String, Py<PyAny>>>> {
     let mut py_results = Vec::new();
     for res in results {
         let export = res.export();

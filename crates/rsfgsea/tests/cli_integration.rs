@@ -58,6 +58,146 @@ fn cli_simple_mode_writes_results() {
 }
 
 #[test]
+fn decor_cli_builds_cache_then_reuses_it() {
+    let dir = tempdir().unwrap();
+    let ranks = "tests/data/decor_ranks.rnk";
+    let gmt = "tests/data/decor_pathways.gmt";
+    let expression = "tests/data/decor_expression.tsv";
+    let cache = dir.path().join("decor-cache.tsv");
+    let output = dir.path().join("decor.tsv");
+
+    cli_bin()
+        .args([
+            "--method",
+            "decor",
+            "--mode",
+            "simple",
+            "--nperm",
+            "100",
+            "--seed",
+            "42",
+            "--ranks",
+            ranks,
+            "--gmt",
+            gmt,
+            "--output",
+            output.to_str().unwrap(),
+            "--decor-cache",
+            cache.to_str().unwrap(),
+            "--decor-expression",
+            expression,
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Decor cache built"));
+
+    assert!(cache.exists());
+    let first = fs::read_to_string(&output).unwrap();
+    assert!(first.contains("PW_REDUNDANT"));
+
+    cli_bin()
+        .args([
+            "--method",
+            "decor",
+            "--mode",
+            "simple",
+            "--nperm",
+            "100",
+            "--seed",
+            "42",
+            "--ranks",
+            ranks,
+            "--gmt",
+            gmt,
+            "--output",
+            output.to_str().unwrap(),
+            "--decor-cache",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Reusing compatible decor cache"));
+}
+
+fn assert_tsv_snapshot(actual_path: &std::path::Path, expected_path: &str) {
+    let actual = fs::read_to_string(actual_path)
+        .unwrap()
+        .replace("\r\n", "\n");
+    let expected = fs::read_to_string(expected_path)
+        .unwrap()
+        .replace("\r\n", "\n");
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn synthetic_decor_simple_snapshot_preserves_conditional_null_parity() {
+    let dir = tempdir().unwrap();
+    let output = dir.path().join("decor.tsv");
+    let cache = dir.path().join("decor-cache.tsv");
+
+    cli_bin()
+        .args([
+            "--method",
+            "decor",
+            "--mode",
+            "simple",
+            "--nperm",
+            "128",
+            "--seed",
+            "20260322",
+            "--ranks",
+            "tests/data/decor_ranks.rnk",
+            "--gmt",
+            "tests/data/decor_pathways.gmt",
+            "--output",
+            output.to_str().unwrap(),
+            "--decor-cache",
+            cache.to_str().unwrap(),
+            "--decor-expression",
+            "tests/data/decor_expression.tsv",
+            "--minSize",
+            "1",
+            "--maxSize",
+            "10",
+        ])
+        .assert()
+        .success();
+
+    assert_tsv_snapshot(
+        &output,
+        "tests/data/synthetic_decor_simple_seed20260322_nperm128_alpha23.expected.tsv",
+    );
+}
+
+#[test]
+fn decor_cli_rejects_multilevel() {
+    let dir = tempdir().unwrap();
+    let output = dir.path().join("decor.tsv");
+    let cache = dir.path().join("decor-cache.tsv");
+
+    cli_bin()
+        .args([
+            "--method",
+            "decor",
+            "--mode",
+            "multilevel",
+            "--ranks",
+            "tests/data/decor_ranks.rnk",
+            "--gmt",
+            "tests/data/decor_pathways.gmt",
+            "--output",
+            output.to_str().unwrap(),
+            "--decor-cache",
+            cache.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "decor currently supports CPU simple-mode null only",
+        ));
+}
+
+#[test]
 fn cli_gpu_rejects_non_fgsea_mode_before_adapter_init() {
     let (_dir, ranks, gmt, output) = write_test_inputs();
     let expected_stderr = if cfg!(feature = "gpu") {

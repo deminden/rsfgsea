@@ -7,6 +7,7 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 - **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
 - **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on current large 1-worker comparison workloads, `rsfgsea` is about **3.0x faster** in simple mode and **4.1x faster** in multilevel mode than R `fgsea`.
 - **Built-In Plotting**: Writes single-pathway enrichment plots and multi-pathway GSEA table plots as PNG directly from Rust, CLI, Python, and R.
+- **rsfgsea-decor (Experimental)**: Adds an optional redundancy-aware method that downweights pathway genes with high expression-derived within-pathway correlation. Classic fgsea-compatible mode remains the default.
 - **Hybrid CPU/GPU Engine (Experimental)**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 
 ## Usage

@@ -31,6 +31,21 @@ fn benchmark_es(c: &mut Criterion) {
             )
         })
     });
+
+    let penalty: Vec<f64> = (0..k)
+        .map(|i| 1.0 / (1.0 + 0.5 * (i as f64 / k as f64)))
+        .collect();
+    c.bench_function("calculate_es_decor_10k_100", |b| {
+        b.iter(|| {
+            calculate_es_decor(
+                black_box(&abs_scores),
+                black_box(&hits),
+                black_box(&penalty),
+                black_box(n),
+                black_box(ScoreType::Std),
+            )
+        })
+    });
 }
 
 fn synthetic_workload(

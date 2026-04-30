@@ -76,6 +76,42 @@ struct Args {
     #[arg(long, value_enum, default_value_t = CliMode::Fgsea)]
     mode: CliMode,
 
+    /// Enrichment method: classic fgsea-compatible statistics or decor
+    #[arg(long, value_enum, default_value_t = MethodArg::Classic)]
+    method: MethodArg,
+
+    /// Path to the decor redundancy cache
+    #[arg(long = "decor-cache")]
+    decor_cache: Option<PathBuf>,
+
+    /// Path to a normalized expression matrix used to build the decor cache
+    #[arg(long = "decor-expression")]
+    decor_expression: Option<PathBuf>,
+
+    /// Decor redundancy penalty strength
+    #[arg(long = "decor-alpha", default_value_t = 23.0)]
+    decor_alpha: f64,
+
+    /// Decor cache handling mode
+    #[arg(long = "decor-cache-mode", value_enum, default_value_t = DecorCacheModeArg::Auto)]
+    decor_cache_mode: DecorCacheModeArg,
+
+    /// Decor expression correlation method
+    #[arg(long = "decor-correlation", value_enum, default_value_t = DecorCorrelationArg::Pearson)]
+    decor_correlation: DecorCorrelationArg,
+
+    /// Decor redundancy score definition
+    #[arg(long = "decor-redundancy", value_enum, default_value_t = DecorRedundancyArg::PositiveMean)]
+    decor_redundancy: DecorRedundancyArg,
+
+    /// Decor expression matrix format
+    #[arg(long = "decor-expression-format", value_enum, default_value_t = DecorExpressionFormatArg::Auto)]
+    decor_expression_format: DecorExpressionFormatArg,
+
+    /// Whether the decor expression matrix has a header row
+    #[arg(long = "decor-expression-has-header", default_value_t = true)]
+    decor_expression_has_header: bool,
+
     /// Number of workers (0 = default threadpool behavior)
     #[arg(long, default_value_t = 0)]
     nproc: usize,
@@ -90,6 +126,66 @@ enum CliMode {
     Fgsea,
     Multilevel,
     Simple,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum MethodArg {
+    Classic,
+    Decor,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorCacheModeArg {
+    Auto,
+    Reuse,
+    Rebuild,
+}
+
+impl From<DecorCacheModeArg> for DecorCacheMode {
+    fn from(value: DecorCacheModeArg) -> Self {
+        match value {
+            DecorCacheModeArg::Auto => DecorCacheMode::Auto,
+            DecorCacheModeArg::Reuse => DecorCacheMode::Reuse,
+            DecorCacheModeArg::Rebuild => DecorCacheMode::Rebuild,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorCorrelationArg {
+    Pearson,
+    Spearman,
+}
+
+impl From<DecorCorrelationArg> for DecorCorrelation {
+    fn from(value: DecorCorrelationArg) -> Self {
+        match value {
+            DecorCorrelationArg::Pearson => DecorCorrelation::Pearson,
+            DecorCorrelationArg::Spearman => DecorCorrelation::Spearman,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorRedundancyArg {
+    PositiveMean,
+    AbsMean,
+}
+
+impl From<DecorRedundancyArg> for DecorRedundancy {
+    fn from(value: DecorRedundancyArg) -> Self {
+        match value {
+            DecorRedundancyArg::PositiveMean => DecorRedundancy::PositiveMean,
+            DecorRedundancyArg::AbsMean => DecorRedundancy::AbsMean,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorExpressionFormatArg {
+    Auto,
+    Tsv,
+    Csv,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -139,6 +235,25 @@ fn main() -> Result<()> {
     if args.sample_size == 0 {
         bail!("--sampleSize must be greater than 0.");
     }
+    if args.decor_alpha < 0.0 || !args.decor_alpha.is_finite() {
+        bail!("decor alpha must be >= 0.");
+    }
+    if args.decor_expression_format == DecorExpressionFormatArg::Csv {
+        bail!("CSV decor expression format is not implemented yet; use tab-separated input.");
+    }
+    if args.method == MethodArg::Decor && args.gpu {
+        bail!(
+            "decor currently supports only CPU simple-mode null; use --mode simple or provide --nperm without --gpu."
+        );
+    }
+    if args.method == MethodArg::Decor
+        && (args.mode == CliMode::Multilevel
+            || (args.mode == CliMode::Fgsea && args.nperm.is_none()))
+    {
+        bail!(
+            "decor currently supports CPU simple-mode null only; use --mode simple or provide --nperm."
+        );
+    }
 
     if args.nproc > 0 {
         rayon::ThreadPoolBuilder::new()
@@ -155,7 +270,11 @@ fn main() -> Result<()> {
     println!("Loaded {} pathways.", pd.pathways.len());
 
     println!(
-        "Running mode={} (nPermSimple={}, nperm={:?})...",
+        "Running method={} mode={} (nPermSimple={}, nperm={:?})...",
+        match args.method {
+            MethodArg::Classic => "classic",
+            MethodArg::Decor => "decor",
+        },
         match args.mode {
             CliMode::Fgsea => "fgsea",
             CliMode::Multilevel => "multilevel",
@@ -172,7 +291,67 @@ fn main() -> Result<()> {
     let max_size = args
         .max_size
         .unwrap_or_else(|| ranks.len().saturating_sub(1));
-    let results = if args.gpu {
+    let results = if args.method == MethodArg::Decor {
+        let options = DecorOptions {
+            alpha: args.decor_alpha,
+            cache_path: args.decor_cache.clone(),
+            expression_path: args.decor_expression.clone(),
+            cache_mode: args.decor_cache_mode.into(),
+            correlation: args.decor_correlation.into(),
+            redundancy: args.decor_redundancy.into(),
+        };
+        let cache_path = options
+            .cache_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("method decor requires --decor-cache"))?;
+        if cache_path.exists() {
+            println!("Checking decor cache: {}", cache_path.display());
+        } else {
+            println!("Decor cache not found: {}", cache_path.display());
+        }
+        if let Some(expression_path) = &options.expression_path {
+            println!("Decor expression: {}", expression_path.display());
+        }
+        let (cache, status) = ensure_decor_cache_for_paths(
+            &pd.pathways,
+            &args.gmt,
+            &options,
+            args.decor_expression_has_header,
+        )?;
+        match status {
+            DecorCacheStatus::Reused => {
+                println!("Reusing compatible decor cache: {}", cache_path.display());
+            }
+            DecorCacheStatus::Built => {
+                println!(
+                    "Decor cache built: {} pathways, {} pathway-gene scores",
+                    cache.metadata.n_pathways, cache.metadata.n_rows
+                );
+            }
+            DecorCacheStatus::Rebuilt => {
+                println!(
+                    "Decor cache rebuilt: {} pathways, {} pathway-gene scores",
+                    cache.metadata.n_pathways, cache.metadata.n_rows
+                );
+            }
+        }
+        println!("Decor alpha={}", args.decor_alpha);
+        println!("Decor null=conditional_redundancy_profile");
+        fgsea_decor_simple_with_sample_size(
+            &ranks,
+            &pd.pathways,
+            &cache,
+            args.decor_alpha,
+            args.nperm.unwrap_or(args.n_perm_simple),
+            Some(seed),
+            args.min_size,
+            max_size,
+            args.eps,
+            score_type,
+            args.gsea_param,
+            args.sample_size,
+        )?
+    } else if args.gpu {
         run_gpu_mode(&args, &ranks, &pd.pathways, score_type, max_size, seed)?
     } else {
         match args.mode {
@@ -321,6 +500,15 @@ mod tests {
             score_type: ScoreTypeArg::Std,
             gsea_param: 1.0,
             mode: CliMode::Fgsea,
+            method: MethodArg::Classic,
+            decor_cache: None,
+            decor_expression: None,
+            decor_alpha: 23.0,
+            decor_cache_mode: DecorCacheModeArg::Auto,
+            decor_correlation: DecorCorrelationArg::Pearson,
+            decor_redundancy: DecorRedundancyArg::PositiveMean,
+            decor_expression_format: DecorExpressionFormatArg::Auto,
+            decor_expression_has_header: true,
             nproc: 0,
             gpu: true,
         }

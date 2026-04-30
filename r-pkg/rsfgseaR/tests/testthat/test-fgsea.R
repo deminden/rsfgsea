@@ -116,6 +116,59 @@ test_that("fgsea enforces CLI-equivalent option rules", {
   )
 })
 
+test_that("fgsea validates decor arguments", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+
+  expect_error(
+    rsfgseaR::fgsea(pathways = pathways, stats = stats, method = "decor", mode = "simple", nperm = 50L),
+    "requires decor.cache"
+  )
+  expect_error(
+    rsfgseaR::fgsea(pathways = pathways, stats = stats, method = "decor", mode = "multilevel", decor.cache = tempfile()),
+    "decor currently supports CPU simple-mode null only"
+  )
+})
+
+test_that("decor alpha zero matches classic observed ES", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  expr_path <- tempfile(fileext = ".tsv")
+  cache_path <- tempfile(fileext = ".decor.tsv")
+  writeLines(
+    c(
+      "gene\ts1\ts2\ts3\ts4",
+      "g1\t1\t2\t3\t4",
+      "g2\t1.1\t2.1\t3.1\t4.1",
+      "g3\t4\t3\t2\t1",
+      "g4\t2\t1\t2\t1"
+    ),
+    expr_path
+  )
+
+  classic <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    mode = "simple",
+    nperm = 50L,
+    seed = 42L
+  )
+  decor <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    method = "decor",
+    mode = "simple",
+    nperm = 50L,
+    seed = 42L,
+    decor.cache = cache_path,
+    decor.expression = expr_path,
+    decor.alpha = 0
+  )
+
+  merged <- merge(classic, decor, by = "pathway", suffixes = c("_classic", "_decor"))
+  expect_equal(merged$es_classic, merged$es_decor, tolerance = 1e-12)
+})
+
 test_that("fgsea validates named numeric stats", {
   expect_error(
     rsfgseaR::fgsea(pathways = list(PW = c("g1")), stats = c(1, 2)),

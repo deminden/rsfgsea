@@ -18,6 +18,13 @@ fgsea(
   mode = "fgsea",
   nperm = NULL,
   sampleSize = 101L,
+  method = "classic",
+  decor.cache = NULL,
+  decor.expression = NULL,
+  decor.alpha = 23,
+  decor.cache.mode = "auto",
+  decor.correlation = "pearson",
+  decor.redundancy = "positive_mean",
   output = NULL,
   gpu = FALSE
 )
@@ -48,6 +55,24 @@ fgsea(
 \item{nperm}{Optional fixed-permutation override for wrapper mode.}
 
 \item{sampleSize}{Multilevel sample size.}
+
+\item{method}{One of \code{"classic"} or \code{"decor"}. The default preserves the
+fgsea-compatible classic method.}
+
+\item{decor.cache}{Path to a decor redundancy cache.}
+
+\item{decor.expression}{Optional normalized expression matrix used to build
+or rebuild the decor cache.}
+
+\item{decor.alpha}{Non-negative decor redundancy penalty strength.}
+
+\item{decor.cache.mode}{One of \code{"auto"}, \code{"reuse"}, \code{"rebuild"}.}
+
+\item{decor.correlation}{Correlation method for decor cache building. Only
+\code{"pearson"} is currently implemented.}
+
+\item{decor.redundancy}{Redundancy score definition, \code{"positive_mean"} or
+\code{"abs_mean"}.}
 
 \item{output}{Optional TSV output path. When set, results are also written in
 the same column shape as the CLI.}

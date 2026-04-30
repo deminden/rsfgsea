@@ -57,6 +57,43 @@ Key parameter:
 
 This is the multilevel sampling parameter and should stay aligned across comparisons if you care about parity.
 
+## rsfgsea-decor
+
+`rsfgsea-decor` is a decorrelation-inspired, redundancy-aware variant of preranked GSEA. It downweights pathway genes that are redundant with other genes in the same pathway, based on expression-derived correlations.
+
+Classic mode uses:
+
+```text
+w_i = |stat_i|^gseaParam
+```
+
+Decor mode uses:
+
+```text
+w_i_decor = |stat_i|^gseaParam / (1 + alpha * r_i)
+```
+
+The first cache implementation computes `r_i` from the genes in each pathway that are present in the expression matrix. For `positive_mean`:
+
+```text
+r_i = mean(max(corr(i, j), 0)) over pathway genes j != i
+```
+
+For `abs_mean`, the absolute correlation is averaged instead. Gene identifiers are matched verbatim between ranks, GMT, and expression rows.
+
+The decor cache stores derived redundancy scores, not the full pairwise correlation matrix. The transparent TSV cache includes metadata such as GMT SHA256, expression SHA256, correlation method, redundancy method, expression matrix assumptions, and row counts. `alpha` is not part of cache compatibility because it is applied at runtime.
+
+Decor p-values use a conditional redundancy-profile null. For each pathway, observed ES uses each hit gene's own redundancy score. Each simple-mode null sample draws a random gene set of the same size, sorts sampled hit positions by rank, and applies the same ordered redundancy profile from the observed pathway. This conditions on the pathway's redundancy burden/profile while testing ranked-position enrichment.
+
+Limitations in the first implementation:
+
+- decor is experimental
+- only CPU fixed-permutation simple mode is supported
+- multilevel and GPU decor are rejected
+- Pearson expression correlation is implemented; Spearman is reserved
+- decor does not perform covariance whitening and does not fully decorrelate expression
+- decor does not implement cameraPR or CorrSEA
+
 ## Score Types
 
 `std`

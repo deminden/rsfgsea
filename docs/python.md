@@ -38,6 +38,13 @@ Important options:
 - `scoreType="std" | "pos" | "neg"`
 - `gseaParam=1.0`
 - `nproc=0`
+- `method="classic" | "decor"`
+- `decor_cache=None`
+- `decor_expression=None`
+- `decor_alpha=23.0`
+- `decor_cache_mode="auto" | "reuse" | "rebuild"`
+- `decor_correlation="pearson"`
+- `decor_redundancy="positive_mean" | "abs_mean"`
 
 ## Minimal Example
 
@@ -86,6 +93,27 @@ results = rsfgseapy.run_gsea_py(
 for row in results:
     print(row["pathway"], row["nes"], row["pval"])
 ```
+
+## Experimental Decor Example
+
+Decor currently supports CPU simple-mode nulls only.
+
+```python
+import rsfgseapy
+
+res = rsfgseapy.run_gsea_py(
+    ranks={"TP53": 3.1, "MYC": 2.8, "ACTB": -1.2},
+    gmt_path="data/pathways.gmt",
+    method="decor",
+    mode="simple",
+    nperm=10000,
+    decor_cache="cache/pathways.decor.tsv",
+    decor_expression="data/expression.tsv",
+    decor_alpha=23.0,
+)
+```
+
+The expression matrix is tab-separated with genes in rows and samples in columns. Values should already be normalized or transformed as appropriate for correlation analysis.
 
 ## `nPermSimple` vs `nperm`
 

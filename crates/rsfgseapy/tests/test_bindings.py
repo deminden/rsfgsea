@@ -11,6 +11,19 @@ def write_gmt(tmp_path: Path) -> Path:
     return gmt_path
 
 
+def write_expression(tmp_path: Path) -> Path:
+    expression_path = tmp_path / "expression.tsv"
+    expression_path.write_text(
+        "gene\ts1\ts2\ts3\ts4\n"
+        "g1\t1\t2\t3\t4\n"
+        "g2\t1.1\t2.1\t3.1\t4.1\n"
+        "g3\t4\t3\t2\t1\n"
+        "g4\t2\t1\t2\t1\n",
+        encoding="utf-8",
+    )
+    return expression_path
+
+
 def test_cpu_simple_mode_runs(tmp_path: Path) -> None:
     gmt_path = write_gmt(tmp_path)
     ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
@@ -37,6 +50,56 @@ def test_invalid_mode_raises_value_error(tmp_path: Path) -> None:
             gmt_path=str(gmt_path),
             mode="bogus",
         )
+
+
+def test_default_method_remains_classic(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    results = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        mode="simple",
+        nPermSimple=50,
+        nperm=50,
+    )
+
+    assert len(results) == 2
+
+
+def test_decor_requires_cache(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    with pytest.raises(ValueError, match="requires decor_cache"):
+        rsfgseapy.run_gsea_py(
+            ranks=ranks,
+            gmt_path=str(gmt_path),
+            method="decor",
+            mode="simple",
+            nperm=50,
+        )
+
+
+def test_decor_builds_cache_from_expression(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    expression_path = write_expression(tmp_path)
+    cache_path = tmp_path / "decor-cache.tsv"
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    results = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        method="decor",
+        mode="simple",
+        nperm=50,
+        seed=42,
+        decor_cache=str(cache_path),
+        decor_expression=str(expression_path),
+    )
+
+    assert cache_path.exists()
+    assert len(results) == 2
 
 
 def test_gpu_requires_gpu_feature_when_not_built(tmp_path: Path) -> None:

@@ -2,6 +2,7 @@ pub mod algo;
 mod algo_support;
 pub mod bindings;
 pub mod core;
+pub mod decor;
 mod esruler_compat;
 mod fastgsea_compat;
 #[cfg(feature = "gpu")]

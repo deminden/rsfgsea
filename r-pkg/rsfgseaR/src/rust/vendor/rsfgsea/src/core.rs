@@ -1,10 +1,46 @@
 use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub enum ScoreType {
     Std,
     Pos,
     Neg,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum EnrichmentMethod {
+    Classic,
+    Decor,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DecorOptions {
+    pub alpha: f64,
+    pub cache_path: Option<PathBuf>,
+    pub expression_path: Option<PathBuf>,
+    pub cache_mode: DecorCacheMode,
+    pub correlation: DecorCorrelation,
+    pub redundancy: DecorRedundancy,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DecorCacheMode {
+    Auto,
+    Reuse,
+    Rebuild,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DecorCorrelation {
+    Pearson,
+    Spearman,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub enum DecorRedundancy {
+    PositiveMean,
+    AbsMean,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -411,6 +411,17 @@ plotGseaTable <- function(
 #' @param mode One of `"fgsea"`, `"simple"`, `"multilevel"`.
 #' @param nperm Optional fixed-permutation override for wrapper mode.
 #' @param sampleSize Multilevel sample size.
+#' @param method One of `"classic"` or `"decor"`. The default preserves the
+#'   fgsea-compatible classic method.
+#' @param decor.cache Path to a decor redundancy cache.
+#' @param decor.expression Optional normalized expression matrix used to build
+#'   or rebuild the decor cache.
+#' @param decor.alpha Non-negative decor redundancy penalty strength.
+#' @param decor.cache.mode One of `"auto"`, `"reuse"`, `"rebuild"`.
+#' @param decor.correlation Correlation method for decor cache building. Only
+#'   `"pearson"` is currently implemented.
+#' @param decor.redundancy Redundancy score definition, `"positive_mean"` or
+#'   `"abs_mean"`.
 #' @param output Optional TSV output path. When set, results are also written in
 #'   the same column shape as the CLI.
 #' @param gpu Logical flag mirroring the CLI `--gpu` switch. Uses the same
@@ -432,6 +443,13 @@ fgsea <- function(
   mode = "fgsea",
   nperm = NULL,
   sampleSize = 101L,
+  method = "classic",
+  decor.cache = NULL,
+  decor.expression = NULL,
+  decor.alpha = 23.0,
+  decor.cache.mode = "auto",
+  decor.correlation = "pearson",
+  decor.redundancy = "positive_mean",
   output = NULL,
   gpu = FALSE
 ) {
@@ -457,6 +475,19 @@ fgsea <- function(
   }
   .validate_choice(mode, "mode", c("fgsea", "simple", "multilevel"))
   .validate_choice(scoreType, "scoreType", c("std", "pos", "neg"))
+  .validate_choice(method, "method", c("classic", "decor"))
+  .validate_choice(decor.cache.mode, "decor.cache.mode", c("auto", "reuse", "rebuild"))
+  .validate_choice(decor.correlation, "decor.correlation", c("pearson", "spearman"))
+  .validate_choice(decor.redundancy, "decor.redundancy", c("positive_mean", "abs_mean"))
+  if (!is.numeric(decor.alpha) || length(decor.alpha) != 1L || !is.finite(decor.alpha) || decor.alpha < 0) {
+    stop("decor.alpha must be a single finite numeric value >= 0.", call. = FALSE)
+  }
+  if (!is.null(decor.cache) && (!is.character(decor.cache) || length(decor.cache) != 1L || identical(decor.cache, ""))) {
+    stop("decor.cache must be NULL or a single file path.", call. = FALSE)
+  }
+  if (!is.null(decor.expression) && (!is.character(decor.expression) || length(decor.expression) != 1L || identical(decor.expression, ""))) {
+    stop("decor.expression must be NULL or a single file path.", call. = FALSE)
+  }
   if (!is.logical(gpu) || length(gpu) != 1L || is.na(gpu)) {
     stop("gpu must be TRUE or FALSE.", call. = FALSE)
   }
@@ -468,6 +499,19 @@ fgsea <- function(
   }
   if (gpu && tolower(mode) != "fgsea") {
     stop("gpu currently supports only mode = 'fgsea'.", call. = FALSE)
+  }
+  if (tolower(method) == "decor") {
+    if (is.null(decor.cache)) {
+      stop("method = 'decor' requires decor.cache.", call. = FALSE)
+    }
+    if (tolower(decor.correlation) == "spearman") {
+      stop("spearman decor correlation is not implemented yet.", call. = FALSE)
+    }
+    if (gpu || tolower(mode) == "multilevel" || (tolower(mode) == "fgsea" && is.null(nperm))) {
+      stop("decor currently supports CPU simple-mode null only; use mode = 'simple' or provide nperm without gpu.", call. = FALSE)
+    }
+  } else if (!is.null(decor.cache) || !is.null(decor.expression)) {
+    stop("decor arguments require method = 'decor'.", call. = FALSE)
   }
 
   pathways_info <- .normalize_pathways(pathways)
@@ -491,7 +535,14 @@ fgsea <- function(
     if (is.null(nperm)) -1L else as.integer(nperm),
     as.integer(sampleSize),
     .resolve_sample_kind(),
-    gpu
+    gpu,
+    method,
+    if (is.null(decor.cache)) NULL else decor.cache,
+    if (is.null(decor.expression)) NULL else decor.expression,
+    as.numeric(decor.alpha),
+    decor.cache.mode,
+    decor.correlation,
+    decor.redundancy
   )
 
   result_df <- .as_fgsea_df(result)
@@ -549,6 +600,7 @@ fgseaSimple <- function(
     mode = "simple",
     nperm = as.integer(nperm),
     sampleSize = sampleSize,
+    method = "classic",
     output = output,
     gpu = gpu
   )
