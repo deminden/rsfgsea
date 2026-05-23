@@ -72,7 +72,7 @@ GMT:
 `--method`
 
 - `classic`: default fgsea-compatible method
-- `decor`: experimental redundancy-aware method
+- `decor`: redundancy-aware preranked GSEA method
 
 `--nPermSimple`
 
@@ -114,12 +114,22 @@ Decor options:
 
 - `--decor-cache`: path to the decor cache containing redundancy scores
 - `--decor-expression`: normalized tab-separated expression matrix used to build the cache
-- `--decor-alpha`: non-negative redundancy penalty strength, default `23`
+- `--decor-preset`: `sensitive`, `balanced`, `specific`, or `strict`; default `balanced`
+- `--decor-stringency`: optional numeric 0-100 convenience control that autoswitches calibrated presets
 - `--decor-cache-mode`: `auto`, `reuse`, or `rebuild`
-- `--decor-correlation`: `pearson` or `spearman`; only Pearson is currently implemented
-- `--decor-redundancy`: `positive_mean` or `abs_mean`
 - `--decor-expression-format`: `auto` or `tsv`; CSV is parsed as an option but not implemented yet
 - `--decor-expression-has-header`: `true` or `false`, default `true`
+
+Decor presets:
+
+- `sensitive`: raw-rational, `alpha=22`
+- `balanced`: threshold-rational, `tau=0.04`, `alpha=60`; the default held-out-validated balanced preset
+- `specific`: threshold-rational, `tau=0.05`, `alpha=65`
+- `strict`: exp-scaled, target median penalty `0.10`
+
+Stringency is a preset ladder, not a continuous formula interpolation: `0 <= x < 35` resolves to `sensitive`, `35 <= x < 65` to `balanced`, `65 <= x < 85` to `specific`, and `85 <= x <= 100` to `strict`.
+
+The CLI prints the resolved preset, formula, and parameters for reproducibility.
 
 ## Typical Commands
 
@@ -154,7 +164,21 @@ Wrapper mode forced to simple:
   --output results.tsv
 ```
 
-Experimental decor first run:
+Decor first run:
+
+```bash
+rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.decor.tsv \
+  --method decor \
+  --mode simple \
+  --nperm 10000 \
+  --decor-cache cache/pathways.decor.tsv \
+  --decor-expression data/expression.tsv
+```
+
+Decor with a selected preset:
 
 ```bash
 rsfgsea \
@@ -166,10 +190,25 @@ rsfgsea \
   --nperm 10000 \
   --decor-cache cache/pathways.decor.tsv \
   --decor-expression data/expression.tsv \
-  --decor-alpha 23
+  --decor-preset specific
 ```
 
-Experimental decor reuse run:
+Decor with easy stringency:
+
+```bash
+rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.decor.tsv \
+  --method decor \
+  --mode simple \
+  --nperm 10000 \
+  --decor-cache cache/pathways.decor.tsv \
+  --decor-expression data/expression.tsv \
+  --decor-stringency 75
+```
+
+Decor reuse run:
 
 ```bash
 rsfgsea \
@@ -227,7 +266,7 @@ The CLI writes a TSV with these columns:
 `leading_edge` is written as a comma-separated gene list.
 
 For decor runs, `es`, `nes`, `pval`, `padj`, `log2err`, and `leading_edge`
-refer to the decor statistic and its conditional redundancy-profile null.
+refer to the decor statistic.
 
 ## GPU Notes
 

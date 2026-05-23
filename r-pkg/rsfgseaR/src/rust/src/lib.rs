@@ -4,6 +4,7 @@ use extendr_api::prelude::*;
 use extendr_api::throw_r_error;
 use rayon::ThreadPoolBuilder;
 use rsfgsea::prelude::*;
+use std::str::FromStr;
 
 fn parse_score_type(score_type: &str) -> std::result::Result<ScoreType, String> {
     match score_type.to_lowercase().as_str() {
@@ -65,6 +66,10 @@ fn parse_decor_redundancy(redundancy: &str) -> std::result::Result<DecorRedundan
             "Invalid decor.redundancy '{other}'. Expected one of: positive_mean, abs_mean."
         )),
     }
+}
+
+fn parse_decor_weight_formula(formula: &str) -> std::result::Result<DecorWeightFormula, String> {
+    DecorWeightFormula::from_str(formula)
 }
 
 fn normalize_seed(seed: Nullable<i32>) -> std::result::Result<Option<u64>, String> {
@@ -247,7 +252,9 @@ fn write_gsea_table_plot(
             return Err("stats and gene names must have the same length.".to_string());
         }
         if pathway_names.len() != pathway_gene_lists.len() {
-            return Err("pathway_names and pathway_gene_lists must have the same length.".to_string());
+            return Err(
+                "pathway_names and pathway_gene_lists must have the same length.".to_string(),
+            );
         }
         if result_pathways.len() != result_nes.len()
             || result_pathways.len() != result_pval.len()
@@ -352,6 +359,11 @@ fn fgsea_rust_impl(
     decor_cache_mode: &str,
     decor_correlation: &str,
     decor_redundancy: &str,
+    decor_weight_formula: &str,
+    decor_threshold: f64,
+    decor_gamma: f64,
+    decor_penalty_floor: f64,
+    decor_scale_epsilon: f64,
 ) -> std::result::Result<Robj, String> {
     if stats.len() != genes.len() {
         return Err("stats and gene names must have the same length.".to_string());
@@ -390,10 +402,25 @@ fn fgsea_rust_impl(
     if decor_alpha < 0.0 || !decor_alpha.is_finite() {
         return Err("decor.alpha must be a finite numeric value >= 0.".to_string());
     }
+    if decor_gamma < 0.0 || !decor_gamma.is_finite() {
+        return Err("decor.gamma must be a finite numeric value >= 0.".to_string());
+    }
+    if !(0.0..1.0).contains(&decor_threshold) || !decor_threshold.is_finite() {
+        return Err("decor.threshold must be a finite numeric value >= 0 and < 1.".to_string());
+    }
+    if !(0.0..1.0).contains(&decor_penalty_floor) || !decor_penalty_floor.is_finite() {
+        return Err("decor.penalty.floor must be a finite numeric value >= 0 and < 1.".to_string());
+    }
+    if decor_scale_epsilon <= 0.0 || !decor_scale_epsilon.is_finite() {
+        return Err("decor.scale.epsilon must be a finite numeric value > 0.".to_string());
+    }
     if method == EnrichmentMethod::Decor {
-        if gpu || mode == InterfaceMode::Multilevel || (mode == InterfaceMode::Fgsea && nperm.is_none()) {
+        if gpu
+            || mode == InterfaceMode::Multilevel
+            || (mode == InterfaceMode::Fgsea && nperm.is_none())
+        {
             return Err(
-                "decor currently supports CPU simple-mode null only; use mode = 'simple' or provide nperm without gpu."
+                "decor supports CPU fixed-permutation simple runs; use mode = 'simple' or provide nperm without gpu."
                     .to_string(),
             );
         }
@@ -403,12 +430,16 @@ fn fgsea_rust_impl(
         let options = DecorOptions {
             alpha: decor_alpha,
             cache_path: Some(std::path::PathBuf::from(cache_path)),
-            expression_path: decor_expression
-                .into_option()
-                .map(std::path::PathBuf::from),
+            expression_path: decor_expression.into_option().map(std::path::PathBuf::from),
             cache_mode: parse_decor_cache_mode(decor_cache_mode)?,
             correlation: parse_decor_correlation(decor_correlation)?,
             redundancy: parse_decor_redundancy(decor_redundancy)?,
+            weight_formula: parse_decor_weight_formula(decor_weight_formula)?,
+            gamma: decor_gamma,
+            threshold_tau: decor_threshold,
+            penalty_floor: decor_penalty_floor,
+            scale_epsilon: decor_scale_epsilon,
+            ..DecorOptions::default()
         };
         let (cache, _) = ensure_decor_cache_for_paths(
             &pathways.pathways,
@@ -423,11 +454,11 @@ fn fgsea_rust_impl(
             ranks.len().saturating_sub(1)
         };
         let results = run_with_optional_thread_pool(nproc, || {
-            fgsea_decor_simple_with_sample_size(
+            fgsea_decor_simple_with_options(
                 &ranks,
                 &pathways.pathways,
                 &cache,
-                decor_alpha,
+                &options,
                 nperm.unwrap_or(n_perm_simple as usize),
                 seed,
                 min_size as usize,
@@ -442,8 +473,8 @@ fn fgsea_rust_impl(
 
         return results_to_robj(results);
     }
-    let exec_mode =
-        resolve_execution_plan(mode, gpu, nperm, n_perm_simple as usize).map_err(|e| e.to_string())?;
+    let exec_mode = resolve_execution_plan(mode, gpu, nperm, n_perm_simple as usize)
+        .map_err(|e| e.to_string())?;
     let max_size = if max_size > 0 {
         max_size as usize
     } else {
@@ -503,18 +534,18 @@ fn fgsea_rust_impl(
             ),
             ExecutionPlan::Cpu(InterfaceMode::Multilevel) => {
                 fgsea_multilevel_with_sample_size_and_kind(
-                &ranks,
-                &pathways.pathways,
-                n_perm_simple as usize,
-                seed,
-                min_size as usize,
-                max_size,
-                eps,
-                score_type,
-                gsea_param,
-                sample_size as usize,
-                sample_kind,
-            )
+                    &ranks,
+                    &pathways.pathways,
+                    n_perm_simple as usize,
+                    seed,
+                    min_size as usize,
+                    max_size,
+                    eps,
+                    score_type,
+                    gsea_param,
+                    sample_size as usize,
+                    sample_kind,
+                )
             }
             ExecutionPlan::Gpu { .. } => unreachable!(),
         })?,
@@ -584,6 +615,11 @@ fn fgsea_rust(
     decor_cache_mode: &str,
     decor_correlation: &str,
     decor_redundancy: &str,
+    decor_weight_formula: &str,
+    decor_threshold: f64,
+    decor_gamma: f64,
+    decor_penalty_floor: f64,
+    decor_scale_epsilon: f64,
 ) -> Robj {
     match fgsea_rust_impl(
         stats,
@@ -609,6 +645,11 @@ fn fgsea_rust(
         decor_cache_mode,
         decor_correlation,
         decor_redundancy,
+        decor_weight_formula,
+        decor_threshold,
+        decor_gamma,
+        decor_penalty_floor,
+        decor_scale_epsilon,
     ) {
         Ok(obj) => obj,
         Err(err) => throw_r_error(err),

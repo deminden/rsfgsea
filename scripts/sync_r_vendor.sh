@@ -7,10 +7,22 @@ package_src_root="$repo_root/r-pkg/rsfgseaR/src"
 rust_root="$package_src_root/rust"
 vendor_root="$rust_root/vendor/rsfgsea"
 vendor_tarball="$rust_root/vendor.tar.xz"
+python_bin="${PYTHON:-}"
 
 if [[ ! -d "$src_root" ]]; then
   echo "Source crate not found: $src_root" >&2
   exit 1
+fi
+
+if [[ -z "$python_bin" ]]; then
+  if command -v python3 >/dev/null 2>&1; then
+    python_bin="python3"
+  elif command -v python >/dev/null 2>&1; then
+    python_bin="python"
+  else
+    echo "Neither python3 nor python was found on PATH" >&2
+    exit 1
+  fi
 fi
 
 rm -rf "$vendor_root"
@@ -23,7 +35,7 @@ if [[ -d "$src_root/assets" ]]; then
   cp -r "$src_root/assets" "$vendor_root/assets"
 fi
 
-python - <<'PY'
+"$python_bin" - <<'PY'
 from pathlib import Path
 
 manifest_path = Path("r-pkg/rsfgseaR/src/rust/vendor/rsfgsea/Cargo.toml")

@@ -89,7 +89,11 @@ fn decor_cli_builds_cache_then_reuses_it() {
         ])
         .assert()
         .success()
-        .stdout(predicate::str::contains("Decor cache built"));
+        .stdout(predicate::str::contains("Decor cache built"))
+        .stdout(predicate::str::contains("Decor preset=balanced"))
+        .stdout(predicate::str::contains(
+            "weight_formula=threshold-rational, alpha=60, threshold_tau=0.04",
+        ));
 
     assert!(cache.exists());
     let first = fs::read_to_string(&output).unwrap();
@@ -119,6 +123,158 @@ fn decor_cli_builds_cache_then_reuses_it() {
         .stdout(predicate::str::contains("Reusing compatible decor cache"));
 }
 
+#[test]
+fn decor_cli_runs_selected_weight_formulas_on_tiny_fixture() {
+    for formula in ["raw-rational", "exp-scaled", "threshold-rational"] {
+        let dir = tempdir().unwrap();
+        let cache = dir.path().join("decor-cache.tsv");
+        let output = dir.path().join("decor.tsv");
+
+        cli_bin()
+            .args([
+                "--method",
+                "decor",
+                "--mode",
+                "simple",
+                "--nperm",
+                "32",
+                "--seed",
+                "42",
+                "--ranks",
+                "tests/data/decor_ranks.rnk",
+                "--gmt",
+                "tests/data/decor_pathways.gmt",
+                "--output",
+                output.to_str().unwrap(),
+                "--decor-cache",
+                cache.to_str().unwrap(),
+                "--decor-expression",
+                "tests/data/decor_expression.tsv",
+                "--decor-weight-formula",
+                formula,
+            ])
+            .assert()
+            .success()
+            .stdout(predicate::str::contains(format!(
+                "Decor effective preset: weight_formula={formula}"
+            )));
+
+        let content = fs::read_to_string(output).unwrap();
+        assert!(content.contains("PW_REDUNDANT"));
+    }
+}
+
+#[test]
+fn decor_cli_stringency_autoswitches_to_calibrated_preset() {
+    let dir = tempdir().unwrap();
+    let cache = dir.path().join("decor-cache.tsv");
+    let output = dir.path().join("decor.tsv");
+
+    cli_bin()
+        .args([
+            "--method",
+            "decor",
+            "--mode",
+            "simple",
+            "--nperm",
+            "32",
+            "--seed",
+            "42",
+            "--ranks",
+            "tests/data/decor_ranks.rnk",
+            "--gmt",
+            "tests/data/decor_pathways.gmt",
+            "--output",
+            output.to_str().unwrap(),
+            "--decor-cache",
+            cache.to_str().unwrap(),
+            "--decor-expression",
+            "tests/data/decor_expression.tsv",
+            "--decor-stringency",
+            "75",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(
+            "Decor stringency=75 resolved to preset=specific",
+        ))
+        .stdout(predicate::str::contains("Decor preset=specific"))
+        .stdout(predicate::str::contains(
+            "weight_formula=threshold-rational, alpha=65, threshold_tau=0.05",
+        ));
+
+    let content = fs::read_to_string(output).unwrap();
+    assert!(content.contains("PW_REDUNDANT"));
+}
+
+#[test]
+fn decor_cli_rejects_preset_and_stringency_together() {
+    let (_dir, ranks, gmt, output) = write_test_inputs();
+
+    cli_bin()
+        .args([
+            "--method",
+            "decor",
+            "--mode",
+            "simple",
+            "--nperm",
+            "32",
+            "--ranks",
+            ranks.to_str().unwrap(),
+            "--gmt",
+            gmt.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+            "--decor-cache",
+            "cache.tsv",
+            "--decor-preset",
+            "balanced",
+            "--decor-stringency",
+            "50",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "use either --decor-preset or --decor-stringency, not both",
+        ));
+}
+
+#[test]
+fn decor_cli_does_not_expose_null_selection() {
+    let dir = tempdir().unwrap();
+    let cache = dir.path().join("decor-cache.tsv");
+    let output = dir.path().join("decor.tsv");
+
+    cli_bin()
+        .args([
+            "--method",
+            "decor",
+            "--mode",
+            "simple",
+            "--nperm",
+            "32",
+            "--seed",
+            "42",
+            "--ranks",
+            "tests/data/decor_ranks.rnk",
+            "--gmt",
+            "tests/data/decor_pathways.gmt",
+            "--output",
+            output.to_str().unwrap(),
+            "--decor-cache",
+            cache.to_str().unwrap(),
+            "--decor-expression",
+            "tests/data/decor_expression.tsv",
+            "--decor-null",
+            "profile",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "unexpected argument '--decor-null'",
+        ));
+}
+
 fn assert_tsv_snapshot(actual_path: &std::path::Path, expected_path: &str) {
     let actual = fs::read_to_string(actual_path)
         .unwrap()
@@ -130,7 +286,7 @@ fn assert_tsv_snapshot(actual_path: &std::path::Path, expected_path: &str) {
 }
 
 #[test]
-fn synthetic_decor_simple_snapshot_preserves_conditional_null_parity() {
+fn synthetic_decor_simple_snapshot_preserves_permutation_profile_parity() {
     let dir = tempdir().unwrap();
     let output = dir.path().join("decor.tsv");
     let cache = dir.path().join("decor-cache.tsv");
@@ -165,7 +321,7 @@ fn synthetic_decor_simple_snapshot_preserves_conditional_null_parity() {
 
     assert_tsv_snapshot(
         &output,
-        "tests/data/synthetic_decor_simple_seed20260322_nperm128_alpha23.expected.tsv",
+        "tests/data/synthetic_decor_simple_seed20260322_nperm128_balanced.expected.tsv",
     );
 }
 
@@ -237,7 +393,7 @@ fn decor_cli_rejects_multilevel() {
         .assert()
         .failure()
         .stderr(predicate::str::contains(
-            "decor currently supports CPU simple-mode null only",
+            "decor supports CPU fixed-permutation simple runs",
         ));
 }
 

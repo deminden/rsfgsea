@@ -4,6 +4,7 @@ use pyo3::types::PyAny;
 use rsfgsea::prelude::*;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::str::FromStr;
 
 fn parse_score_type(score_type: &str) -> PyResult<ScoreType> {
     match score_type.to_lowercase().as_str() {
@@ -62,10 +63,36 @@ fn parse_decor_redundancy(redundancy: &str) -> PyResult<DecorRedundancy> {
     }
 }
 
+fn parse_decor_preset(preset: &str) -> PyResult<DecorPreset> {
+    DecorPreset::from_str(preset).map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+fn apply_decor_release_tuning(
+    options: &mut DecorOptions,
+    decor_preset: Option<&str>,
+    decor_stringency: Option<f64>,
+) -> PyResult<()> {
+    if decor_preset.is_some() && decor_stringency.is_some() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Use either decor_preset or decor_stringency, not both.",
+        ));
+    }
+
+    if let Some(stringency) = decor_stringency {
+        options
+            .apply_stringency(stringency)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    } else {
+        options.apply_preset(parse_decor_preset(decor_preset.unwrap_or("balanced"))?);
+    }
+
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false, method="classic", decor_cache=None, decor_expression=None, decor_alpha=23.0, decor_cache_mode="auto", decor_correlation="pearson", decor_redundancy="positive_mean"))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false, method="classic", decor_cache=None, decor_expression=None, decor_preset=None, decor_stringency=None, decor_cache_mode="auto", decor_correlation="pearson", decor_redundancy="positive_mean"))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
@@ -85,7 +112,8 @@ fn run_gsea_py(
     method: &str,
     decor_cache: Option<String>,
     decor_expression: Option<String>,
-    decor_alpha: f64,
+    decor_preset: Option<&str>,
+    decor_stringency: Option<f64>,
     decor_cache_mode: &str,
     decor_correlation: &str,
     decor_redundancy: &str,
@@ -116,31 +144,25 @@ fn run_gsea_py(
     let st = parse_score_type(scoreType)?;
     let method = parse_method(method)?;
     let mode = parse_interface_mode(mode).map_err(pyo3::exceptions::PyValueError::new_err)?;
-    if decor_alpha < 0.0 || !decor_alpha.is_finite() {
-        return Err(pyo3::exceptions::PyValueError::new_err(
-            "decor_alpha must be >= 0.",
-        ));
-    }
     if method == EnrichmentMethod::Decor {
         if gpu
             || mode == InterfaceMode::Multilevel
             || (mode == InterfaceMode::Fgsea && nperm.is_none())
         {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "decor currently supports CPU simple-mode null only; use mode='simple' or provide nperm without gpu.",
+                "decor supports CPU fixed-permutation simple runs; use mode='simple' or provide nperm without gpu.",
             ));
         }
         let cache_path = decor_cache.ok_or_else(|| {
             pyo3::exceptions::PyValueError::new_err("method='decor' requires decor_cache.")
         })?;
-        let options = DecorOptions {
-            alpha: decor_alpha,
-            cache_path: Some(PathBuf::from(cache_path)),
-            expression_path: decor_expression.map(PathBuf::from),
-            cache_mode: parse_decor_cache_mode(decor_cache_mode)?,
-            correlation: parse_decor_correlation(decor_correlation)?,
-            redundancy: parse_decor_redundancy(decor_redundancy)?,
-        };
+        let mut options = DecorOptions::default();
+        apply_decor_release_tuning(&mut options, decor_preset, decor_stringency)?;
+        options.cache_path = Some(PathBuf::from(cache_path));
+        options.expression_path = decor_expression.map(PathBuf::from);
+        options.cache_mode = parse_decor_cache_mode(decor_cache_mode)?;
+        options.correlation = parse_decor_correlation(decor_correlation)?;
+        options.redundancy = parse_decor_redundancy(decor_redundancy)?;
         let (cache, _) = ensure_decor_cache_for_paths(
             &pd.pathways,
             PathBuf::from(&gmt_path).as_path(),
@@ -149,11 +171,11 @@ fn run_gsea_py(
         )
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         let max_size = maxSize.unwrap_or_else(|| rs_ranks.len().saturating_sub(1));
-        let results = fgsea_decor_simple_with_sample_size(
+        let results = fgsea_decor_simple_with_options(
             &rs_ranks,
             &pd.pathways,
             &cache,
-            decor_alpha,
+            &options,
             nperm.unwrap_or(nPermSimple),
             seed,
             minSize,

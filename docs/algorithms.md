@@ -67,7 +67,7 @@ Classic mode uses:
 w_i = |stat_i|^gseaParam
 ```
 
-Decor mode uses:
+The sensitive decor preset uses the `raw-rational` formula:
 
 ```text
 w_i_decor = |stat_i|^gseaParam / (1 + alpha * r_i)
@@ -83,11 +83,33 @@ For `abs_mean`, the absolute correlation is averaged instead. Gene identifiers a
 
 The decor cache stores derived redundancy scores, not the full pairwise correlation matrix. The transparent TSV cache includes metadata such as GMT SHA256, expression SHA256, correlation method, redundancy method, expression matrix assumptions, and row counts. `alpha` is not part of cache compatibility because it is applied at runtime.
 
-Decor p-values use a conditional redundancy-profile null. For each pathway, observed ES uses each hit gene's own redundancy score. Each simple-mode null sample draws a random gene set of the same size, sorts sampled hit positions by rank, and applies the same ordered redundancy profile from the observed pathway. This conditions on the pathway's redundancy burden/profile while testing ranked-position enrichment.
+For each pathway, observed decor ES uses each hit gene's own redundancy score. Each simple-mode permutation draws a random gene set of the same size, sorts sampled hit positions by rank, and applies the same ordered redundancy profile from the observed pathway. This keeps the pathway's redundancy burden fixed while testing ranked-position enrichment.
+
+The base hit weight is always:
+
+```text
+b_i = |stat_i|^gseaParam
+```
+
+The selected preset converts raw redundancy `r_i` to a non-negative penalty:
+
+- `raw-rational`: `1 / (1 + alpha * r)`
+- `exp-scaled`: `exp(-alpha * r_scaled)` with median scaling
+- `threshold-rational`: `1 / (1 + alpha * max(0, r - tau))`
+
+The public presets are:
+
+- `sensitive`: `raw-rational`, `alpha=22`
+- `balanced`: `threshold-rational`, `tau=0.04`, `alpha=60`
+- `specific`: `threshold-rational`, `tau=0.05`, `alpha=65`
+- `strict`: `exp-scaled`, target median penalty `0.10`
+
+For users who want a single high-level knob, `decor-stringency` maps onto this same calibrated preset ladder: `0 <= x < 35` selects `sensitive`, `35 <= x < 65` selects `balanced`, `65 <= x < 85` selects `specific`, and `85 <= x <= 100` selects `strict`. It autoswitches formula families by preset rather than interpolating unvalidated formula parameters.
+
+Because GSEA hit increments are normalized by total hit weight, a uniform multiplicative penalty across all hits in one pathway cancels out in the observed ES walk. Presets mainly affect ES through relative differences among genes within a pathway. Pathway-wide redundancy burden is handled by the decor permutation calibration rather than by expecting uniform scaling to change observed ES.
 
 Limitations in the first implementation:
 
-- decor is experimental
 - only CPU fixed-permutation simple mode is supported
 - multilevel and GPU decor are rejected
 - Pearson expression correlation is implemented; Spearman is reserved

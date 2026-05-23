@@ -41,7 +41,8 @@ Important options:
 - `method="classic" | "decor"`
 - `decor_cache=None`
 - `decor_expression=None`
-- `decor_alpha=23.0`
+- `decor_preset=None` (defaults to `balanced`)
+- `decor_stringency=None`
 - `decor_cache_mode="auto" | "reuse" | "rebuild"`
 - `decor_correlation="pearson"`
 - `decor_redundancy="positive_mean" | "abs_mean"`
@@ -94,9 +95,9 @@ for row in results:
     print(row["pathway"], row["nes"], row["pval"])
 ```
 
-## Experimental Decor Example
+## Decor Example
 
-Decor currently supports CPU simple-mode nulls only.
+Decor supports CPU fixed-permutation simple runs.
 
 ```python
 import rsfgseapy
@@ -109,11 +110,42 @@ res = rsfgseapy.run_gsea_py(
     nperm=10000,
     decor_cache="cache/pathways.decor.tsv",
     decor_expression="data/expression.tsv",
-    decor_alpha=23.0,
+)
+```
+
+Use a named preset to change the specificity/sensitivity tradeoff:
+
+```python
+res = rsfgseapy.run_gsea_py(
+    ranks={"TP53": 3.1, "MYC": 2.8, "ACTB": -1.2},
+    gmt_path="data/pathways.gmt",
+    method="decor",
+    mode="simple",
+    nperm=10000,
+    decor_cache="cache/pathways.decor.tsv",
+    decor_expression="data/expression.tsv",
+    decor_preset="specific",
+)
+```
+
+Or use the high-level stringency ladder when you want one easy knob:
+
+```python
+res = rsfgseapy.run_gsea_py(
+    ranks={"TP53": 3.1, "MYC": 2.8, "ACTB": -1.2},
+    gmt_path="data/pathways.gmt",
+    method="decor",
+    mode="simple",
+    nperm=10000,
+    decor_cache="cache/pathways.decor.tsv",
+    decor_expression="data/expression.tsv",
+    decor_stringency=75,
 )
 ```
 
 The expression matrix is tab-separated with genes in rows and samples in columns. Values should already be normalized or transformed as appropriate for correlation analysis.
+
+Supported decor presets are `sensitive`, `balanced`, `specific`, and `strict`. The default `balanced` preset resolves to threshold-rational decor with `tau=0.04` and `alpha=60`. Stringency autoswitches calibrated presets: `0 <= x < 35` is `sensitive`, `35 <= x < 65` is `balanced`, `65 <= x < 85` is `specific`, and `85 <= x <= 100` is `strict`.
 
 ## `nPermSimple` vs `nperm`
 

@@ -126,11 +126,15 @@ test_that("fgsea validates decor arguments", {
   )
   expect_error(
     rsfgseaR::fgsea(pathways = pathways, stats = stats, method = "decor", mode = "multilevel", decor.cache = tempfile()),
-    "decor currently supports CPU simple-mode null only"
+    "decor supports CPU fixed-permutation simple runs"
+  )
+  expect_error(
+    rsfgseaR::fgsea(pathways = pathways, stats = stats, method = "decor", mode = "simple", nperm = 50L, decor.cache = tempfile(), decor.preset = "bogus"),
+    "decor.preset must be one of"
   )
 })
 
-test_that("decor alpha zero matches classic observed ES", {
+test_that("decor balanced preset builds cache and runs", {
   stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
   pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
   expr_path <- tempfile(fileext = ".tsv")
@@ -146,13 +150,6 @@ test_that("decor alpha zero matches classic observed ES", {
     expr_path
   )
 
-  classic <- rsfgseaR::fgsea(
-    pathways = pathways,
-    stats = stats,
-    mode = "simple",
-    nperm = 50L,
-    seed = 42L
-  )
   decor <- rsfgseaR::fgsea(
     pathways = pathways,
     stats = stats,
@@ -162,11 +159,121 @@ test_that("decor alpha zero matches classic observed ES", {
     seed = 42L,
     decor.cache = cache_path,
     decor.expression = expr_path,
-    decor.alpha = 0
+    decor.preset = "balanced"
   )
 
-  merged <- merge(classic, decor, by = "pathway", suffixes = c("_classic", "_decor"))
-  expect_equal(merged$es_classic, merged$es_decor, tolerance = 1e-12)
+  expect_true(file.exists(cache_path))
+  expect_equal(nrow(decor), 2L)
+})
+
+test_that("decor accepts named presets", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  expr_path <- tempfile(fileext = ".tsv")
+  writeLines(
+    c(
+      "gene\ts1\ts2\ts3\ts4",
+      "g1\t1\t2\t3\t4",
+      "g2\t1.1\t2.1\t3.1\t4.1",
+      "g3\t4\t3\t2\t1",
+      "g4\t2\t1\t2\t1"
+    ),
+    expr_path
+  )
+
+  for (preset in c("sensitive", "balanced", "specific", "strict")) {
+    decor <- rsfgseaR::fgsea(
+      pathways = pathways,
+      stats = stats,
+      method = "decor",
+      mode = "simple",
+      nperm = 25L,
+      seed = 42L,
+      decor.cache = tempfile(fileext = ".decor.tsv"),
+      decor.expression = expr_path,
+      decor.preset = preset
+    )
+    expect_equal(nrow(decor), 2L)
+  }
+})
+
+test_that("decor accepts stringency ladder", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  expr_path <- tempfile(fileext = ".tsv")
+  writeLines(
+    c(
+      "gene\ts1\ts2\ts3\ts4",
+      "g1\t1\t2\t3\t4",
+      "g2\t1.1\t2.1\t3.1\t4.1",
+      "g3\t4\t3\t2\t1",
+      "g4\t2\t1\t2\t1"
+    ),
+    expr_path
+  )
+
+  for (stringency in c(10, 50, 75, 95)) {
+    decor <- rsfgseaR::fgsea(
+      pathways = pathways,
+      stats = stats,
+      method = "decor",
+      mode = "simple",
+      nperm = 25L,
+      seed = 42L,
+      decor.cache = tempfile(fileext = ".decor.tsv"),
+      decor.expression = expr_path,
+      decor.stringency = stringency
+    )
+    expect_equal(nrow(decor), 2L)
+  }
+})
+
+test_that("decor rejects preset and stringency together", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+
+  expect_error(
+    rsfgseaR::fgsea(
+      pathways = pathways,
+      stats = stats,
+      method = "decor",
+      mode = "simple",
+      nperm = 25L,
+      decor.cache = tempfile(fileext = ".decor.tsv"),
+      decor.preset = "specific",
+      decor.stringency = 50
+    ),
+    "decor.preset or decor.stringency"
+  )
+})
+
+test_that("decor does not expose null selection", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  expr_path <- tempfile(fileext = ".tsv")
+  cache_path <- tempfile(fileext = ".decor.tsv")
+  writeLines(
+    c(
+      "gene\ts1\ts2\ts3\ts4",
+      "g1\t1\t2\t3\t4",
+      "g2\t1.1\t2.1\t3.1\t4.1",
+      "g3\t4\t3\t2\t1",
+      "g4\t2\t1\t2\t1"
+    ),
+    expr_path
+  )
+
+  expect_error(rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    method = "decor",
+    mode = "simple",
+    nperm = 25L,
+    seed = 42L,
+    decor.cache = cache_path,
+    decor.expression = expr_path,
+    decor.null = "profile"
+  ), "unused argument")
 })
 
 test_that("fgsea validates named numeric stats", {

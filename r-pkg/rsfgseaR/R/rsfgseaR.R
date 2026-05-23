@@ -69,6 +69,59 @@ NULL
   "Rounding"
 }
 
+.resolve_decor_preset <- function(preset) {
+  switch(tolower(preset),
+    sensitive = list(
+      alpha = 22.0,
+      weight.formula = "raw-rational",
+      threshold = 0.0,
+      gamma = 1.0,
+      penalty.floor = 0.0
+    ),
+    balanced = list(
+      alpha = 60.0,
+      weight.formula = "threshold-rational",
+      threshold = 0.04,
+      gamma = 1.0,
+      penalty.floor = 0.0
+    ),
+    specific = list(
+      alpha = 65.0,
+      weight.formula = "threshold-rational",
+      threshold = 0.05,
+      gamma = 1.0,
+      penalty.floor = 0.0
+    ),
+    strict = list(
+      alpha = -log(0.10),
+      weight.formula = "exp-scaled",
+      threshold = 0.0,
+      gamma = 1.0,
+      penalty.floor = 0.0
+    )
+  )
+}
+
+.resolve_decor_stringency <- function(stringency) {
+  if (length(stringency) != 1L || !is.numeric(stringency) || !is.finite(stringency) || stringency < 0 || stringency > 100) {
+    stop("decor.stringency must be a single finite numeric value from 0 to 100.", call. = FALSE)
+  }
+
+  preset <- if (stringency < 35) {
+    "sensitive"
+  } else if (stringency < 65) {
+    "balanced"
+  } else if (stringency < 85) {
+    "specific"
+  } else {
+    "strict"
+  }
+  resolved <- .resolve_decor_preset(preset)
+  resolved$preset <- preset
+  resolved$stringency <- stringency
+  resolved
+}
+
 .normalize_stats <- function(stats) {
   if (is.character(stats) && length(stats) == 1L) {
     if (!file.exists(stats)) {
@@ -416,7 +469,12 @@ plotGseaTable <- function(
 #' @param decor.cache Path to a decor redundancy cache.
 #' @param decor.expression Optional normalized expression matrix used to build
 #'   or rebuild the decor cache.
-#' @param decor.alpha Non-negative decor redundancy penalty strength.
+#' @param decor.preset Decor redundancy preset. `"balanced"` is the default
+#'   held-out-validated threshold preset. Other choices are `"sensitive"`,
+#'   `"specific"`, and `"strict"`.
+#' @param decor.stringency Optional numeric 0-100 convenience control. When set,
+#'   it autoswitches between the calibrated decor presets instead of exposing
+#'   formula-level controls.
 #' @param decor.cache.mode One of `"auto"`, `"reuse"`, `"rebuild"`.
 #' @param decor.correlation Correlation method for decor cache building. Only
 #'   `"pearson"` is currently implemented.
@@ -446,7 +504,8 @@ fgsea <- function(
   method = "classic",
   decor.cache = NULL,
   decor.expression = NULL,
-  decor.alpha = 23.0,
+  decor.preset = "balanced",
+  decor.stringency = NULL,
   decor.cache.mode = "auto",
   decor.correlation = "pearson",
   decor.redundancy = "positive_mean",
@@ -476,12 +535,13 @@ fgsea <- function(
   .validate_choice(mode, "mode", c("fgsea", "simple", "multilevel"))
   .validate_choice(scoreType, "scoreType", c("std", "pos", "neg"))
   .validate_choice(method, "method", c("classic", "decor"))
+  .validate_choice(decor.preset, "decor.preset", c("sensitive", "balanced", "specific", "strict"))
+  if (!is.null(decor.stringency) && tolower(decor.preset) != "balanced") {
+    stop("Use either decor.preset or decor.stringency, not both.", call. = FALSE)
+  }
   .validate_choice(decor.cache.mode, "decor.cache.mode", c("auto", "reuse", "rebuild"))
   .validate_choice(decor.correlation, "decor.correlation", c("pearson", "spearman"))
   .validate_choice(decor.redundancy, "decor.redundancy", c("positive_mean", "abs_mean"))
-  if (!is.numeric(decor.alpha) || length(decor.alpha) != 1L || !is.finite(decor.alpha) || decor.alpha < 0) {
-    stop("decor.alpha must be a single finite numeric value >= 0.", call. = FALSE)
-  }
   if (!is.null(decor.cache) && (!is.character(decor.cache) || length(decor.cache) != 1L || identical(decor.cache, ""))) {
     stop("decor.cache must be NULL or a single file path.", call. = FALSE)
   }
@@ -508,10 +568,15 @@ fgsea <- function(
       stop("spearman decor correlation is not implemented yet.", call. = FALSE)
     }
     if (gpu || tolower(mode) == "multilevel" || (tolower(mode) == "fgsea" && is.null(nperm))) {
-      stop("decor currently supports CPU simple-mode null only; use mode = 'simple' or provide nperm without gpu.", call. = FALSE)
+      stop("decor supports CPU fixed-permutation simple runs; use mode = 'simple' or provide nperm without gpu.", call. = FALSE)
     }
-  } else if (!is.null(decor.cache) || !is.null(decor.expression)) {
+  } else if (!is.null(decor.cache) || !is.null(decor.expression) || !is.null(decor.stringency) || tolower(decor.preset) != "balanced") {
     stop("decor arguments require method = 'decor'.", call. = FALSE)
+  }
+  decor.resolved <- if (is.null(decor.stringency)) {
+    .resolve_decor_preset(decor.preset)
+  } else {
+    .resolve_decor_stringency(decor.stringency)
   }
 
   pathways_info <- .normalize_pathways(pathways)
@@ -539,10 +604,15 @@ fgsea <- function(
     method,
     if (is.null(decor.cache)) NULL else decor.cache,
     if (is.null(decor.expression)) NULL else decor.expression,
-    as.numeric(decor.alpha),
+    as.numeric(decor.resolved$alpha),
     decor.cache.mode,
     decor.correlation,
-    decor.redundancy
+    decor.redundancy,
+    decor.resolved$weight.formula,
+    as.numeric(decor.resolved$threshold),
+    as.numeric(decor.resolved$gamma),
+    as.numeric(decor.resolved$penalty.floor),
+    1e-12
   )
 
   result_df <- .as_fgsea_df(result)

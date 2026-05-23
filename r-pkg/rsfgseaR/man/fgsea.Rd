@@ -21,7 +21,8 @@ fgsea(
   method = "classic",
   decor.cache = NULL,
   decor.expression = NULL,
-  decor.alpha = 23,
+  decor.preset = "balanced",
+  decor.stringency = NULL,
   decor.cache.mode = "auto",
   decor.correlation = "pearson",
   decor.redundancy = "positive_mean",
@@ -64,7 +65,13 @@ fgsea-compatible classic method.}
 \item{decor.expression}{Optional normalized expression matrix used to build
 or rebuild the decor cache.}
 
-\item{decor.alpha}{Non-negative decor redundancy penalty strength.}
+\item{decor.preset}{Decor redundancy preset. \code{"balanced"} is the default
+held-out-validated threshold preset. Other choices are \code{"sensitive"},
+\code{"specific"}, and \code{"strict"}.}
+
+\item{decor.stringency}{Optional numeric 0-100 convenience control. When set,
+it autoswitches between the calibrated decor presets instead of exposing
+formula-level controls.}
 
 \item{decor.cache.mode}{One of \code{"auto"}, \code{"reuse"}, \code{"rebuild"}.}
 

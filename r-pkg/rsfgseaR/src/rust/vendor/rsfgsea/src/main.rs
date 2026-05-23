@@ -88,21 +88,51 @@ struct Args {
     #[arg(long = "decor-expression")]
     decor_expression: Option<PathBuf>,
 
-    /// Decor redundancy penalty strength
-    #[arg(long = "decor-alpha", default_value_t = 23.0)]
-    decor_alpha: f64,
+    /// Decor preset: sensitive, balanced, specific, or strict. Defaults to balanced.
+    #[arg(long = "decor-preset", value_enum)]
+    decor_preset: Option<DecorPresetArg>,
+
+    /// Easy decor stringency control from 0 to 100; autoswitches calibrated presets.
+    #[arg(long = "decor-stringency")]
+    decor_stringency: Option<f64>,
+
+    /// Override decor redundancy penalty strength
+    #[arg(long = "decor-alpha", hide = true)]
+    decor_alpha: Option<f64>,
 
     /// Decor cache handling mode
     #[arg(long = "decor-cache-mode", value_enum, default_value_t = DecorCacheModeArg::Auto)]
     decor_cache_mode: DecorCacheModeArg,
 
     /// Decor expression correlation method
-    #[arg(long = "decor-correlation", value_enum, default_value_t = DecorCorrelationArg::Pearson)]
+    #[arg(
+        long = "decor-correlation",
+        value_enum,
+        default_value_t = DecorCorrelationArg::Pearson,
+        hide = true
+    )]
     decor_correlation: DecorCorrelationArg,
 
     /// Decor redundancy score definition
-    #[arg(long = "decor-redundancy", value_enum, default_value_t = DecorRedundancyArg::PositiveMean)]
+    #[arg(
+        long = "decor-redundancy",
+        value_enum,
+        default_value_t = DecorRedundancyArg::PositiveMean,
+        hide = true
+    )]
     decor_redundancy: DecorRedundancyArg,
+
+    /// Override decor hit-weight formula
+    #[arg(long = "decor-weight-formula", value_enum, hide = true)]
+    decor_weight_formula: Option<DecorWeightFormulaArg>,
+
+    /// Override threshold tau for threshold-rational decor weights
+    #[arg(long = "decor-threshold", hide = true)]
+    decor_threshold: Option<f64>,
+
+    /// Small positive epsilon for scaled decor formulas
+    #[arg(long = "decor-scale-epsilon", default_value_t = 1e-12, hide = true)]
+    decor_scale_epsilon: f64,
 
     /// Decor expression matrix format
     #[arg(long = "decor-expression-format", value_enum, default_value_t = DecorExpressionFormatArg::Auto)]
@@ -182,6 +212,42 @@ impl From<DecorRedundancyArg> for DecorRedundancy {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorPresetArg {
+    Sensitive,
+    Balanced,
+    Specific,
+    Strict,
+}
+
+impl From<DecorPresetArg> for DecorPreset {
+    fn from(value: DecorPresetArg) -> Self {
+        match value {
+            DecorPresetArg::Sensitive => DecorPreset::Sensitive,
+            DecorPresetArg::Balanced => DecorPreset::Balanced,
+            DecorPresetArg::Specific => DecorPreset::Specific,
+            DecorPresetArg::Strict => DecorPreset::Strict,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorWeightFormulaArg {
+    RawRational,
+    ExpScaled,
+    ThresholdRational,
+}
+
+impl From<DecorWeightFormulaArg> for DecorWeightFormula {
+    fn from(value: DecorWeightFormulaArg) -> Self {
+        match value {
+            DecorWeightFormulaArg::RawRational => DecorWeightFormula::RawRational,
+            DecorWeightFormulaArg::ExpScaled => DecorWeightFormula::ExpScaled,
+            DecorWeightFormulaArg::ThresholdRational => DecorWeightFormula::ThresholdRational,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum DecorExpressionFormatArg {
     Auto,
     Tsv,
@@ -235,15 +301,36 @@ fn main() -> Result<()> {
     if args.sample_size == 0 {
         bail!("--sampleSize must be greater than 0.");
     }
-    if args.decor_alpha < 0.0 || !args.decor_alpha.is_finite() {
+    if args
+        .decor_alpha
+        .is_some_and(|alpha| alpha < 0.0 || !alpha.is_finite())
+    {
         bail!("decor alpha must be >= 0.");
+    }
+    if args
+        .decor_threshold
+        .is_some_and(|threshold| !(0.0..1.0).contains(&threshold) || !threshold.is_finite())
+    {
+        bail!("decor threshold must be >= 0 and < 1.");
+    }
+    if args
+        .decor_stringency
+        .is_some_and(|stringency| !stringency.is_finite() || !(0.0..=100.0).contains(&stringency))
+    {
+        bail!("decor stringency must be a finite value from 0 to 100.");
+    }
+    if args.decor_preset.is_some() && args.decor_stringency.is_some() {
+        bail!("use either --decor-preset or --decor-stringency, not both.");
+    }
+    if args.decor_scale_epsilon <= 0.0 || !args.decor_scale_epsilon.is_finite() {
+        bail!("decor scale epsilon must be > 0.");
     }
     if args.decor_expression_format == DecorExpressionFormatArg::Csv {
         bail!("CSV decor expression format is not implemented yet; use tab-separated input.");
     }
     if args.method == MethodArg::Decor && args.gpu {
         bail!(
-            "decor currently supports only CPU simple-mode null; use --mode simple or provide --nperm without --gpu."
+            "decor supports CPU fixed-permutation simple runs; use --mode simple or provide --nperm without --gpu."
         );
     }
     if args.method == MethodArg::Decor
@@ -251,7 +338,7 @@ fn main() -> Result<()> {
             || (args.mode == CliMode::Fgsea && args.nperm.is_none()))
     {
         bail!(
-            "decor currently supports CPU simple-mode null only; use --mode simple or provide --nperm."
+            "decor supports CPU fixed-permutation simple runs; use --mode simple or provide --nperm."
         );
     }
 
@@ -292,14 +379,33 @@ fn main() -> Result<()> {
         .max_size
         .unwrap_or_else(|| ranks.len().saturating_sub(1));
     let results = if args.method == MethodArg::Decor {
-        let options = DecorOptions {
-            alpha: args.decor_alpha,
-            cache_path: args.decor_cache.clone(),
-            expression_path: args.decor_expression.clone(),
-            cache_mode: args.decor_cache_mode.into(),
-            correlation: args.decor_correlation.into(),
-            redundancy: args.decor_redundancy.into(),
+        let mut options = DecorOptions::default();
+        let stringency_resolved = args
+            .decor_stringency
+            .map(|stringency| options.apply_stringency(stringency))
+            .transpose()
+            .map_err(anyhow::Error::msg)?;
+        let resolved = if let Some(stringency_resolved) = stringency_resolved {
+            stringency_resolved.preset_resolution
+        } else {
+            options.apply_preset(args.decor_preset.unwrap_or(DecorPresetArg::Balanced).into())
         };
+        options.cache_path = args.decor_cache.clone();
+        options.expression_path = args.decor_expression.clone();
+        options.expression_has_header = args.decor_expression_has_header;
+        options.cache_mode = args.decor_cache_mode.into();
+        options.correlation = args.decor_correlation.into();
+        options.redundancy = args.decor_redundancy.into();
+        options.scale_epsilon = args.decor_scale_epsilon;
+        if let Some(formula) = args.decor_weight_formula {
+            options.weight_formula = formula.into();
+        }
+        if let Some(alpha) = args.decor_alpha {
+            options.alpha = alpha;
+        }
+        if let Some(threshold_tau) = args.decor_threshold {
+            options.threshold_tau = threshold_tau;
+        }
         let cache_path = options
             .cache_path
             .as_ref()
@@ -335,13 +441,31 @@ fn main() -> Result<()> {
                 );
             }
         }
-        println!("Decor alpha={}", args.decor_alpha);
-        println!("Decor null=conditional_redundancy_profile");
-        fgsea_decor_simple_with_sample_size(
+        if let Some(stringency_resolved) = stringency_resolved {
+            println!(
+                "Decor stringency={} resolved to preset={} ({})",
+                stringency_resolved.stringency,
+                stringency_resolved.preset_resolution.preset,
+                stringency_resolved.band
+            );
+        }
+        println!("Decor preset={}", resolved.preset);
+        println!(
+            "Decor resolved preset: weight_formula={}, alpha={}, threshold_tau={}",
+            resolved.weight_formula, resolved.alpha, resolved.threshold_tau
+        );
+        println!(
+            "Decor effective preset: weight_formula={}, alpha={}, threshold_tau={}",
+            options.weight_formula, options.alpha, options.threshold_tau
+        );
+        if let Some(target) = resolved.target_median_penalty {
+            println!("Decor target median penalty={target}");
+        }
+        fgsea_decor_simple_with_options(
             &ranks,
             &pd.pathways,
             &cache,
-            args.decor_alpha,
+            &options,
             args.nperm.unwrap_or(args.n_perm_simple),
             Some(seed),
             args.min_size,
@@ -503,10 +627,15 @@ mod tests {
             method: MethodArg::Classic,
             decor_cache: None,
             decor_expression: None,
-            decor_alpha: 23.0,
+            decor_preset: None,
+            decor_stringency: None,
+            decor_alpha: None,
             decor_cache_mode: DecorCacheModeArg::Auto,
             decor_correlation: DecorCorrelationArg::Pearson,
             decor_redundancy: DecorRedundancyArg::PositiveMean,
+            decor_weight_formula: None,
+            decor_threshold: None,
+            decor_scale_epsilon: 1e-12,
             decor_expression_format: DecorExpressionFormatArg::Auto,
             decor_expression_has_header: true,
             nproc: 0,

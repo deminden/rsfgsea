@@ -4,8 +4,8 @@ use crate::algo_support::{
     selected_tail_count, simple_log2err, warn_prepare_stats,
 };
 use crate::core::{
-    DecorCacheMode, DecorCorrelation, DecorOptions, DecorRedundancy, EnrichmentResult, Pathway,
-    RankedList, ScoreType,
+    DecorCacheMode, DecorCorrelation, DecorOptions, DecorRedundancy, DecorWeightFormula,
+    EnrichmentResult, Pathway, RankedList, ScoreType,
 };
 use crate::rng_compat::{RLecuyerCmrgSeedCompat, RSampleKind};
 use anyhow::{Context, Result, bail};
@@ -24,6 +24,19 @@ const CACHE_FORMAT: &str = "rsfgsea-decor-cache";
 const CACHE_VERSION: &str = "1";
 const GENE_ID_MODE: &str = "verbatim";
 const DECOR_BATCH_MIN_GROUP_PATHWAYS: usize = 16;
+
+#[derive(Debug, Clone)]
+pub struct DecorFormulaContext {
+    pub weight_formula: DecorWeightFormula,
+    pub alpha: f64,
+    pub gamma: f64,
+    pub threshold_tau: f64,
+    pub penalty_floor: f64,
+    pub scale_epsilon: f64,
+    pub global_median_redundancy: Option<f64>,
+    pub global_q75_redundancy: Option<f64>,
+    sorted_redundancy: Vec<f64>,
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DecorCacheStatus {
@@ -133,6 +146,177 @@ fn parse_redundancy(value: &str) -> Result<DecorRedundancy> {
         "positive_mean" => Ok(DecorRedundancy::PositiveMean),
         "abs_mean" => Ok(DecorRedundancy::AbsMean),
         other => bail!("unsupported decor redundancy in cache metadata: {other}"),
+    }
+}
+
+fn finite_cache_redundancy(cache: &DecorCache) -> Vec<f64> {
+    let mut values = cache
+        .pathways
+        .values()
+        .flat_map(|scores| scores.redundancy.iter().copied())
+        .map(f64::from)
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    values.sort_by(|a, b| a.total_cmp(b));
+    values
+}
+
+fn percentile_sorted(sorted: &[f64], p: f64) -> Option<f64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    if sorted.len() == 1 {
+        return Some(sorted[0]);
+    }
+    let pos = p.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
+    let lo = pos.floor() as usize;
+    let hi = pos.ceil() as usize;
+    if lo == hi {
+        Some(sorted[lo])
+    } else {
+        let frac = pos - lo as f64;
+        Some(sorted[lo] * (1.0 - frac) + sorted[hi] * frac)
+    }
+}
+
+// Keep option validation close to the formula engine so every wrapper gets the
+// same numerical guardrails before ES and null generation start.
+fn validate_decor_options(options: &DecorOptions) -> Result<()> {
+    if options.alpha < 0.0 || !options.alpha.is_finite() {
+        bail!("decor alpha must be a finite value >= 0");
+    }
+    if options.gamma < 0.0 || !options.gamma.is_finite() {
+        bail!("decor gamma must be a finite value >= 0");
+    }
+    if !(0.0..1.0).contains(&options.threshold_tau) || !options.threshold_tau.is_finite() {
+        bail!("decor threshold must be a finite value >= 0 and < 1");
+    }
+    if !(0.0..1.0).contains(&options.penalty_floor) || !options.penalty_floor.is_finite() {
+        bail!("decor penalty floor must be a finite value >= 0 and < 1");
+    }
+    if options.scale_epsilon <= 0.0 || !options.scale_epsilon.is_finite() {
+        bail!("decor scale epsilon must be a finite value > 0");
+    }
+    Ok(())
+}
+
+impl DecorFormulaContext {
+    pub fn from_cache(cache: &DecorCache, options: &DecorOptions) -> Result<Self> {
+        validate_decor_options(options)?;
+        // Formula scaling is derived from the cache once per run, not per
+        // pathway, so all pathways share one transparent penalty reference.
+        let sorted_redundancy = finite_cache_redundancy(cache);
+        let requires_distribution = matches!(
+            options.weight_formula,
+            DecorWeightFormula::ScaledRational
+                | DecorWeightFormula::Q75ScaledRational
+                | DecorWeightFormula::ExpScaled
+                | DecorWeightFormula::QuantileRational
+                | DecorWeightFormula::FloorScaledRational
+        );
+        if requires_distribution && sorted_redundancy.is_empty() {
+            bail!(
+                "selected formula {} could not compute redundancy scale because the decor cache has no finite redundancy scores",
+                options.weight_formula
+            );
+        }
+        Ok(Self {
+            weight_formula: options.weight_formula,
+            alpha: options.alpha,
+            gamma: options.gamma,
+            threshold_tau: options.threshold_tau,
+            penalty_floor: options.penalty_floor,
+            scale_epsilon: options.scale_epsilon,
+            global_median_redundancy: percentile_sorted(&sorted_redundancy, 0.5),
+            global_q75_redundancy: percentile_sorted(&sorted_redundancy, 0.75),
+            sorted_redundancy,
+        })
+    }
+
+    fn median_scale(&self) -> Result<f64> {
+        self.global_median_redundancy.with_context(|| {
+            format!(
+                "selected formula {} requires finite redundancy scores in the decor cache",
+                self.weight_formula
+            )
+        })
+    }
+
+    fn q75_scale(&self) -> Result<f64> {
+        self.global_q75_redundancy.with_context(|| {
+            format!(
+                "selected formula {} requires finite redundancy scores in the decor cache",
+                self.weight_formula
+            )
+        })
+    }
+
+    fn redundancy_quantile(&self, r: f64) -> Result<f64> {
+        if self.sorted_redundancy.is_empty() {
+            bail!(
+                "selected formula quantile-rational requires finite redundancy scores in the decor cache"
+            );
+        }
+        if self.sorted_redundancy.len() == 1 {
+            return Ok(1.0);
+        }
+        let lower = self.sorted_redundancy.partition_point(|value| *value < r);
+        let upper = self.sorted_redundancy.partition_point(|value| *value <= r);
+        let avg_rank = (lower + upper.saturating_sub(1)) as f64 / 2.0;
+        Ok((avg_rank / (self.sorted_redundancy.len() - 1) as f64).clamp(0.0, 1.0))
+    }
+
+    pub fn penalty(&self, r: f64) -> Result<f64> {
+        if !r.is_finite() {
+            bail!("decor redundancy score must be finite");
+        }
+        let penalty = match self.weight_formula {
+            DecorWeightFormula::RawRational => 1.0 / (1.0 + self.alpha * r),
+            DecorWeightFormula::ScaledRational => {
+                let r_scaled = r / (self.median_scale()? + self.scale_epsilon);
+                1.0 / (1.0 + self.alpha * r_scaled)
+            }
+            DecorWeightFormula::Q75ScaledRational => {
+                let r_scaled = r / (self.q75_scale()? + self.scale_epsilon);
+                1.0 / (1.0 + self.alpha * r_scaled)
+            }
+            DecorWeightFormula::ExpScaled => {
+                let r_scaled = r / (self.median_scale()? + self.scale_epsilon);
+                (-self.alpha * r_scaled).exp()
+            }
+            DecorWeightFormula::OddsRational => {
+                let r = r.clamp(0.0, 1.0 - self.scale_epsilon);
+                let odds = r / (1.0 - r + self.scale_epsilon);
+                1.0 / (1.0 + self.alpha * odds)
+            }
+            DecorWeightFormula::ThresholdRational => {
+                let r_star = (r - self.threshold_tau).max(0.0);
+                1.0 / (1.0 + self.alpha * r_star)
+            }
+            DecorWeightFormula::QuantileRational => {
+                let q = self.redundancy_quantile(r)?;
+                1.0 / (1.0 + self.alpha * q)
+            }
+            DecorWeightFormula::FloorScaledRational => {
+                let r_scaled = r / (self.median_scale()? + self.scale_epsilon);
+                let base = 1.0 / (1.0 + self.alpha * r_scaled);
+                self.penalty_floor + (1.0 - self.penalty_floor) * base
+            }
+            DecorWeightFormula::PowerRetention => (1.0 - r.clamp(0.0, 1.0)).powf(self.gamma),
+        };
+        if penalty.is_finite() && penalty >= 0.0 {
+            Ok(penalty)
+        } else {
+            bail!(
+                "selected formula {} produced an invalid penalty from redundancy {}",
+                self.weight_formula,
+                r
+            )
+        }
+    }
+
+    fn penalties_for(&self, redundancy: &[f64]) -> Result<Vec<f64>> {
+        redundancy.iter().map(|&r| self.penalty(r)).collect()
     }
 }
 
@@ -535,9 +719,7 @@ pub fn ensure_decor_cache_for_paths(
     options: &DecorOptions,
     expression_has_header: bool,
 ) -> Result<(DecorCache, DecorCacheStatus)> {
-    if options.alpha < 0.0 || !options.alpha.is_finite() {
-        bail!("decor alpha must be a finite value >= 0");
-    }
+    validate_decor_options(options)?;
     if options.correlation == DecorCorrelation::Spearman {
         bail!("spearman decor correlation is not implemented yet");
     }
@@ -562,6 +744,8 @@ pub fn ensure_decor_cache_for_paths(
         gene_id_mode: GENE_ID_MODE.to_string(),
     };
 
+    // Cache identity is content-based: GMT, expression matrix, correlation, and
+    // redundancy mode must match, while formula presets can change freely.
     let cache_exists = cache_path.exists();
     if cache_exists && options.cache_mode != DecorCacheMode::Rebuild {
         match read_decor_cache(cache_path) {
@@ -757,6 +941,8 @@ pub fn build_decor_cache_from_expression(
     let expression = read_expression_matrix(expression_path, expected.expression_has_header)?;
     let standardized = standardized_rows(expression);
 
+    // Store per-gene redundancy in pathway order so later runs only need ranks
+    // and the cache; expression is not re-read when the cache is compatible.
     let mut rows: Vec<(String, DecorPathwayScores)> = pathways
         .par_iter()
         .map(|pathway| {
@@ -1017,9 +1203,44 @@ pub fn fgsea_decor_simple_with_sample_size<S: IntoSeed>(
     gsea_param: f64,
     _sample_size: usize,
 ) -> Result<Vec<EnrichmentResult>> {
+    let options = DecorOptions {
+        alpha,
+        ..DecorOptions::default()
+    };
+    fgsea_decor_simple_with_options(
+        ranks,
+        pathways,
+        cache,
+        &options,
+        n_perm,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        _sample_size,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_decor_simple_with_options<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    cache: &DecorCache,
+    options: &DecorOptions,
+    n_perm: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    _sample_size: usize,
+) -> Result<Vec<EnrichmentResult>> {
     let seed = resolve_rng_seed(seed.into_seed());
     run_decor_simple_internal(
-        ranks, pathways, cache, alpha, n_perm, seed, min_size, max_size, eps, score_type,
+        ranks, pathways, cache, options, n_perm, seed, min_size, max_size, eps, score_type,
         gsea_param,
     )
 }
@@ -1029,7 +1250,7 @@ fn run_decor_simple_internal(
     ranks: &RankedList,
     pathways: &[Pathway],
     cache: &DecorCache,
-    alpha: f64,
+    options: &DecorOptions,
     n_perm: usize,
     seed: u64,
     min_size: usize,
@@ -1038,9 +1259,7 @@ fn run_decor_simple_internal(
     score_type: ScoreType,
     gsea_param: f64,
 ) -> Result<Vec<EnrichmentResult>> {
-    if alpha < 0.0 || !alpha.is_finite() {
-        bail!("decor alpha must be a finite value >= 0");
-    }
+    let formula_context = DecorFormulaContext::from_cache(cache, options)?;
     let gene_to_idx = build_gene_index(ranks);
     let n_total = ranks.len();
     warn_prepare_stats(ranks, score_type);
@@ -1050,6 +1269,9 @@ fn run_decor_simple_internal(
     let (_abs_weights, scaled_scores, _ns_total) = ranks.prepare(gsea_param);
     let simple_stats: Vec<f64> = scaled_scores.iter().map(|&v| v as f64).collect();
 
+    // Observed pathways keep their pathway-specific decor penalties; the
+    // permutation calibration below preserves pathway size while drawing rank
+    // positions from the same score profile.
     let mut work: Vec<DecorWorking> = pathways
         .par_iter()
         .map(|pw| {
@@ -1057,10 +1279,7 @@ fn run_decor_simple_internal(
             if hits.len() < min_size || hits.len() > max_size {
                 return Ok(None);
             }
-            let penalty: Vec<f64> = redundancy
-                .into_iter()
-                .map(|r| 1.0 / (1.0 + alpha * r))
-                .collect();
+            let penalty = formula_context.penalties_for(&redundancy)?;
             let (es, peak_idx) =
                 calculate_es_decor_prechecked(&simple_stats, &hits, &penalty, n_total, score_type);
             Ok(Some(DecorWorking {
@@ -1098,6 +1317,8 @@ fn run_decor_simple_internal(
             .map(|(size, indices)| DecorRuntimeSizeGroup::from_indices(size, indices, &work))
             .collect::<Vec<_>>();
 
+        // Size groups reuse sampled hit-position profiles across pathways with
+        // identical cardinality, while batched groups avoid repeated ES scans.
         let grouped_counts = runtime_groups
             .par_iter()
             .enumerate()
@@ -1240,6 +1461,205 @@ mod tests {
     use crate::algo::calculate_es_fgsea;
     use tempfile::tempdir;
 
+    fn assert_close(actual: f64, expected: f64) {
+        assert!(
+            (actual - expected).abs() < 1e-8,
+            "actual={actual}, expected={expected}"
+        );
+    }
+
+    fn formula_cache(values: &[f32]) -> DecorCache {
+        DecorCache {
+            metadata: DecorCacheMetadata {
+                format: CACHE_FORMAT.to_string(),
+                version: CACHE_VERSION.to_string(),
+                created_by: "rsfgsea".to_string(),
+                gmt_sha256: "gmt".to_string(),
+                expression_sha256: "expr".to_string(),
+                correlation: DecorCorrelation::Pearson,
+                redundancy: DecorRedundancy::PositiveMean,
+                expression_gene_axis: "rows".to_string(),
+                expression_has_header: true,
+                gene_id_mode: GENE_ID_MODE.to_string(),
+                n_pathways: 1,
+                n_rows: values.len(),
+            },
+            pathways: BTreeMap::from([(
+                "PW".to_string(),
+                DecorPathwayScores {
+                    genes: values
+                        .iter()
+                        .enumerate()
+                        .map(|(idx, _)| format!("G{idx}"))
+                        .collect(),
+                    redundancy: values.to_vec(),
+                },
+            )]),
+        }
+    }
+
+    fn formula_context(formula: DecorWeightFormula) -> DecorFormulaContext {
+        let cache = formula_cache(&[0.0, 0.2, 0.4, 0.8]);
+        let options = DecorOptions {
+            alpha: 2.0,
+            weight_formula: formula,
+            ..DecorOptions::default()
+        };
+        DecorFormulaContext::from_cache(&cache, &options).unwrap()
+    }
+
+    #[test]
+    fn decor_formula_raw_rational_matches_manual_values() {
+        let ctx = formula_context(DecorWeightFormula::RawRational);
+        assert_close(ctx.penalty(0.0).unwrap(), 1.0);
+        assert_close(ctx.penalty(0.5).unwrap(), 0.5);
+
+        let cache = formula_cache(&[0.5]);
+        let options = DecorOptions {
+            alpha: 0.0,
+            weight_formula: DecorWeightFormula::RawRational,
+            ..DecorOptions::default()
+        };
+        let ctx = DecorFormulaContext::from_cache(&cache, &options).unwrap();
+        assert_close(ctx.penalty(0.9).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn decor_formula_scaled_rational_uses_global_median() {
+        let ctx = formula_context(DecorWeightFormula::ScaledRational);
+        assert_close(ctx.global_median_redundancy.unwrap(), 0.3);
+        let expected = 1.0 / (1.0 + 2.0 * (0.6 / (0.3 + 1e-12)));
+        assert_close(ctx.penalty(0.6).unwrap(), expected);
+    }
+
+    #[test]
+    fn decor_formula_q75_scaled_rational_uses_global_q75() {
+        let ctx = formula_context(DecorWeightFormula::Q75ScaledRational);
+        assert_close(ctx.global_q75_redundancy.unwrap(), 0.5);
+        let expected = 1.0 / (1.0 + 2.0 * (0.5 / (0.5 + 1e-12)));
+        assert_close(ctx.penalty(0.5).unwrap(), expected);
+    }
+
+    #[test]
+    fn decor_formula_exp_scaled_matches_manual_value() {
+        let ctx = formula_context(DecorWeightFormula::ExpScaled);
+        let expected = (-2.0_f64 * (0.3_f64 / (0.3_f64 + 1e-12_f64))).exp();
+        assert_close(ctx.penalty(0.3).unwrap(), expected);
+    }
+
+    #[test]
+    fn decor_formula_odds_rational_emphasizes_high_redundancy() {
+        let ctx = formula_context(DecorWeightFormula::OddsRational);
+        assert_close(ctx.penalty(0.0).unwrap(), 1.0);
+        assert_close(
+            ctx.penalty(0.5).unwrap(),
+            1.0 / (1.0 + 2.0 * (0.5 / (0.5 + 1e-12))),
+        );
+        assert!(ctx.penalty(1.0).unwrap() < 1e-6);
+    }
+
+    #[test]
+    fn decor_formula_threshold_rational_ignores_scores_below_tau() {
+        let cache = formula_cache(&[0.1, 0.2, 0.5]);
+        let options = DecorOptions {
+            alpha: 2.0,
+            weight_formula: DecorWeightFormula::ThresholdRational,
+            threshold_tau: 0.25,
+            ..DecorOptions::default()
+        };
+        let ctx = DecorFormulaContext::from_cache(&cache, &options).unwrap();
+        assert_close(ctx.penalty(0.2).unwrap(), 1.0);
+        assert_close(ctx.penalty(0.5).unwrap(), 1.0 / (1.0 + 2.0 * 0.25));
+    }
+
+    #[test]
+    fn decor_formula_quantile_rational_uses_average_rank_for_ties() {
+        let cache = formula_cache(&[0.1, 0.2, 0.2, 0.8]);
+        let options = DecorOptions {
+            alpha: 2.0,
+            weight_formula: DecorWeightFormula::QuantileRational,
+            ..DecorOptions::default()
+        };
+        let ctx = DecorFormulaContext::from_cache(&cache, &options).unwrap();
+        let q = 1.5 / 3.0;
+        assert_close(
+            ctx.penalty(f64::from(0.2_f32)).unwrap(),
+            1.0 / (1.0 + 2.0 * q),
+        );
+    }
+
+    #[test]
+    fn decor_formula_floor_scaled_rational_respects_floor() {
+        let cache = formula_cache(&[0.0, 0.2, 0.4, 0.8]);
+        let options = DecorOptions {
+            alpha: 1000.0,
+            weight_formula: DecorWeightFormula::FloorScaledRational,
+            penalty_floor: 0.25,
+            ..DecorOptions::default()
+        };
+        let ctx = DecorFormulaContext::from_cache(&cache, &options).unwrap();
+        assert!(ctx.penalty(0.8).unwrap() >= 0.25);
+        assert_close(ctx.penalty(0.0).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn decor_formula_power_retention_uses_gamma() {
+        let cache = formula_cache(&[0.0, 0.5, 1.0]);
+        let options = DecorOptions {
+            alpha: 999.0,
+            gamma: 1.0,
+            weight_formula: DecorWeightFormula::PowerRetention,
+            ..DecorOptions::default()
+        };
+        let ctx = DecorFormulaContext::from_cache(&cache, &options).unwrap();
+        assert_close(ctx.penalty(0.5).unwrap(), 0.5);
+
+        let options = DecorOptions {
+            gamma: 0.0,
+            weight_formula: DecorWeightFormula::PowerRetention,
+            ..DecorOptions::default()
+        };
+        let ctx = DecorFormulaContext::from_cache(&cache, &options).unwrap();
+        assert_close(ctx.penalty(0.9).unwrap(), 1.0);
+    }
+
+    #[test]
+    fn decor_formula_validation_rejects_invalid_parameters() {
+        for options in [
+            DecorOptions {
+                gamma: -1.0,
+                ..DecorOptions::default()
+            },
+            DecorOptions {
+                threshold_tau: 1.0,
+                ..DecorOptions::default()
+            },
+            DecorOptions {
+                penalty_floor: 1.0,
+                ..DecorOptions::default()
+            },
+            DecorOptions {
+                scale_epsilon: 0.0,
+                ..DecorOptions::default()
+            },
+        ] {
+            assert!(DecorFormulaContext::from_cache(&formula_cache(&[0.1]), &options).is_err());
+        }
+    }
+
+    #[test]
+    fn decor_distribution_formulas_error_without_finite_cache_scores() {
+        let cache = formula_cache(&[]);
+        let options = DecorOptions {
+            weight_formula: DecorWeightFormula::ScaledRational,
+            ..DecorOptions::default()
+        };
+        let err = DecorFormulaContext::from_cache(&cache, &options)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("no finite redundancy scores"));
+    }
+
     #[test]
     fn decor_es_matches_classic_when_redundancy_zero() {
         let stats = vec![4.0, 3.0, 2.0, -1.0, -2.0, -3.0];
@@ -1256,8 +1676,14 @@ mod tests {
     fn decor_alpha_zero_matches_classic() {
         let stats = vec![4.0, 3.0, 2.0, -1.0, -2.0, -3.0];
         let hits = vec![0, 2, 5];
-        let redundancy = [0.9, 0.1, 0.4];
-        let penalty: Vec<f64> = redundancy.iter().map(|r| 1.0 / (1.0 + 0.0 * r)).collect();
+        let cache = formula_cache(&[0.9, 0.1, 0.4]);
+        let options = DecorOptions {
+            alpha: 0.0,
+            weight_formula: DecorWeightFormula::RawRational,
+            ..DecorOptions::default()
+        };
+        let ctx = DecorFormulaContext::from_cache(&cache, &options).unwrap();
+        let penalty = ctx.penalties_for(&[0.9, 0.1, 0.4]).unwrap();
         let decor = calculate_es_decor(&stats, &hits, &penalty, stats.len(), ScoreType::Std)
             .unwrap()
             .0;
@@ -1279,6 +1705,32 @@ mod tests {
             .0;
         assert_ne!(decor, classic);
         assert!(decor.is_finite());
+    }
+
+    #[test]
+    fn decor_uniform_penalty_cancels_like_classic_weight_normalization() {
+        let stats = vec![5.0, 4.0, 1.0, -1.0, -2.0, -3.0];
+        let hits = vec![0, 1, 5];
+        let uniform_penalty = vec![0.25, 0.25, 0.25];
+        let decor =
+            calculate_es_decor(&stats, &hits, &uniform_penalty, stats.len(), ScoreType::Std)
+                .unwrap()
+                .0;
+        let classic = calculate_es_fgsea(&stats, &hits, stats.len(), ScoreType::Std).0;
+        assert_close(decor, classic);
+    }
+
+    #[test]
+    fn decor_all_zero_adjusted_weights_fall_back_to_uniform_hit_weights() {
+        let stats = vec![5.0, 4.0, 1.0, -1.0, -2.0, -3.0];
+        let hits = vec![0, 1, 5];
+        let zero_penalty = vec![0.0, 0.0, 0.0];
+        let decor = calculate_es_decor(&stats, &hits, &zero_penalty, stats.len(), ScoreType::Std)
+            .unwrap()
+            .0;
+        let uniform_stats = vec![1.0; stats.len()];
+        let uniform = calculate_es_fgsea(&uniform_stats, &hits, stats.len(), ScoreType::Std).0;
+        assert_close(decor, uniform);
     }
 
     #[test]
@@ -1546,5 +1998,29 @@ mod tests {
         let pw = loaded.pathways.get("PW").unwrap();
         assert_eq!(pw.genes, vec!["A", "B", "C", "E"]);
         assert!(pw.redundancy[0] > 0.3);
+    }
+
+    #[test]
+    fn formula_and_alpha_do_not_affect_cache_compatibility() {
+        let cache = formula_cache(&[0.1, 0.2]);
+        let expected = DecorCacheExpectedMetadata {
+            gmt_sha256: "gmt".to_string(),
+            expression_sha256: Some("expr".to_string()),
+            correlation: DecorCorrelation::Pearson,
+            redundancy: DecorRedundancy::PositiveMean,
+            expression_gene_axis: "rows".to_string(),
+            expression_has_header: true,
+            gene_id_mode: GENE_ID_MODE.to_string(),
+        };
+        assert!(validate_decor_cache(&cache.metadata, &expected).is_compatible());
+
+        let options = DecorOptions {
+            alpha: 0.0,
+            weight_formula: DecorWeightFormula::ExpScaled,
+            ..DecorOptions::default()
+        };
+        let ctx = DecorFormulaContext::from_cache(&cache, &options).unwrap();
+        assert_eq!(ctx.weight_formula, DecorWeightFormula::ExpScaled);
+        assert!(validate_decor_cache(&cache.metadata, &expected).is_compatible());
     }
 }
