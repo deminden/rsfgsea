@@ -83,6 +83,36 @@ done
 Use `RSFGSEA_PERM_HEAVY_BENCH=1` for the 100k-permutation simple-mode profile,
 and `RSFGSEA_HEAVY_BENCH=1` for the larger 20k-gene / 15k-pathway profile.
 
+### Native Blitz Optimization Benchmark
+
+Blitz-specific Criterion groups are opt-in because default blitz calibration is
+slow enough to distort routine benchmark runs:
+
+```bash
+RSFGSEA_BLITZ_BENCH=1 cargo bench -p rsfgsea --bench gsea_bench
+```
+
+For file-backed Python/Rust comparison on the positive DESeq2 stress workload,
+use:
+
+```bash
+scripts/bench_blitz_speed.py --reps 1 --json
+```
+
+Latest local single-run snapshot on `lung_vs_muscle + GO BP`:
+
+| Metric | Value |
+| :--- | ---: |
+| Native Rust blitz compute before speed pass | `~22.2 s` |
+| Native Rust blitz compute after speed pass | `10.29 s` |
+| Python blitzgsea cold | `15.30 s` |
+| Python blitzgsea warm cache | `3.56 s` |
+| Rust speedup vs previous native cold compute | `2.16x` |
+
+The same run reported 5,324 matched pathways, no size mismatches, no
+leading-edge set mismatches, max finite rounded-output absolute diffs of ES
+`5.0e-9`, NES `2.25e-7`, p-value `5.0e-9`, and FDR `4.99e-9`.
+
 ### R fgsea Comparison Benchmark
 
 Benchmark setup:

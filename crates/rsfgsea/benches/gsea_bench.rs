@@ -2,12 +2,16 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use rand::prelude::*;
 use rand::rngs::StdRng;
 use rand::seq::SliceRandom;
+use rsfgsea::blitz::{
+    __bench_blitz_anchor_calibration, __bench_blitz_prepare_scoring, __bench_blitz_score_prepared,
+    __bench_blitz_tail_microcases,
+};
 use rsfgsea::decor::DecorPathwayScores;
 use rsfgsea::prelude::*;
 use std::collections::BTreeMap;
 use std::fs;
 use std::hint::black_box;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 struct SyntheticWorkload {
@@ -280,6 +284,10 @@ fn wrapper_dispatch_enabled() -> bool {
     std::env::var_os("RSFGSEA_WRAPPER_BENCH").is_some()
 }
 
+fn blitz_bench_enabled() -> bool {
+    std::env::var_os("RSFGSEA_BLITZ_BENCH").is_some()
+}
+
 fn configure_representative_group<'a>(
     c: &'a mut Criterion,
     name: &str,
@@ -302,6 +310,17 @@ fn configure_decor_matrix_group<'a>(
     group
 }
 
+fn configure_blitz_group<'a>(
+    c: &'a mut Criterion,
+    name: &str,
+) -> criterion::BenchmarkGroup<'a, criterion::measurement::WallTime> {
+    let mut group = c.benchmark_group(name);
+    group.sample_size(10);
+    group.measurement_time(Duration::from_secs(8));
+    group.warm_up_time(Duration::from_secs(1));
+    group
+}
+
 fn decor_options_for_matrix(
     matrix: &SyntheticDecorMatrixWorkload,
     formula: DecorWeightFormula,
@@ -312,6 +331,144 @@ fn decor_options_for_matrix(
         weight_formula: formula,
         penalty_floor: 0.2,
         ..DecorOptions::default()
+    }
+}
+
+fn blitz_options_for_bench() -> BlitzOptions {
+    BlitzOptions {
+        permutations: 1000,
+        anchors: 40,
+        min_size: 5,
+        max_size: 4000,
+        processes: 4,
+        symmetric: false,
+        seed: 0,
+        center: true,
+        accuracy: 40,
+        deep_accuracy: 50,
+    }
+}
+
+fn load_file_workload(name: &'static str, ranks_path: &Path, gmt_path: &Path) -> SyntheticWorkload {
+    let ranks = read_ranked_list(ranks_path).expect("read blitz benchmark ranks");
+    let pathways = read_gmt(gmt_path)
+        .expect("read blitz benchmark gmt")
+        .pathways;
+    SyntheticWorkload {
+        name,
+        ranks,
+        pathways,
+    }
+}
+
+fn optional_file_workload(
+    name: &'static str,
+    ranks_path: &Path,
+    gmt_path: &Path,
+) -> Option<SyntheticWorkload> {
+    (ranks_path.exists() && gmt_path.exists())
+        .then(|| load_file_workload(name, ranks_path, gmt_path))
+}
+
+fn blitz_benchmark_workloads() -> Vec<SyntheticWorkload> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let repo_root = manifest_dir
+        .parent()
+        .and_then(Path::parent)
+        .expect("crate should live under workspace crates/");
+    let mut workloads = vec![
+        synthetic_workload("synthetic_10k_genes_1k_pathways", 10_000, 1_000),
+        load_file_workload(
+            "publication_fixture",
+            &manifest_dir.join("tests/data/blitz_reference/publication_fgsea.rnk"),
+            &manifest_dir.join("tests/data/blitz_reference/publication_fgsea.gmt"),
+        ),
+    ];
+    if let Some(workload) = optional_file_workload(
+        "lung_vs_muscle_go_bp",
+        &repo_root.join("data/deseq2_positive_ranks/lung_vs_muscle.rnk"),
+        &repo_root.join("data/GO_Biological_Process_2025.gmt"),
+    ) {
+        workloads.push(workload);
+    }
+    workloads
+}
+
+fn benchmark_blitz(c: &mut Criterion) {
+    if !blitz_bench_enabled() {
+        return;
+    }
+
+    let workloads = blitz_benchmark_workloads();
+    let options = blitz_options_for_bench();
+
+    {
+        let mut group = configure_blitz_group(c, "blitz_full_cold");
+        for workload in &workloads {
+            group.throughput(Throughput::Elements(workload.pathways.len() as u64));
+            group.bench_with_input(
+                BenchmarkId::from_parameter(workload.name),
+                workload,
+                |b, workload| {
+                    b.iter(|| {
+                        fgsea_blitz_with_options(
+                            black_box(&workload.ranks),
+                            black_box(&workload.pathways),
+                            black_box(&options),
+                        )
+                    })
+                },
+            );
+        }
+        group.finish();
+    }
+
+    {
+        let mut group = configure_blitz_group(c, "blitz_anchor_calibration_only");
+        for workload in &workloads {
+            group.throughput(Throughput::Elements(workload.pathways.len() as u64));
+            group.bench_with_input(
+                BenchmarkId::from_parameter(workload.name),
+                workload,
+                |b, workload| {
+                    b.iter(|| {
+                        __bench_blitz_anchor_calibration(
+                            black_box(&workload.ranks),
+                            black_box(&workload.pathways),
+                            black_box(&options),
+                        )
+                    })
+                },
+            );
+        }
+        group.finish();
+    }
+
+    {
+        let mut group = configure_blitz_group(c, "blitz_final_scoring_only");
+        for workload in &workloads {
+            let prepared = __bench_blitz_prepare_scoring(
+                black_box(&workload.ranks),
+                black_box(&workload.pathways),
+                black_box(&options),
+            )
+            .expect("prepare blitz scoring benchmark");
+            group.throughput(Throughput::Elements(workload.pathways.len() as u64));
+            group.bench_with_input(
+                BenchmarkId::from_parameter(workload.name),
+                &prepared,
+                |b, prepared| b.iter(|| __bench_blitz_score_prepared(black_box(prepared))),
+            );
+        }
+        group.finish();
+    }
+
+    {
+        let mut group = configure_blitz_group(c, "blitz_gamma_tail_microcases");
+        group.bench_function("scipy_plus_mpmath_thresholds", |b| {
+            b.iter(|| __bench_blitz_tail_microcases(black_box(options.deep_accuracy)))
+        });
+        group.finish();
     }
 }
 
@@ -492,6 +649,6 @@ criterion_group! {
         .sample_size(15)
         .measurement_time(Duration::from_secs(10))
         .warm_up_time(Duration::from_secs(1));
-    targets = benchmark_es, benchmark_end_to_end, benchmark_decor_matrix
+    targets = benchmark_es, benchmark_end_to_end, benchmark_decor_matrix, benchmark_blitz
 }
 criterion_main!(benches);

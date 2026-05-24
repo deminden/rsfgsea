@@ -350,6 +350,22 @@ done
 Use `RSFGSEA_PERM_HEAVY_BENCH=1` for the 100k-permutation simple-mode profile,
 and `RSFGSEA_HEAVY_BENCH=1` for the larger 20k-gene / 15k-pathway profile.
 
+For native blitz speed work, run the opt-in blitz Criterion groups:
+
+```bash
+RSFGSEA_BLITZ_BENCH=1 cargo bench -p rsfgsea --bench gsea_bench
+```
+
+For the local positive DESeq2 stress workload:
+
+```bash
+scripts/bench_blitz_speed.py --reps 1 --json
+```
+
+Latest local `lung_vs_muscle + GO BP` snapshot: native Rust blitz compute
+improved from `~22.2 s` to `10.29 s`; Python blitzgsea cold was `15.30 s`
+and warm-cache was `3.56 s`.
+
 ### R fgsea Comparison Benchmark
 
 Benchmarked on **AMD Ryzen 7950X3D**. Times are **median of 5 runs** (after one warmup run).

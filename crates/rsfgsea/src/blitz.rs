@@ -2,6 +2,7 @@ use crate::core::{BlitzOptions, EnrichmentResult, Pathway, RankedList};
 use anyhow::{Result, bail};
 use rayon::prelude::*;
 use std::collections::{HashMap, HashSet};
+use std::time::Instant;
 
 const LOWESS_ITERS: usize = 3;
 
@@ -75,6 +76,118 @@ struct BlitzModel {
     pos_ratio: LinearInterp,
     alpha_neg: LinearInterp,
     beta_neg: LinearInterp,
+}
+
+#[derive(Clone)]
+struct CleanedPathway {
+    name: String,
+    genes: Vec<String>,
+    hit_indices: Vec<usize>,
+    leading_hits: PythonIntSet,
+}
+
+#[derive(Clone, Copy)]
+struct BlitzModelParams {
+    pos_alpha: f64,
+    pos_beta: f64,
+    pos_ratio: f64,
+    neg_alpha: f64,
+    neg_beta: f64,
+}
+
+struct ScoredBlitzPathway {
+    result: EnrichmentResult,
+    cdf_calls: usize,
+    fallback_calls: usize,
+}
+
+struct BlitzScoreScratch {
+    marker: HitMarker,
+    hit_scores: Vec<f64>,
+}
+
+impl BlitzScoreScratch {
+    fn new(signature_len: usize) -> Self {
+        Self {
+            marker: HitMarker::new(signature_len),
+            hit_scores: Vec::new(),
+        }
+    }
+}
+
+struct EnrichmentExtrema {
+    es: f64,
+    peak_idx: usize,
+    rmax: usize,
+    max_value: f64,
+    rmin: usize,
+    min_value: f64,
+}
+
+struct BlitzTimingLogger {
+    enabled: bool,
+}
+
+impl BlitzTimingLogger {
+    fn new() -> Self {
+        Self {
+            enabled: std::env::var_os("RSFGSEA_BLITZ_TIMINGS").is_some(),
+        }
+    }
+
+    fn start(&self) -> Option<Instant> {
+        self.enabled.then(Instant::now)
+    }
+
+    fn finish(&self, stage: &str, start: Option<Instant>) {
+        if let Some(start) = start {
+            eprintln!(
+                "RSFGSEA_BLITZ_TIMING\t{stage}\t{:.6}",
+                start.elapsed().as_secs_f64()
+            );
+        }
+    }
+
+    fn value(&self, stage: &str, value: usize) {
+        if self.enabled {
+            eprintln!("RSFGSEA_BLITZ_TIMING\t{stage}\t{value}");
+        }
+    }
+}
+
+#[derive(Clone)]
+struct HitMarker {
+    marks: Vec<u32>,
+    generation: u32,
+}
+
+impl HitMarker {
+    fn new(len: usize) -> Self {
+        Self {
+            marks: vec![0; len],
+            generation: 1,
+        }
+    }
+
+    fn mark_hits(&mut self, hits: &[usize]) {
+        self.next_generation();
+        for &hit in hits {
+            self.marks[hit] = self.generation;
+        }
+    }
+
+    fn contains(&self, idx: usize) -> bool {
+        self.marks[idx] == self.generation
+    }
+
+    fn next_generation(&mut self) {
+        if self.generation == u32::MAX {
+            self.marks.fill(0);
+            self.generation = 1;
+        } else {
+            self.generation += 1;
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -426,8 +539,25 @@ impl NumpyMt19937 {
         }
     }
 
+    #[cfg(test)]
     fn choice_without_replacement(&mut self, n: usize, k: usize) -> Vec<usize> {
         let mut values: Vec<usize> = (0..n).collect();
+        for i in (1..n).rev() {
+            let j = self.random_interval(i);
+            values.swap(i, j);
+        }
+        values.truncate(k);
+        values
+    }
+
+    fn choice_without_replacement_into<'a>(
+        &mut self,
+        n: usize,
+        k: usize,
+        values: &'a mut Vec<usize>,
+    ) -> &'a [usize] {
+        values.clear();
+        values.extend(0..n);
         for i in (1..n).rev() {
             let j = self.random_interval(i);
             values.swap(i, j);
@@ -470,69 +600,41 @@ pub fn fgsea_blitz_with_options(
 ) -> Result<Vec<EnrichmentResult>> {
     validate_options(options, ranks.len())?;
 
+    let timings = BlitzTimingLogger::new();
+    let stage = timings.start();
     let signature = prepare_signature(ranks, options.center);
+    timings.finish("prepare_signature", stage);
+
+    let stage = timings.start();
     let cleaned = clean_pathways(pathways, &signature);
+    timings.finish("clean_pathways", stage);
     if cleaned.is_empty() {
         return Ok(Vec::new());
     }
 
+    let stage = timings.start();
     let model = estimate_model(&signature, &cleaned, options)?;
-    let mut results = Vec::new();
+    timings.finish("estimate_model", stage);
 
-    for (pathway, genes) in cleaned {
-        let size = genes.len();
-        if size < options.min_size || size > options.max_size {
-            continue;
-        }
-        let (running_sum, es, peak_idx) =
-            enrichment_score(&signature.abs_scores, &signature.gene_to_idx, &genes);
-        let leading_edge = leading_edge_blitz(&signature, &genes, &running_sum, peak_idx);
-        let size_f = size as f64;
-        let pos_alpha = model.alpha_pos.at(size_f);
-        let pos_beta = model.beta_pos.at(size_f);
-        let pos_ratio = model.pos_ratio.at(size_f).clamp(0.0, 1.0);
-        let neg_alpha = model.alpha_neg.at(size_f);
-        let neg_beta = model.beta_neg.at(size_f);
+    let stage = timings.start();
+    let params_by_size = model_params_by_size(&model, &cleaned, options);
+    timings.finish("model_param_cache", stage);
 
-        let (p_value, nes) = if es > 0.0 {
-            let tail = gamma_tail_probability(
-                crate::blitz_mpmath::TailBranch::Positive,
-                es,
-                pos_alpha,
-                pos_beta,
-                pos_ratio,
-                options.deep_accuracy,
-            )?;
-            let nes = normal_isf(tail.prob_two_tailed);
-            (tail.p_value, Some(nes))
-        } else {
-            let tail = gamma_tail_probability(
-                crate::blitz_mpmath::TailBranch::Negative,
-                -es,
-                neg_alpha,
-                neg_beta,
-                pos_ratio,
-                options.deep_accuracy,
-            )?;
-            let mut nes = -normal_isf(tail.prob_two_tailed);
-            if nes == 0.0 {
-                nes = -0.0;
-            }
-            (tail.p_value, Some(nes))
-        };
+    let stage = timings.start();
+    let scored = score_blitz_pathways(&signature, &cleaned, &params_by_size, options)?;
+    timings.finish("final_es_leading_edge_gamma", stage);
+    timings.value(
+        "gamma_cdf_calls",
+        scored.iter().map(|row| row.cdf_calls).sum::<usize>(),
+    );
+    timings.value(
+        "gamma_fallback_calls",
+        scored.iter().map(|row| row.fallback_calls).sum::<usize>(),
+    );
 
-        results.push(EnrichmentResult {
-            pathway_name: pathway,
-            size,
-            es,
-            nes,
-            p_value,
-            padj: None,
-            log2err: None,
-            leading_edge,
-        });
-    }
+    let mut results = scored.into_iter().map(|row| row.result).collect::<Vec<_>>();
 
+    let stage = timings.start();
     apply_statsmodels_bh_adjustment(&mut results);
     results.sort_by(|a, b| {
         a.p_value
@@ -540,7 +642,239 @@ pub fn fgsea_blitz_with_options(
             .unwrap()
             .then_with(|| a.pathway_name.cmp(&b.pathway_name))
     });
+    timings.finish("bh_and_sort", stage);
     Ok(results)
+}
+
+#[doc(hidden)]
+pub struct BlitzBenchPrepared {
+    signature: BlitzSignature,
+    cleaned: Vec<CleanedPathway>,
+    params_by_size: HashMap<usize, BlitzModelParams>,
+    options: BlitzOptions,
+}
+
+#[doc(hidden)]
+pub fn __bench_blitz_prepare_scoring(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    options: &BlitzOptions,
+) -> Result<BlitzBenchPrepared> {
+    validate_options(options, ranks.len())?;
+    let signature = prepare_signature(ranks, options.center);
+    let cleaned = clean_pathways(pathways, &signature);
+    let model = estimate_model(&signature, &cleaned, options)?;
+    let params_by_size = model_params_by_size(&model, &cleaned, options);
+    Ok(BlitzBenchPrepared {
+        signature,
+        cleaned,
+        params_by_size,
+        options: options.clone(),
+    })
+}
+
+#[doc(hidden)]
+pub fn __bench_blitz_anchor_calibration(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    options: &BlitzOptions,
+) -> Result<usize> {
+    validate_options(options, ranks.len())?;
+    let signature = prepare_signature(ranks, options.center);
+    let cleaned = clean_pathways(pathways, &signature);
+    let (_, fits) = estimate_anchor_fits(&signature, &cleaned, options)?;
+    Ok(fits.len())
+}
+
+#[doc(hidden)]
+pub fn __bench_blitz_score_prepared(prepared: &BlitzBenchPrepared) -> Result<usize> {
+    let scored = score_blitz_pathways(
+        &prepared.signature,
+        &prepared.cleaned,
+        &prepared.params_by_size,
+        &prepared.options,
+    )?;
+    Ok(scored.len())
+}
+
+#[doc(hidden)]
+pub fn __bench_blitz_tail_microcases(deep_accuracy: usize) -> Result<f64> {
+    let cases = [
+        (
+            crate::blitz_mpmath::TailBranch::Positive,
+            0.73,
+            2.8,
+            0.19,
+            0.57,
+        ),
+        (
+            crate::blitz_mpmath::TailBranch::Negative,
+            1.19,
+            4.2,
+            0.31,
+            0.44,
+        ),
+        (
+            crate::blitz_mpmath::TailBranch::Positive,
+            13.0,
+            1.4,
+            0.18,
+            0.63,
+        ),
+        (
+            crate::blitz_mpmath::TailBranch::Negative,
+            1.0e-12,
+            3.5,
+            0.42,
+            0.51,
+        ),
+    ];
+    let mut sum = 0.0;
+    for (branch, x, alpha, beta, pos_ratio) in cases {
+        let (tail, _) = gamma_tail_probability_with_fallback_flag(
+            branch,
+            x,
+            alpha,
+            beta,
+            pos_ratio,
+            deep_accuracy,
+        )?;
+        sum += tail.p_value + tail.prob_two_tailed + tail.gamma_prob;
+    }
+    Ok(sum)
+}
+
+fn model_params_by_size(
+    model: &BlitzModel,
+    cleaned: &[CleanedPathway],
+    options: &BlitzOptions,
+) -> HashMap<usize, BlitzModelParams> {
+    let mut params_by_size = HashMap::new();
+    for pathway in cleaned {
+        let size = pathway.genes.len();
+        if size < options.min_size || size > options.max_size {
+            continue;
+        }
+        params_by_size.entry(size).or_insert_with(|| {
+            let size_f = size as f64;
+            BlitzModelParams {
+                pos_alpha: model.alpha_pos.at(size_f),
+                pos_beta: model.beta_pos.at(size_f),
+                pos_ratio: model.pos_ratio.at(size_f).clamp(0.0, 1.0),
+                neg_alpha: model.alpha_neg.at(size_f),
+                neg_beta: model.beta_neg.at(size_f),
+            }
+        });
+    }
+    params_by_size
+}
+
+fn score_blitz_pathways(
+    signature: &BlitzSignature,
+    cleaned: &[CleanedPathway],
+    params_by_size: &HashMap<usize, BlitzModelParams>,
+    options: &BlitzOptions,
+) -> Result<Vec<ScoredBlitzPathway>> {
+    let processes = options.processes.max(1);
+    let score = |scratch: &mut BlitzScoreScratch,
+                 pathway: &CleanedPathway|
+     -> Result<Option<ScoredBlitzPathway>> {
+        let size = pathway.genes.len();
+        if size < options.min_size || size > options.max_size {
+            return Ok(None);
+        }
+        let params = params_by_size
+            .get(&size)
+            .expect("model parameters should be cached for every kept size");
+        score_cleaned_pathway(signature, pathway, *params, options.deep_accuracy, scratch).map(Some)
+    };
+
+    if processes == 1 {
+        let mut scratch = BlitzScoreScratch::new(signature.abs_scores.len());
+        let mut out = Vec::new();
+        for pathway in cleaned {
+            if let Some(row) = score(&mut scratch, pathway)? {
+                out.push(row);
+            }
+        }
+        return Ok(out);
+    }
+
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(processes)
+        .build()?;
+    pool.install(|| {
+        cleaned
+            .par_iter()
+            .map_init(
+                || BlitzScoreScratch::new(signature.abs_scores.len()),
+                |scratch, pathway| score(scratch, pathway),
+            )
+            .collect::<Result<Vec<_>>>()
+            .map(|rows| rows.into_iter().flatten().collect())
+    })
+}
+
+fn score_cleaned_pathway(
+    signature: &BlitzSignature,
+    pathway: &CleanedPathway,
+    params: BlitzModelParams,
+    deep_accuracy: usize,
+    scratch: &mut BlitzScoreScratch,
+) -> Result<ScoredBlitzPathway> {
+    let extrema =
+        enrichment_score_for_indices(&signature.abs_scores, &pathway.hit_indices, scratch);
+    let leading_edge = leading_edge_blitz(
+        signature,
+        &pathway.leading_hits,
+        extrema.rmax,
+        extrema.max_value,
+        extrema.rmin,
+        extrema.min_value,
+        extrema.peak_idx,
+    );
+    let es = extrema.es;
+    let (p_value, nes, fallback_used) = if es > 0.0 {
+        let (tail, fallback_used) = gamma_tail_probability_with_fallback_flag(
+            crate::blitz_mpmath::TailBranch::Positive,
+            es,
+            params.pos_alpha,
+            params.pos_beta,
+            params.pos_ratio,
+            deep_accuracy,
+        )?;
+        let nes = normal_isf(tail.prob_two_tailed);
+        (tail.p_value, Some(nes), fallback_used)
+    } else {
+        let (tail, fallback_used) = gamma_tail_probability_with_fallback_flag(
+            crate::blitz_mpmath::TailBranch::Negative,
+            -es,
+            params.neg_alpha,
+            params.neg_beta,
+            params.pos_ratio,
+            deep_accuracy,
+        )?;
+        let mut nes = -normal_isf(tail.prob_two_tailed);
+        if nes == 0.0 {
+            nes = -0.0;
+        }
+        (tail.p_value, Some(nes), fallback_used)
+    };
+
+    Ok(ScoredBlitzPathway {
+        result: EnrichmentResult {
+            pathway_name: pathway.name.clone(),
+            size: pathway.genes.len(),
+            es,
+            nes,
+            p_value,
+            padj: None,
+            log2err: None,
+            leading_edge,
+        },
+        cdf_calls: 1,
+        fallback_calls: usize::from(fallback_used),
+    })
 }
 
 fn validate_options(options: &BlitzOptions, n_genes: usize) -> Result<()> {
@@ -608,7 +942,7 @@ fn prepare_signature(ranks: &RankedList, center: bool) -> BlitzSignature {
     }
 }
 
-fn clean_pathways(pathways: &[Pathway], signature: &BlitzSignature) -> Vec<(String, Vec<String>)> {
+fn clean_pathways(pathways: &[Pathway], signature: &BlitzSignature) -> Vec<CleanedPathway> {
     let signature_genes = signature.genes.iter().cloned().collect::<HashSet<_>>();
     let signature_set_order = PythonStringSet::from_iter(signature.genes.iter().cloned());
     pathways
@@ -620,7 +954,22 @@ fn clean_pathways(pathways: &[Pathway], signature: &BlitzSignature) -> Vec<(Stri
             } else {
                 signature_set_order.intersection_new_set_order(&gene_set.members())
             };
-            (pathway.name.clone(), genes)
+            let hit_indices = genes
+                .iter()
+                .filter_map(|gene| signature.gene_to_idx.get(gene).copied())
+                .collect::<Vec<_>>();
+            let leading_gene_set = PythonStringSet::from_iter(genes.iter().cloned());
+            let leading_hits = PythonIntSet::from_iter(
+                leading_gene_set
+                    .iter_values()
+                    .filter_map(|gene| signature.gene_to_idx.get(gene).copied()),
+            );
+            CleanedPathway {
+                name: pathway.name.clone(),
+                genes,
+                hit_indices,
+                leading_hits,
+            }
         })
         .collect()
 }
@@ -646,7 +995,7 @@ fn apply_statsmodels_bh_adjustment(results: &mut [EnrichmentResult]) {
 
 fn estimate_model(
     signature: &BlitzSignature,
-    library: &[(String, Vec<String>)],
+    library: &[CleanedPathway],
     options: &BlitzOptions,
 ) -> Result<BlitzModel> {
     let (anchor_sizes, fits) = estimate_anchor_fits(signature, library, options)?;
@@ -675,12 +1024,12 @@ fn estimate_model(
 
 fn estimate_anchor_fits(
     signature: &BlitzSignature,
-    library: &[(String, Vec<String>)],
+    library: &[CleanedPathway],
     options: &BlitzOptions,
 ) -> Result<(Vec<usize>, Vec<AnchorFit>)> {
     let max_library_size = library
         .iter()
-        .map(|(_, genes)| genes.len())
+        .map(|pathway| pathway.genes.len())
         .max()
         .unwrap_or(1)
         .max(1);
@@ -785,9 +1134,15 @@ fn estimate_anchor(
     rng: &mut NumpyMt19937,
 ) -> Result<AnchorFit> {
     let mut es = Vec::with_capacity(options.permutations);
+    let mut permutation = Vec::with_capacity(signature.abs_scores.len());
+    let mut scratch = BlitzScoreScratch::new(signature.abs_scores.len());
     for _ in 0..options.permutations {
-        let hits = rng.choice_without_replacement(signature.abs_scores.len(), set_size);
-        let value = enrichment_score_for_hits(&signature.abs_scores, &hits);
+        let hits = rng.choice_without_replacement_into(
+            signature.abs_scores.len(),
+            set_size,
+            &mut permutation,
+        );
+        let value = enrichment_score_for_hits(&signature.abs_scores, hits, &mut scratch.marker);
         if value.is_finite() {
             es.push(value);
         }
@@ -1188,25 +1543,19 @@ fn scipy_cephes_sqrtpi() -> f64 {
     2.50662827463100050242E0
 }
 
-fn enrichment_score(
+fn enrichment_score_for_indices(
     abs_scores: &[f64],
-    gene_to_idx: &HashMap<String, usize>,
-    genes: &[String],
-) -> (Vec<f64>, f64, usize) {
-    let mut hit_indicator = vec![0.0; abs_scores.len()];
-    let mut hits = Vec::new();
-    for gene in genes {
-        if let Some(&idx) = gene_to_idx.get(gene)
-            && hit_indicator[idx] == 0.0
-        {
-            hit_indicator[idx] = 1.0;
-            hits.push(idx);
-        }
-    }
+    hits: &[usize],
+    scratch: &mut BlitzScoreScratch,
+) -> EnrichmentExtrema {
+    scratch.marker.mark_hits(hits);
     let number_hits = hits.len();
     let number_miss = abs_scores.len().saturating_sub(number_hits);
-    let hit_scores = hits.iter().map(|&idx| abs_scores[idx]).collect::<Vec<_>>();
-    let sum_hit_scores = numpy_hit_score_sum_f64(&hit_scores);
+    scratch.hit_scores.clear();
+    scratch
+        .hit_scores
+        .extend(hits.iter().map(|&idx| abs_scores[idx]));
+    let sum_hit_scores = numpy_hit_score_sum_f64(&scratch.hit_scores);
     let norm_hit = if sum_hit_scores == 0.0 {
         0.0
     } else {
@@ -1218,29 +1567,48 @@ fn enrichment_score(
         1.0 / number_miss as f64
     };
 
-    let mut running = Vec::with_capacity(abs_scores.len());
     let mut csum = 0.0;
     let mut best_idx = 0usize;
+    let mut best_value = 0.0;
     let mut best_abs = f64::NEG_INFINITY;
-    for i in 0..abs_scores.len() {
-        csum +=
-            hit_indicator[i] * abs_scores[i] * norm_hit - (1.0 - hit_indicator[i]) * norm_no_hit;
-        running.push(csum);
+    let mut rmax = 0usize;
+    let mut rmin = 0usize;
+    let mut max_value = f64::NEG_INFINITY;
+    let mut min_value = f64::INFINITY;
+    for (i, &abs_score) in abs_scores.iter().enumerate() {
+        let hit_indicator = if scratch.marker.contains(i) { 1.0 } else { 0.0 };
+        csum += hit_indicator * abs_score * norm_hit - (1.0 - hit_indicator) * norm_no_hit;
+        if csum >= max_value {
+            max_value = csum;
+            rmax = i;
+        }
+        if csum <= min_value {
+            min_value = csum;
+            rmin = i;
+        }
         let cur_abs = csum.abs();
         if cur_abs > best_abs {
             best_abs = cur_abs;
             best_idx = i;
+            best_value = csum;
         }
     }
-    let es = running.get(best_idx).copied().unwrap_or(0.0);
-    (running, es, best_idx)
+    EnrichmentExtrema {
+        es: if abs_scores.is_empty() {
+            0.0
+        } else {
+            best_value
+        },
+        peak_idx: best_idx,
+        rmax,
+        max_value,
+        rmin,
+        min_value,
+    }
 }
 
-fn enrichment_score_for_hits(abs_scores: &[f64], hits: &[usize]) -> f64 {
-    let mut hit_indicator = vec![0.0; abs_scores.len()];
-    for &hit in hits {
-        hit_indicator[hit] = 1.0;
-    }
+fn enrichment_score_for_hits(abs_scores: &[f64], hits: &[usize], marker: &mut HitMarker) -> f64 {
+    marker.mark_hits(hits);
     let number_hits = hits.len();
     let number_miss = abs_scores.len().saturating_sub(number_hits);
     let sum_hit_scores = hits.iter().map(|&idx| abs_scores[idx]).sum::<f64>();
@@ -1252,8 +1620,9 @@ fn enrichment_score_for_hits(abs_scores: &[f64], hits: &[usize]) -> f64 {
     let mut csum = 0.0_f32;
     let mut best = 0.0_f32;
     let mut best_abs = f32::NEG_INFINITY;
-    for i in 0..abs_scores.len() {
-        let increment = hit_indicator[i] * (abs_scores[i] * norm_hit + norm_no_hit) - norm_no_hit;
+    for (i, &abs_score) in abs_scores.iter().enumerate() {
+        let hit_indicator = if marker.contains(i) { 1.0 } else { 0.0 };
+        let increment = hit_indicator * (abs_score * norm_hit + norm_no_hit) - norm_no_hit;
         csum += increment as f32;
         let cur_abs = csum.abs();
         if cur_abs > best_abs {
@@ -1266,31 +1635,17 @@ fn enrichment_score_for_hits(abs_scores: &[f64], hits: &[usize]) -> f64 {
 
 fn leading_edge_blitz(
     signature: &BlitzSignature,
-    genes: &[String],
-    running_sum: &[f64],
+    hits: &PythonIntSet,
+    rmax: usize,
+    max_value: f64,
+    rmin: usize,
+    min_value: f64,
     _peak_idx: usize,
 ) -> Vec<String> {
-    if running_sum.is_empty() {
+    let running_len = signature.abs_scores.len();
+    if running_len == 0 {
         return Vec::new();
     }
-    let gene_set = PythonStringSet::from_iter(genes.iter().cloned());
-    let hits = PythonIntSet::from_iter(
-        gene_set
-            .iter_values()
-            .filter_map(|gene| signature.gene_to_idx.get(gene).copied()),
-    );
-    let (rmax, max_value) = running_sum
-        .iter()
-        .enumerate()
-        .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-        .map(|(i, v)| (i, *v))
-        .unwrap();
-    let (rmin, min_value) = running_sum
-        .iter()
-        .enumerate()
-        .min_by(|a, b| a.1.partial_cmp(b.1).unwrap())
-        .map(|(i, v)| (i, *v))
-        .unwrap();
     let idxs = if max_value > min_value.abs() {
         if rmax < hits.len() {
             let filtered = PythonIntSet::from_iter(0..rmax)
@@ -1310,9 +1665,9 @@ fn leading_edge_blitz(
                 .collect::<Vec<_>>()
         }
     } else {
-        let range_len = running_sum.len().saturating_sub(rmin);
+        let range_len = running_len.saturating_sub(rmin);
         if range_len < hits.len() {
-            let filtered = PythonIntSet::from_iter(rmin..running_sum.len())
+            let filtered = PythonIntSet::from_iter(rmin..running_len)
                 .iter_values()
                 .filter(|&idx| hits.contains(idx))
                 .collect::<Vec<_>>();
@@ -1322,7 +1677,7 @@ fn leading_edge_blitz(
         } else {
             let filtered = hits
                 .iter_values()
-                .filter(|&idx| idx >= rmin && idx < running_sum.len())
+                .filter(|&idx| idx >= rmin && idx < running_len)
                 .collect::<Vec<_>>();
             PythonIntSet::from_iter(filtered)
                 .iter_values()
@@ -1396,14 +1751,14 @@ fn gamma_cdf_blitz(x: f64, alpha: f64, beta: f64, deep_accuracy: usize) -> Resul
 }
 
 #[allow(clippy::manual_range_contains)]
-fn gamma_tail_probability(
+fn gamma_tail_probability_with_fallback_flag(
     branch: crate::blitz_mpmath::TailBranch,
     x: f64,
     alpha: f64,
     beta: f64,
     pos_ratio: f64,
     deep_accuracy: usize,
-) -> Result<crate::blitz_mpmath::TailProbability> {
+) -> Result<(crate::blitz_mpmath::TailProbability, bool)> {
     let prob = gamma_cdf(x, alpha, beta);
     if prob > 0.999_999_999 || prob < 0.000_000_000_01 {
         return crate::blitz_mpmath::tail_probability(
@@ -1413,7 +1768,8 @@ fn gamma_tail_probability(
             beta,
             pos_ratio,
             deep_accuracy,
-        );
+        )
+        .map(|tail| (tail, true));
     }
     let (prob_two_tailed, p_value) = match branch {
         crate::blitz_mpmath::TailBranch::Positive => {
@@ -1430,12 +1786,15 @@ fn gamma_tail_probability(
             (prob_two_tailed, (2.0 * prob_two_tailed).min(1.0))
         }
     };
-    Ok(crate::blitz_mpmath::TailProbability {
-        gamma_prob: prob,
-        survival_prob: 1.0 - prob,
-        prob_two_tailed,
-        p_value,
-    })
+    Ok((
+        crate::blitz_mpmath::TailProbability {
+            gamma_prob: prob,
+            survival_prob: 1.0 - prob,
+            prob_two_tailed,
+            p_value,
+        },
+        false,
+    ))
 }
 
 fn normal_isf(p: f64) -> f64 {
@@ -1831,8 +2190,8 @@ mod tests {
         let (_, cleaned) = reference_inputs();
         let top = cleaned
             .iter()
-            .find(|(name, _)| name == "TOP_12")
-            .map(|(_, genes)| genes)
+            .find(|pathway| pathway.name == "TOP_12")
+            .map(|pathway| &pathway.genes)
             .unwrap();
         assert_eq!(
             top,
@@ -1844,6 +2203,96 @@ mod tests {
             .map(str::to_string)
             .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn optimized_enrichment_score_extrema_match_running_sum_reference() {
+        let abs_scores = vec![3.0, 1.5, 7.0, 2.25, 4.0, 5.5, 0.75, 6.25, 3.75];
+        let hits = vec![7, 0, 4, 2];
+        let mut scratch = BlitzScoreScratch::new(abs_scores.len());
+        let observed = enrichment_score_for_indices(&abs_scores, &hits, &mut scratch);
+
+        let mut hit_indicator = vec![0.0; abs_scores.len()];
+        for &hit in &hits {
+            hit_indicator[hit] = 1.0;
+        }
+        let number_hits = hits.len();
+        let number_miss = abs_scores.len().saturating_sub(number_hits);
+        let hit_scores = hits.iter().map(|&idx| abs_scores[idx]).collect::<Vec<_>>();
+        let sum_hit_scores = numpy_hit_score_sum_f64(&hit_scores);
+        let norm_hit = 1.0 / sum_hit_scores;
+        let norm_no_hit = 1.0 / number_miss as f64;
+        let mut running = Vec::new();
+        let mut csum = 0.0;
+        let mut best_idx = 0usize;
+        let mut best_abs = f64::NEG_INFINITY;
+        for i in 0..abs_scores.len() {
+            csum += hit_indicator[i] * abs_scores[i] * norm_hit
+                - (1.0 - hit_indicator[i]) * norm_no_hit;
+            running.push(csum);
+            let cur_abs = csum.abs();
+            if cur_abs > best_abs {
+                best_abs = cur_abs;
+                best_idx = i;
+            }
+        }
+        let (rmax, max_value) = running
+            .iter()
+            .enumerate()
+            .max_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, v)| (i, *v))
+            .unwrap();
+        let (rmin, min_value) = running
+            .iter()
+            .enumerate()
+            .min_by(|a, b| a.1.partial_cmp(b.1).unwrap())
+            .map(|(i, v)| (i, *v))
+            .unwrap();
+
+        assert_f64_bits("optimized ES", observed.es, running[best_idx]);
+        assert_eq!(observed.peak_idx, best_idx);
+        assert_eq!(observed.rmax, rmax);
+        assert_eq!(observed.rmin, rmin);
+        assert_f64_bits("optimized max", observed.max_value, max_value);
+        assert_f64_bits("optimized min", observed.min_value, min_value);
+    }
+
+    #[test]
+    fn parallel_final_scoring_matches_sequential_scoring_exactly() {
+        let (signature, cleaned) = reference_inputs();
+        let options = BlitzOptions::default();
+        let model = estimate_model(&signature, &cleaned, &options).unwrap();
+        let params = model_params_by_size(&model, &cleaned, &options);
+        let mut sequential_options = options.clone();
+        sequential_options.processes = 1;
+        let mut parallel_options = options.clone();
+        parallel_options.processes = 4;
+
+        let sequential =
+            score_blitz_pathways(&signature, &cleaned, &params, &sequential_options).unwrap();
+        let parallel =
+            score_blitz_pathways(&signature, &cleaned, &params, &parallel_options).unwrap();
+        assert_eq!(sequential.len(), parallel.len());
+        for (seq, par) in sequential.iter().zip(parallel.iter()) {
+            assert_eq!(seq.result.pathway_name, par.result.pathway_name);
+            assert_eq!(seq.result.size, par.result.size);
+            assert_eq!(seq.result.leading_edge, par.result.leading_edge);
+            assert_f64_bits(
+                &format!("{} ES", seq.result.pathway_name),
+                seq.result.es,
+                par.result.es,
+            );
+            assert_f64_bits(
+                &format!("{} pval", seq.result.pathway_name),
+                seq.result.p_value,
+                par.result.p_value,
+            );
+            assert_f64_bits(
+                &format!("{} NES", seq.result.pathway_name),
+                seq.result.nes.unwrap(),
+                par.result.nes.unwrap(),
+            );
+        }
     }
 
     #[derive(Debug, Deserialize)]
@@ -1900,7 +2349,7 @@ mod tests {
         nes: f64,
     }
 
-    fn reference_inputs() -> (BlitzSignature, Vec<(String, Vec<String>)>) {
+    fn reference_inputs() -> (BlitzSignature, Vec<CleanedPathway>) {
         let root = env!("CARGO_MANIFEST_DIR");
         let ranks =
             read_ranked_list(format!("{root}/tests/data/blitz_reference/synthetic.rnk")).unwrap();
