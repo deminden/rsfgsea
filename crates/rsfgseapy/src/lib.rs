@@ -92,7 +92,7 @@ fn apply_decor_release_tuning(
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false, method="classic", decor_cache=None, decor_expression=None, decor_preset=None, decor_stringency=None, decor_cache_mode="auto", decor_correlation="pearson", decor_redundancy="positive_mean"))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=None, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false, method="classic", decor_cache=None, decor_expression=None, decor_preset=None, decor_stringency=None, decor_cache_mode="auto", decor_correlation="pearson", decor_redundancy="positive_mean", blitz_anchors=40, blitz_symmetric=false, blitz_center=true, blitz_accuracy=40, blitz_deep_accuracy=50))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
@@ -100,7 +100,7 @@ fn run_gsea_py(
     nPermSimple: usize,
     seed: Option<u64>,
     nproc: usize,
-    minSize: usize,
+    minSize: Option<usize>,
     maxSize: Option<usize>,
     eps: f64,
     scoreType: &str,
@@ -117,6 +117,11 @@ fn run_gsea_py(
     decor_cache_mode: &str,
     decor_correlation: &str,
     decor_redundancy: &str,
+    blitz_anchors: usize,
+    blitz_symmetric: bool,
+    blitz_center: bool,
+    blitz_accuracy: usize,
+    blitz_deep_accuracy: usize,
 ) -> PyResult<Vec<HashMap<String, Py<PyAny>>>> {
     if sampleSize == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -128,6 +133,16 @@ fn run_gsea_py(
         let _ = rayon::ThreadPoolBuilder::new()
             .num_threads(nproc)
             .build_global();
+    }
+    if minSize.is_some_and(|min_size| min_size == 0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "minSize must be greater than 0.",
+        ));
+    }
+    if blitz_anchors == 0 || blitz_accuracy == 0 || blitz_deep_accuracy == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "blitz_anchors, blitz_accuracy, and blitz_deep_accuracy must be greater than 0.",
+        ));
     }
 
     let mut genes = Vec::new();
@@ -144,6 +159,34 @@ fn run_gsea_py(
     let st = parse_score_type(scoreType)?;
     let method = parse_method(method)?;
     let mode = parse_interface_mode(mode).map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let min_size = minSize.unwrap_or(if mode == InterfaceMode::Blitz { 5 } else { 1 });
+    if mode == InterfaceMode::Blitz {
+        if gpu {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "gpu is not supported with mode='blitz'.",
+            ));
+        }
+        if method != EnrichmentMethod::Classic {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "mode='blitz' supports only method='classic'.",
+            ));
+        }
+        if nperm.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "nperm is not supported with mode='blitz'.",
+            ));
+        }
+        if st != ScoreType::Std {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "mode='blitz' supports only scoreType='std'.",
+            ));
+        }
+        if (gseaParam - 1.0).abs() > f64::EPSILON {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "mode='blitz' supports only gseaParam=1.0.",
+            ));
+        }
+    }
     if method == EnrichmentMethod::Decor {
         if gpu
             || mode == InterfaceMode::Multilevel
@@ -178,7 +221,7 @@ fn run_gsea_py(
             &options,
             nperm.unwrap_or(nPermSimple),
             seed,
-            minSize,
+            min_size,
             max_size,
             eps,
             st,
@@ -209,15 +252,38 @@ fn run_gsea_py(
         resolve_execution_plan(mode, false, nperm, nPermSimple)
             .map_err(pyo3::exceptions::PyValueError::new_err)?
     };
-    let max_size = maxSize.unwrap_or_else(|| rs_ranks.len().saturating_sub(1));
+    let max_size = maxSize.unwrap_or_else(|| {
+        if mode == InterfaceMode::Blitz {
+            4000
+        } else {
+            rs_ranks.len().saturating_sub(1)
+        }
+    });
     let results = match exec_mode {
+        ExecutionPlan::Cpu(InterfaceMode::Blitz) => fgsea_blitz_with_options(
+            &rs_ranks,
+            &pd.pathways,
+            &BlitzOptions {
+                permutations: nPermSimple,
+                anchors: blitz_anchors,
+                min_size,
+                max_size,
+                processes: if nproc > 0 { nproc } else { 4 },
+                symmetric: blitz_symmetric,
+                seed: seed.unwrap_or(0),
+                center: blitz_center,
+                accuracy: blitz_accuracy,
+                deep_accuracy: blitz_deep_accuracy,
+            },
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?,
         ExecutionPlan::Cpu(InterfaceMode::Fgsea) => fgsea_with_sample_size(
             &rs_ranks,
             &pd.pathways,
             nperm,
             nPermSimple,
             seed,
-            minSize,
+            min_size,
             max_size,
             eps,
             st,
@@ -229,7 +295,7 @@ fn run_gsea_py(
             &pd.pathways,
             nPermSimple,
             seed,
-            minSize,
+            min_size,
             max_size,
             eps,
             st,
@@ -241,7 +307,7 @@ fn run_gsea_py(
             &pd.pathways,
             nperm.unwrap_or(nPermSimple),
             seed,
-            minSize,
+            min_size,
             max_size,
             eps,
             st,
@@ -258,7 +324,7 @@ fn run_gsea_py(
             &pd.pathways,
             n_perm,
             seed,
-            minSize,
+            min_size,
             max_size,
             eps,
             st,

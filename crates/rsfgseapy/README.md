@@ -1,6 +1,6 @@
 # rsfgseapy
 
-Python bindings for `rsfgsea`, a Rust implementation of preranked fgsea-compatible gene set enrichment analysis.
+Python bindings for `rsfgsea`, a Rust implementation of preranked gene set enrichment analysis with decor, classic fgsea-compatible, and native blitz workflows.
 
 ## What It Exposes
 
@@ -8,11 +8,14 @@ The package currently exposes one public entrypoint:
 
 - `run_gsea_py(...)`
 
-The API intentionally keeps fgsea-style parameter names and execution modes:
+The API intentionally keeps fgsea-style parameter names while exposing decor first, classic fgsea-compatible modes second, and native blitz third:
 
+- `method="decor"` / `method="classic"`
+- `decor_cache`, `decor_expression`, `decor_preset`, `decor_stringency`
 - `mode="fgsea"`
 - `mode="simple"`
 - `mode="multilevel"`
+- `mode="blitz"`
 - `nPermSimple`
 - `seed`
 - `nperm`
@@ -21,6 +24,7 @@ The API intentionally keeps fgsea-style parameter names and execution modes:
 - `sampleSize`
 - `scoreType`
 - `gseaParam`
+- `blitz_anchors`, `blitz_symmetric`, `blitz_center`, `blitz_accuracy`, `blitz_deep_accuracy`
 
 ## Installation
 
@@ -66,9 +70,27 @@ Full benchmark setup, thread-scaling tables, and parity notes are in:
 
 - https://github.com/deminden/rsfgsea/blob/main/docs/reproducibility.md
 
-## Minimal Example
+## Decor Example
 
-For most users, wrapper mode with defaults is the right starting point.
+Decor supports CPU fixed-permutation simple runs.
+
+```python
+import rsfgseapy
+
+results = rsfgseapy.run_gsea_py(
+    ranks={"TP53": 3.1, "MYC": 2.8, "ACTB": -1.2},
+    gmt_path="pathways.gmt",
+    method="decor",
+    mode="simple",
+    nperm=10000,
+    decor_cache="cache/pathways.decor.tsv",
+    decor_expression="data/expression.tsv",
+)
+```
+
+## Classic Minimal Example
+
+Wrapper mode with defaults is the closest match to the standard R `fgsea` interface.
 
 ```python
 import rsfgseapy
@@ -82,7 +104,7 @@ for row in results:
     print(row["pathway"], row["pval"])
 ```
 
-## Full Example
+## Classic Full Example
 
 ```python
 import rsfgseapy
@@ -99,7 +121,7 @@ results = rsfgseapy.run_gsea_py(
     gmt_path="pathways.gmt",
     mode="fgsea",
     gpu=False,
-    nPermSimple=1000,
+    nPermSimple=100000,
     seed=None,
     nperm=None,
     minSize=1,
@@ -113,6 +135,20 @@ results = rsfgseapy.run_gsea_py(
 
 for row in results:
     print(row["pathway"], row["nes"], row["pval"])
+```
+
+## Blitz Example
+
+Blitz mode is a native Rust implementation of the `blitzgsea.gsea()` workflow.
+
+```python
+import rsfgseapy
+
+results = rsfgseapy.run_gsea_py(
+    ranks={"TP53": 3.1, "MYC": 2.8, "ACTB": -1.2, "GATA3": -2.0, "ESR1": 1.5},
+    gmt_path="pathways.gmt",
+    mode="blitz",
+)
 ```
 
 ## Plotting
@@ -176,6 +212,9 @@ Practical rule:
 - light users: keep `nperm=None`
 - use `nPermSimple` to tune the default wrapper behavior
 - only set `nperm` when you deliberately want fixed-permutation simple execution
+- for CPU/GPU or R/GPU comparisons, prefer `nPermSimple=100000` as a practical
+  baseline; use `10000` only as a smoke tier and `1000000` for final
+  tail/stress checks when runtime allows
 
 ## Returned Results
 
@@ -202,6 +241,18 @@ Current behavior:
 - CPU performs parity-focused multilevel refinement
 
 If the extension is built without GPU support, `gpu=True` raises a runtime error.
+
+On WSL2, CUDA can be visible while WebGPU still selects Mesa `llvmpipe`. If
+`nvidia-smi` works but `gpu=True` fails with a `llvmpipe` adapter error, start
+Python with Mesa's D3D12 path enabled:
+
+```bash
+export GALLIUM_DRIVER=d3d12
+export MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+```
+
+For older builds or adapter debugging, also try `WGPU_BACKEND=gl` and
+`RSFGSEA_GPU_ALLOW_GL=1`.
 
 ## Supported Python Versions
 

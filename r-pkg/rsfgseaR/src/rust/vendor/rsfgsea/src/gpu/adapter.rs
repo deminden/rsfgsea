@@ -1,5 +1,6 @@
 use crate::GpuEngine;
 use anyhow::Result;
+use std::path::Path;
 
 struct AdapterSelection {
     adapter: wgpu::Adapter,
@@ -14,7 +15,17 @@ fn gl_fallback_enabled() -> bool {
         .ok()
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false);
-    allow_gl_backend || mesa_adapter_override
+    allow_gl_backend || mesa_adapter_override || gallium_d3d12_enabled()
+}
+
+fn gallium_d3d12_enabled() -> bool {
+    std::env::var("GALLIUM_DRIVER")
+        .map(|v| v.eq_ignore_ascii_case("d3d12"))
+        .unwrap_or(false)
+}
+
+fn wsl_dxg_visible() -> bool {
+    Path::new("/dev/dxg").exists()
 }
 
 fn requested_backends(gl_fallback_enabled: bool) -> wgpu::Backends {
@@ -27,6 +38,8 @@ fn requested_backends(gl_fallback_enabled: bool) -> wgpu::Backends {
             "all" => wgpu::Backends::all(),
             _ => wgpu::Backends::PRIMARY,
         }
+    } else if gl_fallback_enabled && gallium_d3d12_enabled() {
+        wgpu::Backends::GL
     } else if gl_fallback_enabled {
         wgpu::Backends::all()
     } else {
@@ -64,6 +77,9 @@ fn select_adapter(
         if info.vendor == 0x10de || name_lower.contains("nvidia") {
             score += 100;
         }
+        if name_lower.contains("d3d12") {
+            score += 50;
+        }
         if matches!(
             info.backend,
             wgpu::Backend::Vulkan | wgpu::Backend::Dx12 | wgpu::Backend::Metal
@@ -93,10 +109,9 @@ impl GpuEngine {
     pub async fn new() -> Result<Self> {
         let gl_fallback_enabled = gl_fallback_enabled();
         let backends = requested_backends(gl_fallback_enabled);
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends,
-            ..Default::default()
-        });
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        descriptor.backends = backends;
+        let instance = wgpu::Instance::new(descriptor);
 
         let adapter =
             if let Some(selection) = select_adapter(&instance, backends, gl_fallback_enabled) {
@@ -119,12 +134,19 @@ impl GpuEngine {
             || selected_name.contains("llvmpipe")
             || (!gl_fallback_enabled && selected_info.backend == wgpu::Backend::Gl);
         if unsuitable {
+            let wsl_hint = if wsl_dxg_visible() {
+                " On WSL2 with CUDA visible but Vulkan/OpenGL selecting llvmpipe, try: \
+GALLIUM_DRIVER=d3d12 MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA RSFGSEA_GPU_ALLOW_GL=1 WGPU_BACKEND=gl."
+            } else {
+                ""
+            };
             return Err(anyhow::anyhow!(
                 "No suitable non-CPU GPU adapter found. Selected adapter was '{}', backend={:?}. \
 Set WGPU_BACKEND=vulkan and, on WSL2, ensure NVIDIA Vulkan is visible (optionally set MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA). \
-If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MESA_D3D12_DEFAULT_ADAPTER_NAME).",
+If you intentionally want GL translation, set RSFGSEA_GPU_ALLOW_GL=1 (or set MESA_D3D12_DEFAULT_ADAPTER_NAME).{}",
                 selected_info.name,
-                selected_info.backend
+                selected_info.backend,
+                wsl_hint
             ));
         }
 

@@ -46,6 +46,28 @@ test_that("fgseaSimple and fgseaMultilevel run", {
   expect_equal(nrow(multi_res), 2L)
 })
 
+test_that("fgsea blitz mode runs and rejects incompatible options", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+
+  blitz_res <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    mode = "blitz",
+    nPermSimple = 64L,
+    minSize = 1L,
+    maxSize = 4L,
+    blitz.anchors = 4L
+  )
+
+  expect_equal(nrow(blitz_res), 2L)
+  expect_true(all(is.na(blitz_res$log2err)))
+  expect_error(
+    rsfgseaR::fgsea(pathways = pathways, stats = stats, mode = "blitz", scoreType = "pos"),
+    "mode = 'blitz' supports only scoreType = 'std'"
+  )
+})
+
 test_that("fgseaSimple respects the active R sample.kind", {
   skip_if_not_installed("fgsea")
 

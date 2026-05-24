@@ -26,33 +26,34 @@ path = "src/bin/plot_gsea_table.rs"
 [dependencies]
 anyhow = "1.0.102"
 ab_glyph = "0.2.32"
+astro-float = { version = "0.9.5", default-features = false, features = ["std"] }
 bytemuck = { version = "1.25.0", features = ["derive"], optional = true }
-clap = { version = "4.6.0", features = ["derive"] }
+clap = { version = "4.6.1", features = ["derive"] }
 csv = "1.4.0"
-flate2 = "1.1.5"
+flate2 = "1.1.9"
 flume = { version = "0.12.0", optional = true }
 futures-intrusive = { version = "0.5.0", optional = true }
 image = "0.25.10"
-imageproc = "0.26.1"
+imageproc = "0.26.2"
 itertools = "0.14.0"
 log = "0.4.29"
 ndarray = "0.17.2"
 num_cpus = "1.17.0"
 png = "0.18.1"
 pollster = { version = "0.4.0", optional = true }
-rand = "0.10.0"
+rand = "0.10.1"
 rand_chacha = "0.10.0"
-rayon = "1.11.0"
+rayon = "1.12.0"
 serde = { version = "1.0.228", features = ["derive"] }
-sha2 = "0.10.9"
-special = "0.13.0"
+sha2 = "0.11.0"
+special = "0.13.1"
 statrs = "0.18.0"
 thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"], optional = true }
-wgpu = { version = "28.0.0", optional = true }
+tokio = { version = "1.52.3", features = ["macros", "rt-multi-thread"], optional = true }
+wgpu = { version = "29.0.3", optional = true }
 
 [dev-dependencies]
-assert_cmd = "2.2.0"
+assert_cmd = "2.2.2"
 criterion = "0.8.2"
 predicates = "3.1.4"
 rand_distr = "0.6.0"

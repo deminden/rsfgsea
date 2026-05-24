@@ -35,9 +35,9 @@ struct Args {
     #[arg(short, long)]
     output: PathBuf,
 
-    /// Minimal size of a gene set to test
-    #[arg(long = "minSize", visible_alias = "min-size", default_value_t = 1)]
-    min_size: usize,
+    /// Minimal size of a gene set to test (defaults to 1, or 5 in blitz mode)
+    #[arg(long = "minSize", visible_alias = "min-size")]
+    min_size: Option<usize>,
 
     /// Maximal size of a gene set to test (defaults to ranks length - 1)
     #[arg(long = "maxSize")]
@@ -75,6 +75,26 @@ struct Args {
     /// Execution mode: fgsea (wrapper semantics), multilevel, or simple
     #[arg(long, value_enum, default_value_t = CliMode::Fgsea)]
     mode: CliMode,
+
+    /// Number of blitz calibration anchors
+    #[arg(long = "blitz-anchors", default_value_t = 40)]
+    blitz_anchors: usize,
+
+    /// Force symmetric positive/negative blitz null fits
+    #[arg(long = "blitz-symmetric")]
+    blitz_symmetric: bool,
+
+    /// Disable blitz signature centering
+    #[arg(long = "blitz-no-center")]
+    blitz_no_center: bool,
+
+    /// Blitz normal-tail accuracy setting, kept for parity metadata
+    #[arg(long = "blitz-accuracy", default_value_t = 40)]
+    blitz_accuracy: usize,
+
+    /// Blitz deep-tail accuracy setting, kept for parity metadata
+    #[arg(long = "blitz-deep-accuracy", default_value_t = 50)]
+    blitz_deep_accuracy: usize,
 
     /// Enrichment method: classic fgsea-compatible statistics or decor
     #[arg(long, value_enum, default_value_t = MethodArg::Classic)]
@@ -156,6 +176,7 @@ enum CliMode {
     Fgsea,
     Multilevel,
     Simple,
+    Blitz,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -296,10 +317,23 @@ fn validate_gpu_mode_args(args: &Args) -> Result<GpuModeConfig> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let seed = resolve_rng_seed(args.seed);
+    let seed = if args.mode == CliMode::Blitz {
+        args.seed.unwrap_or(0)
+    } else {
+        resolve_rng_seed(args.seed)
+    };
 
     if args.sample_size == 0 {
         bail!("--sampleSize must be greater than 0.");
+    }
+    if args.min_size.is_some_and(|min_size| min_size == 0) {
+        bail!("--minSize must be greater than 0.");
+    }
+    if args.blitz_anchors == 0 {
+        bail!("--blitz-anchors must be greater than 0.");
+    }
+    if args.blitz_accuracy == 0 || args.blitz_deep_accuracy == 0 {
+        bail!("--blitz-accuracy and --blitz-deep-accuracy must be greater than 0.");
     }
     if args
         .decor_alpha
@@ -332,6 +366,23 @@ fn main() -> Result<()> {
         bail!(
             "decor supports CPU fixed-permutation simple runs; use --mode simple or provide --nperm without --gpu."
         );
+    }
+    if args.mode == CliMode::Blitz {
+        if args.gpu {
+            bail!("gpu is not supported with --mode blitz.");
+        }
+        if args.method != MethodArg::Classic {
+            bail!("--mode blitz supports only --method classic.");
+        }
+        if args.nperm.is_some() {
+            bail!("--nperm is not supported with --mode blitz.");
+        }
+        if args.score_type != ScoreTypeArg::Std {
+            bail!("--mode blitz supports only --scoreType std.");
+        }
+        if (args.gsea_param - 1.0).abs() > f64::EPSILON {
+            bail!("--mode blitz supports only --gseaParam 1.");
+        }
     }
     if args.method == MethodArg::Decor
         && (args.mode == CliMode::Multilevel
@@ -366,6 +417,7 @@ fn main() -> Result<()> {
             CliMode::Fgsea => "fgsea",
             CliMode::Multilevel => "multilevel",
             CliMode::Simple => "simple",
+            CliMode::Blitz => "blitz",
         },
         args.n_perm_simple,
         args.nperm
@@ -375,9 +427,16 @@ fn main() -> Result<()> {
     let score_type: ScoreType = args.score_type.into();
 
     let start = Instant::now();
-    let max_size = args
-        .max_size
-        .unwrap_or_else(|| ranks.len().saturating_sub(1));
+    let min_size = args
+        .min_size
+        .unwrap_or(if args.mode == CliMode::Blitz { 5 } else { 1 });
+    let max_size = args.max_size.unwrap_or_else(|| {
+        if args.mode == CliMode::Blitz {
+            4000
+        } else {
+            ranks.len().saturating_sub(1)
+        }
+    });
     let results = if args.method == MethodArg::Decor {
         let mut options = DecorOptions::default();
         let stringency_resolved = args
@@ -468,7 +527,7 @@ fn main() -> Result<()> {
             &options,
             args.nperm.unwrap_or(args.n_perm_simple),
             Some(seed),
-            args.min_size,
+            min_size,
             max_size,
             args.eps,
             score_type,
@@ -477,6 +536,23 @@ fn main() -> Result<()> {
         )?
     } else if args.gpu {
         run_gpu_mode(&args, &ranks, &pd.pathways, score_type, max_size, seed)?
+    } else if args.mode == CliMode::Blitz {
+        fgsea_blitz_with_options(
+            &ranks,
+            &pd.pathways,
+            &BlitzOptions {
+                permutations: args.n_perm_simple,
+                anchors: args.blitz_anchors,
+                min_size,
+                max_size,
+                processes: if args.nproc > 0 { args.nproc } else { 4 },
+                symmetric: args.blitz_symmetric,
+                seed,
+                center: !args.blitz_no_center,
+                accuracy: args.blitz_accuracy,
+                deep_accuracy: args.blitz_deep_accuracy,
+            },
+        )?
     } else {
         match args.mode {
             CliMode::Fgsea => fgsea_with_sample_size(
@@ -485,7 +561,7 @@ fn main() -> Result<()> {
                 args.nperm,
                 args.n_perm_simple,
                 Some(seed),
-                args.min_size,
+                min_size,
                 max_size,
                 args.eps,
                 score_type,
@@ -501,7 +577,7 @@ fn main() -> Result<()> {
                     &pd.pathways,
                     args.n_perm_simple,
                     Some(seed),
-                    args.min_size,
+                    min_size,
                     max_size,
                     args.eps,
                     score_type,
@@ -514,13 +590,14 @@ fn main() -> Result<()> {
                 &pd.pathways,
                 args.nperm.unwrap_or(args.n_perm_simple),
                 Some(seed),
-                args.min_size,
+                min_size,
                 max_size,
                 args.eps,
                 score_type,
                 args.gsea_param,
                 args.sample_size,
             ),
+            CliMode::Blitz => unreachable!("blitz mode handled before fgsea-compatible modes"),
         }
     };
     let duration = start.elapsed();
@@ -544,18 +621,24 @@ fn write_results(path: &Path, results: &[EnrichmentResult]) -> Result<()> {
         let export = res.export();
         writeln!(
             out,
-            "{}\t{}\t{:.8}\t{:.8}\t{:.8}\t{:.8}\t{:.8}\t{}",
+            "{}\t{}\t{:.8}\t{}\t{:.8}\t{}\t{}\t{}",
             export.pathway,
             export.size,
             export.es,
-            export.nes.unwrap_or(0.0),
+            format_optional_float(export.nes),
             export.pval,
-            export.padj.unwrap_or(1.0),
-            export.log2err.unwrap_or(0.0),
+            format_optional_float(export.padj),
+            format_optional_float(export.log2err),
             res.leading_edge_csv()
         )?;
     }
     Ok(())
+}
+
+fn format_optional_float(value: Option<f64>) -> String {
+    value
+        .map(|value| format!("{value:.8}"))
+        .unwrap_or_else(|| "NA".to_string())
 }
 
 #[cfg(feature = "gpu")]
@@ -583,7 +666,7 @@ fn run_gpu_mode(
         pathways,
         config.n_perm,
         Some(seed),
-        args.min_size,
+        args.min_size.unwrap_or(1),
         max_size,
         config.eps,
         score_type,
@@ -617,13 +700,18 @@ mod tests {
             nperm: None,
             seed: Some(42),
             output: PathBuf::from("out.tsv"),
-            min_size: 1,
+            min_size: Some(1),
             max_size: None,
             eps: 1e-50,
             sample_size: 101,
             score_type: ScoreTypeArg::Std,
             gsea_param: 1.0,
             mode: CliMode::Fgsea,
+            blitz_anchors: 40,
+            blitz_symmetric: false,
+            blitz_no_center: false,
+            blitz_accuracy: 40,
+            blitz_deep_accuracy: 50,
             method: MethodArg::Classic,
             decor_cache: None,
             decor_expression: None,

@@ -40,6 +40,38 @@ def test_cpu_simple_mode_runs(tmp_path: Path) -> None:
     assert {row["pathway"] for row in results} == {"PW_A", "PW_B"}
 
 
+def test_cpu_blitz_mode_runs(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    results = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        mode="blitz",
+        nPermSimple=64,
+        minSize=1,
+        maxSize=4,
+        blitz_anchors=4,
+    )
+
+    assert len(results) == 2
+    assert {row["pathway"] for row in results} == {"PW_A", "PW_B"}
+    assert all(row["log2err"] is None for row in results)
+
+
+def test_blitz_rejects_incompatible_options(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    with pytest.raises(ValueError, match="mode='blitz' supports only scoreType='std'"):
+        rsfgseapy.run_gsea_py(
+            ranks=ranks,
+            gmt_path=str(gmt_path),
+            mode="blitz",
+            scoreType="pos",
+        )
+
+
 def test_invalid_mode_raises_value_error(tmp_path: Path) -> None:
     gmt_path = write_gmt(tmp_path)
     ranks = {"g1": 2.0, "g2": 1.0}

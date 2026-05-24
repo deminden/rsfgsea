@@ -1,61 +1,20 @@
 # Algorithm Guide
 
-This project focuses on fgsea-compatible preranked enrichment.
+This project exposes three user-facing GSEA tracks: decor first, classic fgsea-compatible workflows second, and native blitz third.
 
 ## Supported Execution Paths
 
-There are three maintained paths:
+There are five maintained CPU paths:
 
-1. `fgsea` wrapper mode
-2. explicit simple mode
-3. explicit multilevel mode
+1. `rsfgsea-decor`
+2. classic `fgsea` wrapper mode
+3. classic explicit simple mode
+4. classic explicit multilevel mode
+5. native blitz mode
 
 There is also one hybrid acceleration path:
 
-4. hybrid GPU wrapper mode
-
-## Wrapper Mode
-
-Wrapper mode is the closest match to how users normally call R `fgsea`.
-
-Behavior:
-
-- compute observed ES for each pathway using fgsea-compatible scoring
-- run simple-stage permutations
-- estimate NES and an initial p-value
-- refine only the pathways that benefit from multilevel estimation
-
-If `nperm` is provided, wrapper mode becomes simple mode.
-
-## Simple Mode
-
-Simple mode uses a fixed number of permutations for every tested pathway.
-
-Use it when:
-
-- you want predictable runtime
-- you do not need very small p-values
-- you are comparing against fixed-permutation reference runs
-
-Tradeoff:
-
-- simple mode is easier to reason about
-- but it can be inefficient or low-resolution for very small p-values
-
-## Multilevel Mode
-
-Multilevel mode uses adaptive estimation to resolve small p-values more efficiently than brute-force fixed permutations.
-
-Use it when:
-
-- you care about tail probabilities
-- wrapper mode would likely refine many significant pathways anyway
-
-Key parameter:
-
-- `sampleSize`
-
-This is the multilevel sampling parameter and should stay aligned across comparisons if you care about parity.
+6. hybrid GPU wrapper mode
 
 ## rsfgsea-decor
 
@@ -115,6 +74,65 @@ Limitations in the first implementation:
 - Pearson expression correlation is implemented; Spearman is reserved
 - decor does not perform covariance whitening and does not fully decorrelate expression
 - decor does not implement cameraPR or CorrSEA
+
+## Classic fgsea-Compatible Modes
+
+### Wrapper Mode
+
+Wrapper mode is the closest match to how users normally call R `fgsea`.
+
+Behavior:
+
+- compute observed ES for each pathway using fgsea-compatible scoring
+- run simple-stage permutations
+- estimate NES and an initial p-value
+- refine only the pathways that benefit from multilevel estimation
+
+If `nperm` is provided, wrapper mode becomes simple mode.
+
+### Simple Mode
+
+Simple mode uses a fixed number of permutations for every tested pathway.
+
+Use it when:
+
+- you want predictable runtime
+- you do not need very small p-values
+- you are comparing against fixed-permutation reference runs
+
+Tradeoff:
+
+- simple mode is easier to reason about
+- but it can be inefficient or low-resolution for very small p-values
+
+### Multilevel Mode
+
+Multilevel mode uses adaptive estimation to resolve small p-values more efficiently than brute-force fixed permutations.
+
+Use it when:
+
+- you care about tail probabilities
+- wrapper mode would likely refine many significant pathways anyway
+
+Key parameter:
+
+- `sampleSize`
+
+This is the multilevel sampling parameter and should stay aligned across comparisons if you care about parity.
+
+## Blitz Mode
+
+Blitz mode is a native Rust implementation of the `blitzgsea.gsea()` preranked workflow. It has its own mode-aware defaults: `permutations=1000`, `anchors=40`, `min_size=5`, `max_size=4000`, `processes=4`, `symmetric=false`, `seed=0`, `center=true`, `accuracy=40`, and `deep_accuracy=50`.
+
+The implementation follows blitz preprocessing:
+
+- sort the signature by descending score
+- keep the first duplicate gene after sorting
+- optionally center signature scores
+- intersect pathway genes with the signature universe
+- score with blitz leading-edge semantics
+
+Blitz mode is intentionally separate from decor and classic fgsea-compatible modes. It rejects `gpu`, decor mode, fixed `nperm`, non-`std` score types, and `gseaParam` values other than `1.0`. Result columns keep the rsfgsea shape: `pval` is the blitz p-value, `padj` is BH/FDR, and `log2err` is missing.
 
 ## Score Types
 

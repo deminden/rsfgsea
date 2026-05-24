@@ -158,23 +158,23 @@ Notes:
 
 ### GPU Parity vs R
 
-GPU parity was evaluated against R `fgseaMultilevel` using seeds `[11, 23, 42]`, `nPermSimple=1000`, `sampleSize=101`, `eps=1e-50`.
+There is no current committed GPU parity table. The old `nPermSimple=1000`
+table was removed because it mostly captured Monte Carlo noise in p-values and
+FDR rather than useful GPU-vs-R behavior.
 
-| Metric | Mean | Median | P95 | Max |
-| :--- | ---: | ---: | ---: | ---: |
-| `abs(ES)` | `2.535e-09` | `2.531e-09` | `4.736e-09` | `4.998e-09` |
-| `abs(NES)` | `1.842e-02` | `1.245e-02` | `5.827e-02` | `1.238e-01` |
-| `abs(pval)` | `1.548e-02` | `1.199e-02` | `3.996e-02` | `5.007e-01` |
-| `abs(padj)` | `1.248e-02` | `5.101e-03` | `5.784e-02` | `2.458e-01` |
+For new GPU-vs-R comparisons:
 
-Relative p-value difference (`|p_r - p_gpu| / max(|p_r|, 1e-12)`):
+- use `nPermSimple=100000` as the practical baseline
+- use `nPermSimple=10000` only for smoke checks
+- use `nPermSimple=1000000` for final tail/stress comparisons when runtime allows
+- keep `sampleSize`, `eps`, `scoreType`, `gseaParam`, size filters, seeds, and
+  input files identical on both sides
+- record GPU model, driver, backend, and WSL2 D3D12 environment variables if used
 
-- mean: `4.15%`
-- median: `2.37%`
-- p95: `13.36%`
-- max: `67.39%`
-- `<1%`: `26.4%` of pathways
-- `<10%`: `90.9%` of pathways
+The GPU path has fixed overhead and benefits most from larger work batches:
+many tested pathways, larger pathway collections, and higher simple-stage
+permutation counts. Small example datasets are useful for checking that the
+adapter works, but they are too small to show the intended GPU advantage.
 
 ## What To Record
 

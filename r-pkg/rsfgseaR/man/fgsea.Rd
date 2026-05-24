@@ -10,7 +10,7 @@ fgsea(
   nPermSimple = 1000L,
   seed = NULL,
   nproc = 0L,
-  minSize = 1L,
+  minSize = NULL,
   maxSize = NULL,
   eps = 1e-50,
   scoreType = "std",
@@ -27,7 +27,12 @@ fgsea(
   decor.correlation = "pearson",
   decor.redundancy = "positive_mean",
   output = NULL,
-  gpu = FALSE
+  gpu = FALSE,
+  blitz.anchors = 40L,
+  blitz.symmetric = FALSE,
+  blitz.center = TRUE,
+  blitz.accuracy = 40L,
+  blitz.deep.accuracy = 50L
 )
 }
 \arguments{
@@ -35,13 +40,16 @@ fgsea(
 
 \item{stats}{Named numeric vector of preranked statistics, or a path to a ranked-list file.}
 
-\item{nPermSimple}{Integer permutation count for the simple screening stage.}
+\item{nPermSimple}{Integer permutation count for the simple screening stage.
+For CPU/GPU or R/GPU comparisons, prefer \code{100000L} as a practical baseline;
+use \code{10000L} only as a smoke tier and \code{1000000L} for final tail/stress
+checks when runtime allows.}
 
 \item{seed}{Optional integer RNG seed. \code{NULL} uses a fresh random seed.}
 
 \item{nproc}{Number of worker threads. \code{0} keeps the default Rayon behavior.}
 
-\item{minSize}{Minimum pathway size.}
+\item{minSize}{Minimum pathway size. Defaults to 1, or 5 in blitz mode.}
 
 \item{maxSize}{Maximum pathway size. Defaults to \code{length(stats) - 1}.}
 
@@ -51,7 +59,7 @@ fgsea(
 
 \item{gseaParam}{Weighting exponent.}
 
-\item{mode}{One of \code{"fgsea"}, \code{"simple"}, \code{"multilevel"}.}
+\item{mode}{One of \code{"fgsea"}, \code{"simple"}, \code{"multilevel"}, \code{"blitz"}.}
 
 \item{nperm}{Optional fixed-permutation override for wrapper mode.}
 
@@ -85,7 +93,20 @@ formula-level controls.}
 the same column shape as the CLI.}
 
 \item{gpu}{Logical flag mirroring the CLI \code{--gpu} switch. Uses the same
-hybrid GPU path as the Rust CLI and currently supports only \code{mode = "fgsea"}.}
+hybrid GPU path as the Rust CLI and currently supports only \code{mode = "fgsea"}.
+On WSL2, if CUDA is visible but WebGPU selects \code{llvmpipe}, start R with
+\code{GALLIUM_DRIVER=d3d12} and
+\code{MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA}.}
+
+\item{blitz.anchors}{Number of blitz calibration anchors.}
+
+\item{blitz.symmetric}{Use one symmetric positive/negative blitz null fit.}
+
+\item{blitz.center}{Center signature values before blitz scoring.}
+
+\item{blitz.accuracy}{Blitz normal-tail accuracy setting for parity metadata.}
+
+\item{blitz.deep.accuracy}{Blitz deep-tail accuracy setting for parity metadata.}
 }
 \value{
 A data frame with fgsea-style result columns.

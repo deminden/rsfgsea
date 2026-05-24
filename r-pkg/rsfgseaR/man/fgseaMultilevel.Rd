@@ -25,7 +25,10 @@ fgseaMultilevel(
 
 \item{stats}{Named numeric vector of preranked statistics, or a path to a ranked-list file.}
 
-\item{nPermSimple}{Simple-stage permutation count used before multilevel refinement.}
+\item{nPermSimple}{Simple-stage permutation count used before multilevel refinement.
+For CPU/GPU or R/GPU comparisons, prefer \code{100000L} as a practical baseline;
+use \code{10000L} only as a smoke tier and \code{1000000L} for final tail/stress
+checks when runtime allows.}
 
 \item{seed}{Optional integer RNG seed. \code{NULL} uses a fresh random seed.}
 
@@ -46,7 +49,10 @@ fgseaMultilevel(
 \item{output}{Optional TSV output path in CLI-style tabular format.}
 
 \item{gpu}{Logical flag mirroring the CLI \code{--gpu} switch. GPU execution
-currently supports only \code{mode = "fgsea"}, so \code{fgseaMultilevel()} will reject it.}
+currently supports only \code{mode = "fgsea"}, so \code{fgseaMultilevel()} will reject it.
+On WSL2, if CUDA is visible but WebGPU selects \code{llvmpipe}, start R with
+\code{GALLIUM_DRIVER=d3d12} and
+\code{MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA}.}
 }
 \value{
 A data frame with fgsea-style result columns.

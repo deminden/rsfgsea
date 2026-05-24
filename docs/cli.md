@@ -50,11 +50,23 @@ GMT:
 - remaining columns: genes
 - malformed rows are rejected
 
-## Modes
+## Methods And Modes
+
+`--method decor`
+
+- redundancy-aware preranked GSEA method
+- first-class path for expression-correlated pathway genes
+- uses CPU fixed-permutation simple mode
+- supports calibrated presets and the `--decor-stringency` ladder
+
+`--method classic`
+
+- default fgsea-compatible method
+- second public track for classic wrapper, simple, and multilevel workflows
 
 `--mode fgsea`
 
-- wrapper mode
+- classic wrapper mode
 - behaves like fgsea's standard interface
 - uses simple screening first
 - uses multilevel refinement unless `--nperm` forces simple mode
@@ -67,12 +79,19 @@ GMT:
 
 - explicit multilevel workflow
 
+`--mode blitz`
+
+- third public track: native Rust blitzGSEA-compatible workflow
+- uses blitz defaults when mode-specific arguments are omitted: `minSize=5`, `maxSize=4000`, `seed=0`, `nPermSimple=1000`, `--blitz-anchors 40`, and four calibration workers
+- rejects incompatible fgsea options: `--gpu`, `--method decor`, `--nperm`, `--scoreType` other than `std`, and `--gseaParam` other than `1`
+- reports blitz p-values in `pval`, BH/FDR in `padj`, and `NA` for `log2err`
+
 ## Important Arguments
 
 `--method`
 
-- `classic`: default fgsea-compatible method
 - `decor`: redundancy-aware preranked GSEA method
+- `classic`: default fgsea-compatible method
 
 `--nPermSimple`
 
@@ -104,6 +123,7 @@ GMT:
 
 - Rayon worker count
 - `0` means default threadpool behavior
+- in blitz mode, `0` uses the blitz reference default of four calibration workers
 
 `--gpu`
 
@@ -131,38 +151,15 @@ Stringency is a preset ladder, not a continuous formula interpolation: `0 <= x <
 
 The CLI prints the resolved preset, formula, and parameters for reproducibility.
 
+Blitz options:
+
+- `--blitz-anchors`: number of calibration anchors, default `40`
+- `--blitz-symmetric`: use one symmetric positive/negative null fit
+- `--blitz-no-center`: disable signature centering
+- `--blitz-accuracy`: normal-tail accuracy setting retained for blitz compatibility metadata, default `40`
+- `--blitz-deep-accuracy`: deep-tail accuracy setting retained for blitz compatibility metadata, default `50`
+
 ## Typical Commands
-
-Wrapper mode:
-
-```bash
-./target/release/rsfgsea \
-  --ranks data/example.rnk \
-  --gmt data/pathways.gmt \
-  --output results.tsv
-```
-
-Simple mode:
-
-```bash
-./target/release/rsfgsea \
-  --ranks data/example.rnk \
-  --gmt data/pathways.gmt \
-  --mode simple \
-  --nPermSimple 10000 \
-  --output results.tsv
-```
-
-Wrapper mode forced to simple:
-
-```bash
-./target/release/rsfgsea \
-  --ranks data/example.rnk \
-  --gmt data/pathways.gmt \
-  --mode fgsea \
-  --nperm 10000 \
-  --output results.tsv
-```
 
 Decor first run:
 
@@ -221,6 +218,37 @@ rsfgsea \
   --decor-cache cache/pathways.decor.tsv
 ```
 
+Classic wrapper mode:
+
+```bash
+./target/release/rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.tsv
+```
+
+Classic simple mode:
+
+```bash
+./target/release/rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --mode simple \
+  --nPermSimple 10000 \
+  --output results.tsv
+```
+
+Classic wrapper forced to simple:
+
+```bash
+./target/release/rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --mode fgsea \
+  --nperm 10000 \
+  --output results.tsv
+```
+
 Hybrid GPU mode:
 
 ```bash
@@ -229,17 +257,43 @@ Hybrid GPU mode:
   --gmt data/pathways.gmt \
   --gpu \
   --mode fgsea \
+  --nPermSimple 100000 \
   --output results.tsv
 ```
 
-Full parameter example with the installed binary:
+WSL2 with CUDA visible but WebGPU selecting `llvmpipe`:
+
+```bash
+GALLIUM_DRIVER=d3d12 \
+MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
+./target/release/rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --gpu \
+  --mode fgsea \
+  --nPermSimple 100000 \
+  --output results.tsv
+```
+
+Blitz mode:
+
+```bash
+rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.blitz.tsv \
+  --mode blitz
+```
+
+Full parameter example with the installed binary and a comparison-friendly
+simple-stage budget:
 
 ```bash
 rsfgsea \
     --ranks data/pearson_symbols.rnk \
     --gmt data/h.all.v2025.1.Hs.symbols.gmt \
     --mode fgsea \
-    --nPermSimple 1000 \
+    --nPermSimple 100000 \
     --minSize 1 \
     --maxSize 5000 \
     --scoreType std \
@@ -275,6 +329,12 @@ The GPU path is hybrid, not fully GPU-native:
 - GPU: simple-stage null generation and screening
 - CPU: multilevel refinement when needed
 
+For CPU/GPU or R/GPU result comparisons, use `--nPermSimple 100000` as a
+practical baseline. Use `10000` only as a smoke tier, and use `1000000` for
+final tail/stress checks when runtime allows. The default `1000` is better
+treated as a quick execution check because p-value and FDR comparisons are
+dominated by Monte Carlo noise at that scale.
+
 The binary rejects `--gpu` with `--mode simple` or `--mode multilevel`.
 
 Useful environment variables:
@@ -282,3 +342,26 @@ Useful environment variables:
 - `WGPU_BACKEND=vulkan`
 - `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`
 - `RSFGSEA_GPU_ALLOW_GL=1`
+- `GALLIUM_DRIVER=d3d12`
+
+For WSL2, first check whether the graphics stack is using software rendering:
+
+```bash
+glxinfo -B | grep -E 'OpenGL renderer|Accelerated'
+vulkaninfo --summary | grep -E 'deviceName|deviceType|driverName'
+```
+
+If those commands report `llvmpipe` even though `nvidia-smi` sees the GPU,
+run `rsfgsea` with:
+
+```bash
+GALLIUM_DRIVER=d3d12 MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+```
+
+This forces Mesa's D3D12-backed OpenGL path and asks WSL to choose the NVIDIA
+adapter. `rsfgsea` treats `GALLIUM_DRIVER=d3d12` as an intentional GL fallback.
+If you are debugging older builds, also try:
+
+```bash
+WGPU_BACKEND=gl RSFGSEA_GPU_ALLOW_GL=1
+```

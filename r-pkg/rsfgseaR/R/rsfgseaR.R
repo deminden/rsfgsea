@@ -454,6 +454,9 @@ plotGseaTable <- function(
 #' @param pathways Either a named list of character vectors or a path to a GMT file.
 #' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
 #' @param nPermSimple Integer permutation count for the simple screening stage.
+#'   For CPU/GPU or R/GPU comparisons, prefer `100000L` as a practical baseline;
+#'   use `10000L` only as a smoke tier and `1000000L` for final tail/stress
+#'   checks when runtime allows.
 #' @param seed Optional integer RNG seed. `NULL` uses a fresh random seed.
 #' @param nproc Number of worker threads. `0` keeps the default Rayon behavior.
 #' @param minSize Minimum pathway size.
@@ -461,7 +464,7 @@ plotGseaTable <- function(
 #' @param eps Multilevel epsilon parameter.
 #' @param scoreType One of `"std"`, `"pos"`, `"neg"`.
 #' @param gseaParam Weighting exponent.
-#' @param mode One of `"fgsea"`, `"simple"`, `"multilevel"`.
+#' @param mode One of `"fgsea"`, `"simple"`, `"multilevel"`, `"blitz"`.
 #' @param nperm Optional fixed-permutation override for wrapper mode.
 #' @param sampleSize Multilevel sample size.
 #' @param method One of `"classic"` or `"decor"`. The default preserves the
@@ -484,6 +487,13 @@ plotGseaTable <- function(
 #'   the same column shape as the CLI.
 #' @param gpu Logical flag mirroring the CLI `--gpu` switch. Uses the same
 #'   hybrid GPU path as the Rust CLI and currently supports only `mode = "fgsea"`.
+#'   On WSL2, if CUDA is visible but WebGPU selects `llvmpipe`, start R with
+#'   `GALLIUM_DRIVER=d3d12` and `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`.
+#' @param blitz.anchors Number of blitz calibration anchors.
+#' @param blitz.symmetric Use one symmetric positive/negative blitz null fit.
+#' @param blitz.center Center signature values before blitz scoring.
+#' @param blitz.accuracy Blitz normal-tail accuracy setting for parity metadata.
+#' @param blitz.deep.accuracy Blitz deep-tail accuracy setting for parity metadata.
 #'
 #' @return A data frame with fgsea-style result columns.
 #' @export
@@ -493,7 +503,7 @@ fgsea <- function(
   nPermSimple = 1000L,
   seed = NULL,
   nproc = 0L,
-  minSize = 1L,
+  minSize = NULL,
   maxSize = NULL,
   eps = 1e-50,
   scoreType = "std",
@@ -510,7 +520,12 @@ fgsea <- function(
   decor.correlation = "pearson",
   decor.redundancy = "positive_mean",
   output = NULL,
-  gpu = FALSE
+  gpu = FALSE,
+  blitz.anchors = 40L,
+  blitz.symmetric = FALSE,
+  blitz.center = TRUE,
+  blitz.accuracy = 40L,
+  blitz.deep.accuracy = 50L
 ) {
   stats <- .normalize_stats(stats)
   .validate_integerish_scalar(nPermSimple, "nPermSimple", min_value = 1L)
@@ -518,8 +533,11 @@ fgsea <- function(
     .validate_integerish_scalar(seed, "seed", min_value = 0L)
   }
   .validate_integerish_scalar(nproc, "nproc", min_value = 0L)
-  .validate_integerish_scalar(minSize, "minSize", min_value = 1L)
+  .validate_integerish_scalar(minSize, "minSize", min_value = 1L, allow_null = TRUE)
   .validate_integerish_scalar(sampleSize, "sampleSize", min_value = 1L)
+  .validate_integerish_scalar(blitz.anchors, "blitz.anchors", min_value = 1L)
+  .validate_integerish_scalar(blitz.accuracy, "blitz.accuracy", min_value = 1L)
+  .validate_integerish_scalar(blitz.deep.accuracy, "blitz.deep.accuracy", min_value = 1L)
   if (!is.null(maxSize)) {
     .validate_integerish_scalar(maxSize, "maxSize", min_value = 1L)
   }
@@ -532,7 +550,7 @@ fgsea <- function(
   if (!is.numeric(gseaParam) || length(gseaParam) != 1L || !is.finite(gseaParam)) {
     stop("gseaParam must be a single finite numeric value.", call. = FALSE)
   }
-  .validate_choice(mode, "mode", c("fgsea", "simple", "multilevel"))
+  .validate_choice(mode, "mode", c("fgsea", "simple", "multilevel", "blitz"))
   .validate_choice(scoreType, "scoreType", c("std", "pos", "neg"))
   .validate_choice(method, "method", c("classic", "decor"))
   .validate_choice(decor.preset, "decor.preset", c("sensitive", "balanced", "specific", "strict"))
@@ -551,6 +569,12 @@ fgsea <- function(
   if (!is.logical(gpu) || length(gpu) != 1L || is.na(gpu)) {
     stop("gpu must be TRUE or FALSE.", call. = FALSE)
   }
+  if (!is.logical(blitz.symmetric) || length(blitz.symmetric) != 1L || is.na(blitz.symmetric)) {
+    stop("blitz.symmetric must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(blitz.center) || length(blitz.center) != 1L || is.na(blitz.center)) {
+    stop("blitz.center must be TRUE or FALSE.", call. = FALSE)
+  }
   if (!is.null(output) && (!is.character(output) || length(output) != 1L)) {
     stop("output must be NULL or a single file path.", call. = FALSE)
   }
@@ -559,6 +583,23 @@ fgsea <- function(
   }
   if (gpu && tolower(mode) != "fgsea") {
     stop("gpu currently supports only mode = 'fgsea'.", call. = FALSE)
+  }
+  if (tolower(mode) == "blitz") {
+    if (gpu) {
+      stop("gpu is not supported with mode = 'blitz'.", call. = FALSE)
+    }
+    if (tolower(method) != "classic") {
+      stop("mode = 'blitz' supports only method = 'classic'.", call. = FALSE)
+    }
+    if (!is.null(nperm)) {
+      stop("nperm is not supported with mode = 'blitz'.", call. = FALSE)
+    }
+    if (tolower(scoreType) != "std") {
+      stop("mode = 'blitz' supports only scoreType = 'std'.", call. = FALSE)
+    }
+    if (!identical(as.numeric(gseaParam), 1.0)) {
+      stop("mode = 'blitz' supports only gseaParam = 1.", call. = FALSE)
+    }
   }
   if (tolower(method) == "decor") {
     if (is.null(decor.cache)) {
@@ -591,7 +632,7 @@ fgsea <- function(
     as.integer(nPermSimple),
     if (is.null(seed)) NULL else as.integer(seed),
     as.integer(nproc),
-    as.integer(minSize),
+    if (is.null(minSize)) -1L else as.integer(minSize),
     if (is.null(maxSize)) -1L else as.integer(maxSize),
     eps,
     scoreType,
@@ -612,7 +653,12 @@ fgsea <- function(
     as.numeric(decor.resolved$threshold),
     as.numeric(decor.resolved$gamma),
     as.numeric(decor.resolved$penalty.floor),
-    1e-12
+    1e-12,
+    as.integer(blitz.anchors),
+    isTRUE(blitz.symmetric),
+    isTRUE(blitz.center),
+    as.integer(blitz.accuracy),
+    as.integer(blitz.deep.accuracy)
   )
 
   result_df <- .as_fgsea_df(result)
@@ -626,7 +672,8 @@ fgsea <- function(
 #'
 #' @param pathways Either a named list of character vectors or a path to a GMT file.
 #' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
-#' @param nperm Number of permutations.
+#' @param nperm Number of permutations. For CPU/GPU or R/GPU comparisons,
+#'   prefer `100000L` as a practical baseline; use `10000L` only as a smoke tier.
 #' @param seed Optional integer RNG seed. `NULL` uses a fresh random seed.
 #' @param nproc Number of worker threads. `0` keeps the default Rayon behavior.
 #' @param minSize Minimum pathway size.
@@ -638,6 +685,8 @@ fgsea <- function(
 #' @param output Optional TSV output path in CLI-style tabular format.
 #' @param gpu Logical flag mirroring the CLI `--gpu` switch. GPU execution
 #'   currently supports only `mode = "fgsea"`, so `fgseaSimple()` will reject it.
+#'   On WSL2, if CUDA is visible but WebGPU selects `llvmpipe`, start R with
+#'   `GALLIUM_DRIVER=d3d12` and `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`.
 #'
 #' @return A data frame with fgsea-style result columns.
 #' @export
@@ -681,6 +730,9 @@ fgseaSimple <- function(
 #' @param pathways Either a named list of character vectors or a path to a GMT file.
 #' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
 #' @param nPermSimple Simple-stage permutation count used before multilevel refinement.
+#'   For CPU/GPU or R/GPU comparisons, prefer `100000L` as a practical baseline;
+#'   use `10000L` only as a smoke tier and `1000000L` for final tail/stress
+#'   checks when runtime allows.
 #' @param seed Optional integer RNG seed. `NULL` uses a fresh random seed.
 #' @param nproc Number of worker threads. `0` keeps the default Rayon behavior.
 #' @param minSize Minimum pathway size.
@@ -692,6 +744,8 @@ fgseaSimple <- function(
 #' @param output Optional TSV output path in CLI-style tabular format.
 #' @param gpu Logical flag mirroring the CLI `--gpu` switch. GPU execution
 #'   currently supports only `mode = "fgsea"`, so `fgseaMultilevel()` will reject it.
+#'   On WSL2, if CUDA is visible but WebGPU selects `llvmpipe`, start R with
+#'   `GALLIUM_DRIVER=d3d12` and `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`.
 #'
 #' @return A data frame with fgsea-style result columns.
 #' @export

@@ -1,13 +1,14 @@
-# High-Performance GSEA Analysis
+# rsfgsea: Decor, Classic fgsea, and Native Blitz GSEA
 
-High-performance Rust implementation of preranked Gene Set Enrichment Analysis (GSEA). Designed as a drop-in, optimized alternative to the R `fgsea` package, implementing the same widely used statistical method with significantly improved speed.
+High-performance Rust implementation of preranked Gene Set Enrichment Analysis (GSEA) with three public tracks: `rsfgsea-decor` for redundancy-aware enrichment, classic fgsea-compatible simple and multilevel workflows, and native blitzGSEA-compatible execution.
 
 ## Features
 
-- **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
+- **rsfgsea-decor**: A redundancy-aware preranked GSEA method that downweights pathway genes with high expression-derived within-pathway correlation. Decor uses validated presets (`sensitive`, `balanced`, `specific`, `strict`), with `balanced` as the release default, plus an optional 0-100 stringency ladder for preset autoswitching.
+- **Classic fgsea Parity**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
+- **Native Blitz Mode**: Adds `mode=blitz` across Rust, CLI, Python, and R with native Rust execution against the local `blitzgsea 1.3.54` reference target. Current parity is exact parsed equality on committed synthetic, edgecase, and publication fixtures; on the 63,904-gene `lung vs muscle` DESeq2 + GO BP test case (5,324 pathways), max finite diffs are ES `5.6e-16`, NES `2.3e-7`, p-value `1.8e-15`, and FDR `3.8e-15`.
 - **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on current large 1-worker comparison workloads, `rsfgsea` is about **3.0x faster** in simple mode and **4.1x faster** in multilevel mode than R `fgsea`.
 - **Built-In Plotting**: Writes single-pathway enrichment plots and multi-pathway GSEA table plots as PNG directly from Rust, CLI, Python, and R.
-- **rsfgsea-decor**: Adds a redundancy-aware preranked GSEA method that downweights pathway genes with high expression-derived within-pathway correlation. Classic fgsea-compatible mode remains the default. Decor uses validated presets (`sensitive`, `balanced`, `specific`, `strict`), with `balanced` as the release default, plus an optional 0-100 stringency ladder for preset autoswitching.
 - **Hybrid CPU/GPU Engine (Experimental)**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 
 ## Usage
@@ -18,27 +19,16 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 # Install from crates.io
 cargo install rsfgsea
 
-# Run the installed binary
-rsfgsea \
-    --ranks data/pearson_symbols.rnk \
-    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
-    --output results.tsv
-
 # Or build from a repository checkout
 git clone https://github.com/deminden/rsfgsea
 cd rsfgsea
 cargo build --workspace --release
-
-# Run the locally built binary
-./target/release/rsfgsea \
-    --ranks data/pearson_symbols.rnk \
-    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
-    --output results.tsv
 ```
 
-Decor runs as a fixed-permutation simple workflow. The minimal CLI keeps the
-validated default preset: `balanced`, implemented as threshold-rational decor
-with `tau=0.04` and `alpha=60`.
+Decor is the first public track for redundancy-aware preranked GSEA. It runs as
+a fixed-permutation simple workflow. The minimal CLI keeps the validated default
+preset: `balanced`, implemented as threshold-rational decor with `tau=0.04`
+and `alpha=60`.
 
 ```bash
 rsfgsea \
@@ -54,6 +44,33 @@ rsfgsea \
 
 Use `--decor-preset specific` when you want an explicit preset, or
 `--decor-stringency 75` when you want the preset ladder to choose for you.
+
+Classic fgsea-compatible mode remains available when you want simple or
+multilevel behavior aligned with R `fgsea`:
+
+```bash
+rsfgsea \
+    --ranks data/pearson_symbols.rnk \
+    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
+    --output results.tsv
+```
+
+Blitz mode is the third public track. It is native Rust, not a Python delegation
+layer, and is available as `mode=blitz` in Rust, CLI, Python, and R.
+
+```bash
+rsfgsea \
+    --mode blitz \
+    --ranks data/pearson_symbols.rnk \
+    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
+    --output results.blitz.tsv
+```
+
+Blitz mode uses `blitzgsea.gsea()` defaults where applicable:
+`permutations=1000`, `anchors=40`, `min_size=5`, `max_size=4000`,
+`processes=4`, `symmetric=false`, `seed=0`, `center=true`, `accuracy=40`, and
+`deep_accuracy=50`. It rejects `gpu`, `method=decor`, `nperm`,
+`scoreType != "std"`, and `gseaParam != 1.0`.
 
 ### As a Crate
 
@@ -107,11 +124,11 @@ cd crates/rsfgseapy
 maturin develop --release
 ```
 
-Usage example:
+Classic usage example:
 ```python
 import rsfgseapy
 
-# Minimal wrapper-style run
+# Classic wrapper-style run
 results = rsfgseapy.run_gsea_py(
     ranks={"GENE_A": 2.0, "GENE_B": 1.0, "GENE_C": -1.0, "GENE_D": -2.0},
     gmt_path="pathways.gmt",
@@ -151,7 +168,7 @@ cd rsfgsea
 R CMD INSTALL r-pkg/rsfgseaR
 ```
 
-Minimal example:
+Classic minimal example:
 
 ```r
 library(rsfgseaR)
@@ -242,12 +259,26 @@ Current status:
 - `--gpu` still rejects `--mode simple` and `--mode multilevel`; those mode names are not wired separately yet.
 - `run_gsea_gpu(...)` requires a usable non-CPU WebGPU adapter. Software adapters such as `llvmpipe` are rejected.
 
+On WSL2, CUDA can be visible while Vulkan/WebGPU still selects Mesa
+`llvmpipe`. If `nvidia-smi` works but `--gpu` reports `llvmpipe`, force Mesa's
+D3D12 path before running the CLI:
+
+```bash
+GALLIUM_DRIVER=d3d12 \
+MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
+./target/release/rsfgsea --gpu --mode fgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --nPermSimple 100000 \
+  --output results.tsv
+```
+
 Use the hybrid GPU runner in Rust code:
 ```rust
 let results = rsfgsea::algo::run_gsea_gpu(
     &ranks, 
     &pathways, 
-    1000,           // initial simple permutations
+    100_000,        // simple permutations
     42,             // seed
     15, 500,        // size limits
     ScoreType::Std, 
@@ -377,28 +408,17 @@ Notes:
   removed once upstream `fgsea` fixes it
 - full parity distribution tables are in [`docs/reproducibility.md`](./docs/reproducibility.md)
 
-This section describes the CPU parity path. GPU parity is materially looser at present and is summarized separately in [GPU Accuracy vs R](#gpu-accuracy-vs-r).
+This section describes the CPU parity path. GPU parity is materially looser at present and is discussed separately in [GPU Accuracy vs R](#gpu-accuracy-vs-r).
+
+### Blitz Reference
+
+The blitz compatibility target is `blitzgsea 1.3.54` in the local Conda base stack used for reference generation: NumPy `2.4.0`, SciPy `1.16.3`, statsmodels `0.14.6`, pandas `2.3.3`, and mpmath `1.4.1`, with `PYTHONHASHSEED=0`. Committed synthetic, edgecase, and publication fixtures require exact parsed equality for ordering, ES, NES, p-value, FDR, size, and leading edge. On the larger `lung_vs_muscle` positive DESeq2 + GO BP stress case, finite max absolute diffs are ES `5.551e-16`, NES `2.287e-7`, p-value `1.776e-15`, and FDR `3.816e-15`; leading-edge sets match for all 5,324 pathways, with 74 order-only differences.
 
 ### GPU Accuracy vs R
 
 Unlike the CPU parity path above, the current hybrid GPU path does not match R at floating-point-noise scale. It uses GPU simple-stage screening/null generation plus CPU multilevel refinement, and its parity characteristics should be interpreted separately from the CPU results.
 
-GPU parity was evaluated against R `fgseaMultilevel` using seeds `[11, 23, 42]`, `nPermSimple=1000`, `sampleSize=101`, `eps=1e-50`.
-
-Compact GPU parity snapshot:
-
-| Metric | Mean | P95 | Max |
-| :--- | ---: | ---: | ---: |
-| `abs(ES)` | `2.535e-09` | `4.736e-09` | `4.998e-09` |
-| `abs(NES)` | `1.842e-02` | `5.827e-02` | `1.238e-01` |
-| `abs(pval)` | `1.548e-02` | `3.996e-02` | `5.007e-01` |
-
-Relative p-value difference:
-- mean: `4.15%`
-- p95: `13.36%`
-- `<10%`: `90.9%` of pathways
-
-- Full GPU parity tables are in [`docs/reproducibility.md`](./docs/reproducibility.md).
+Current GPU comparison guidance is in [`docs/reproducibility.md`](./docs/reproducibility.md).
 
 
 ## Contributing

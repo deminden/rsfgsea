@@ -58,6 +58,67 @@ fn cli_simple_mode_writes_results() {
 }
 
 #[test]
+fn cli_blitz_mode_writes_results() {
+    let (_dir, ranks, gmt, output) = write_test_inputs();
+
+    cli_bin()
+        .args([
+            "--mode",
+            "blitz",
+            "--nPermSimple",
+            "64",
+            "--blitz-anchors",
+            "4",
+            "--minSize",
+            "1",
+            "--maxSize",
+            "4",
+            "--ranks",
+            ranks.to_str().unwrap(),
+            "--gmt",
+            gmt.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    let content = fs::read_to_string(output).unwrap();
+    assert!(content.contains("pathway\tsize\tes\tnes\tpval\tpadj\tlog2err\tleading_edge"));
+    assert!(content.contains("PW_A"));
+    assert!(
+        content
+            .lines()
+            .skip(1)
+            .all(|line| line.split('\t').nth(6) == Some("NA"))
+    );
+}
+
+#[test]
+fn cli_blitz_mode_rejects_incompatible_options() {
+    let (_dir, ranks, gmt, output) = write_test_inputs();
+
+    cli_bin()
+        .args([
+            "--mode",
+            "blitz",
+            "--scoreType",
+            "pos",
+            "--ranks",
+            ranks.to_str().unwrap(),
+            "--gmt",
+            gmt.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "--mode blitz supports only --scoreType std",
+        ));
+}
+
+#[test]
 fn decor_cli_builds_cache_then_reuses_it() {
     let dir = tempdir().unwrap();
     let ranks = "tests/data/decor_ranks.rnk";

@@ -10,11 +10,12 @@ pub use crate::algo::{
 pub use crate::bindings::{
     ExecutionPlan, InterfaceMode, parse_interface_mode, resolve_execution_plan,
 };
+pub use crate::blitz::fgsea_blitz_with_options;
 pub use crate::core::{
-    DecorCacheMode, DecorCorrelation, DecorOptions, DecorPreset, DecorPresetResolution,
-    DecorRedundancy, DecorStringencyResolution, DecorWeightFormula, EnrichmentMethod,
-    EnrichmentResult, EnrichmentResultExport, Pathway, PathwayDb, RankedList, ScoreType,
-    resolve_decor_preset, resolve_decor_stringency,
+    BlitzOptions, DecorCacheMode, DecorCorrelation, DecorOptions, DecorPreset,
+    DecorPresetResolution, DecorRedundancy, DecorStringencyResolution, DecorWeightFormula,
+    EnrichmentMethod, EnrichmentResult, EnrichmentResultExport, Pathway, PathwayDb, RankedList,
+    ScoreType, resolve_decor_preset, resolve_decor_stringency,
 };
 pub use crate::decor::{
     DecorCache, DecorCacheMetadata, DecorCacheStatus, calculate_es_decor,

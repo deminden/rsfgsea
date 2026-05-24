@@ -1,0 +1,6 @@
+DUP_AND_ALIEN	desc	dup	e01	e01	missing	e02	e03	e04	e05
+TOP_HEAVY	desc	dup	e60	e59	e58	e57	e56
+BOTTOM_HEAVY	desc	e22	e23	e24	e25	e26	e27	e28
+MIXED_DUPLICATE_ORDER	desc	e03	e08	e13	e18	e23	e28	e33	e38	e43	e48	e53	e58	e58	not_in_signature
+FILTER_TOO_SMALL	desc	e01	e02	e03	missing
+WIDE_REALISTIC	desc	e06	e08	e10	e12	e14	e16	e18	e20	e22	e24	e26	e28	e30	e32	e34	dup	ghost
