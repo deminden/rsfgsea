@@ -268,6 +268,16 @@ def mean(values: list[float]) -> float:
     return sum(finite) / len(finite) if finite else math.nan
 
 
+def median(values: list[float]) -> float:
+    finite = sorted(value for value in values if math.isfinite(value))
+    if not finite:
+        return math.nan
+    mid = len(finite) // 2
+    if len(finite) % 2:
+        return finite[mid]
+    return (finite[mid - 1] + finite[mid]) / 2.0
+
+
 def main() -> None:
     args = parse_args()
     ensure_inputs(args)
@@ -301,9 +311,15 @@ def main() -> None:
     result.update(
         {
             "rust_wall_s": mean(rust_wall),
+            "rust_wall_median_s": median(rust_wall),
+            "rust_wall_reps_s": rust_wall,
             "rust_compute_s": mean(rust_compute),
+            "rust_compute_median_s": median(rust_compute),
+            "rust_compute_reps_s": rust_compute,
             "python_cold_s": mean(python_cold),
+            "python_cold_median_s": median(python_cold),
             "python_warm_cache_s": mean(python_warm),
+            "python_warm_cache_median_s": median(python_warm),
         }
     )
     result.update(parity)

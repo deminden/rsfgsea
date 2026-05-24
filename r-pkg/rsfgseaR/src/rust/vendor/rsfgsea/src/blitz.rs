@@ -83,6 +83,7 @@ struct CleanedPathway {
     name: String,
     genes: Vec<String>,
     hit_indices: Vec<usize>,
+    sorted_hit_indices: Vec<usize>,
     leading_hits: PythonIntSet,
 }
 
@@ -102,15 +103,61 @@ struct ScoredBlitzPathway {
 }
 
 struct BlitzScoreScratch {
-    marker: HitMarker,
     hit_scores: Vec<f64>,
+    leading_set: PythonIntSet,
 }
 
 impl BlitzScoreScratch {
-    fn new(signature_len: usize) -> Self {
+    fn new(_signature_len: usize) -> Self {
         Self {
-            marker: HitMarker::new(signature_len),
             hit_scores: Vec::new(),
+            leading_set: PythonIntSet::new(),
+        }
+    }
+}
+
+struct GammaFitScratch {
+    clean: Vec<f64>,
+    clean_f32: Vec<f32>,
+    log_f32: Vec<f32>,
+}
+
+impl GammaFitScratch {
+    fn new(capacity: usize) -> Self {
+        Self {
+            clean: Vec::with_capacity(capacity),
+            clean_f32: Vec::with_capacity(capacity),
+            log_f32: Vec::with_capacity(capacity),
+        }
+    }
+}
+
+struct AnchorScratch {
+    es: Vec<f64>,
+    pos: Vec<f64>,
+    neg: Vec<f64>,
+    abs_samples: Vec<f64>,
+    neg_abs: Vec<f64>,
+    permutation: Vec<usize>,
+    permutation_u32: Vec<u32>,
+    sorted_hits: Vec<usize>,
+    sorted_hits_u32: Vec<u32>,
+    gamma_fit: GammaFitScratch,
+}
+
+impl AnchorScratch {
+    fn new(signature_len: usize, permutations: usize) -> Self {
+        Self {
+            es: Vec::with_capacity(permutations),
+            pos: Vec::with_capacity(permutations),
+            neg: Vec::with_capacity(permutations),
+            abs_samples: Vec::with_capacity(permutations),
+            neg_abs: Vec::with_capacity(permutations),
+            permutation: Vec::with_capacity(signature_len),
+            permutation_u32: Vec::with_capacity(signature_len),
+            sorted_hits: Vec::new(),
+            sorted_hits_u32: Vec::new(),
+            gamma_fit: GammaFitScratch::new(permutations),
         }
     }
 }
@@ -155,12 +202,14 @@ impl BlitzTimingLogger {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 struct HitMarker {
     marks: Vec<u32>,
     generation: u32,
 }
 
+#[cfg(test)]
 impl HitMarker {
     fn new(len: usize) -> Self {
         Self {
@@ -307,6 +356,7 @@ impl PythonStringSet {
 #[derive(Clone)]
 struct PythonIntSet {
     table: Vec<Option<usize>>,
+    resize_scratch: Vec<usize>,
     used: usize,
     fill: usize,
 }
@@ -315,6 +365,7 @@ impl PythonIntSet {
     fn new() -> Self {
         Self {
             table: vec![None; 8],
+            resize_scratch: Vec::new(),
             used: 0,
             fill: 0,
         }
@@ -325,6 +376,7 @@ impl PythonIntSet {
         for value in values {
             set.insert(value);
         }
+        set.resize_scratch = Vec::new();
         set
     }
 
@@ -357,6 +409,30 @@ impl PythonIntSet {
 
     fn iter_values(&self) -> impl Iterator<Item = usize> + '_ {
         self.table.iter().filter_map(|slot| *slot)
+    }
+
+    fn insert_filtered(
+        &mut self,
+        values: impl IntoIterator<Item = usize>,
+        predicate: impl Fn(usize) -> bool,
+    ) {
+        self.reset_to_new_set();
+        for value in values {
+            if predicate(value) {
+                self.insert(value);
+            }
+        }
+    }
+
+    fn reset_to_new_set(&mut self) {
+        if self.table.len() > 8 {
+            self.table.truncate(8);
+        } else if self.table.len() < 8 {
+            self.table.resize(8, None);
+        }
+        self.table.fill(None);
+        self.used = 0;
+        self.fill = 0;
     }
 
     fn insert(&mut self, value: usize) -> bool {
@@ -408,12 +484,17 @@ impl PythonIntSet {
         while new_size <= min_used {
             new_size <<= 1;
         }
-        let old = std::mem::replace(&mut self.table, vec![None; new_size]);
+        let mut old = std::mem::take(&mut self.resize_scratch);
+        old.clear();
+        old.extend(self.table.iter_mut().filter_map(|slot| slot.take()));
+        self.table.clear();
+        self.table.resize(new_size, None);
         self.used = 0;
         self.fill = 0;
-        for value in old.into_iter().flatten() {
+        for &value in &old {
             self.insert_no_resize(value);
         }
+        self.resize_scratch = old;
     }
 }
 
@@ -515,7 +596,7 @@ impl NumpyMt19937 {
             self.mti = 0;
         }
 
-        let mut y = self.mt[self.mti];
+        let mut y = unsafe { *self.mt.get_unchecked(self.mti) };
         self.mti += 1;
         y ^= y >> 11;
         y ^= (y << 7) & 0x9d2c_5680;
@@ -525,12 +606,7 @@ impl NumpyMt19937 {
     }
 
     fn random_interval(&mut self, max: usize) -> usize {
-        let mut mask = max as u32;
-        mask |= mask >> 1;
-        mask |= mask >> 2;
-        mask |= mask >> 4;
-        mask |= mask >> 8;
-        mask |= mask >> 16;
+        let mask = (max + 1).next_power_of_two() as u32 - 1;
         loop {
             let value = self.next_u32() & mask;
             if value <= max as u32 {
@@ -556,11 +632,26 @@ impl NumpyMt19937 {
         k: usize,
         values: &'a mut Vec<usize>,
     ) -> &'a [usize] {
-        values.clear();
-        values.extend(0..n);
+        fill_usize_sequence(values, n);
         for i in (1..n).rev() {
             let j = self.random_interval(i);
-            values.swap(i, j);
+            swap_indices(values, i, j);
+        }
+        values.truncate(k);
+        values
+    }
+
+    fn choice_without_replacement_u32_into<'a>(
+        &mut self,
+        n: u32,
+        k: usize,
+        values: &'a mut Vec<u32>,
+    ) -> &'a [u32] {
+        fill_u32_sequence(values, n);
+        let n = values.len();
+        for i in (1..n).rev() {
+            let j = self.random_interval(i);
+            swap_indices(values, i, j);
         }
         values.truncate(k);
         values
@@ -590,6 +681,46 @@ impl NumpyMt19937 {
             }
         }
         out
+    }
+}
+
+#[inline(always)]
+fn fill_usize_sequence(values: &mut Vec<usize>, n: usize) {
+    values.clear();
+    if values.capacity() < n {
+        values.reserve_exact(n - values.capacity());
+    }
+    let spare = values.spare_capacity_mut();
+    unsafe {
+        for i in 0..n {
+            spare.get_unchecked_mut(i).write(i);
+        }
+        values.set_len(n);
+    }
+}
+
+#[inline(always)]
+fn fill_u32_sequence(values: &mut Vec<u32>, n: u32) {
+    let len = n as usize;
+    values.clear();
+    if values.capacity() < len {
+        values.reserve_exact(len - values.capacity());
+    }
+    let spare = values.spare_capacity_mut();
+    unsafe {
+        for i in 0..len {
+            spare.get_unchecked_mut(i).write(i as u32);
+        }
+        values.set_len(len);
+    }
+}
+
+#[inline(always)]
+fn swap_indices<T>(values: &mut [T], i: usize, j: usize) {
+    debug_assert!(i < values.len());
+    debug_assert!(j < values.len());
+    unsafe {
+        std::ptr::swap(values.as_mut_ptr().add(i), values.as_mut_ptr().add(j));
     }
 }
 
@@ -804,8 +935,10 @@ fn score_blitz_pathways(
         .num_threads(processes)
         .build()?;
     pool.install(|| {
+        let min_len = 128.min(cleaned.len().max(1));
         cleaned
             .par_iter()
+            .with_min_len(min_len)
             .map_init(
                 || BlitzScoreScratch::new(signature.abs_scores.len()),
                 |scratch, pathway| score(scratch, pathway),
@@ -822,8 +955,12 @@ fn score_cleaned_pathway(
     deep_accuracy: usize,
     scratch: &mut BlitzScoreScratch,
 ) -> Result<ScoredBlitzPathway> {
-    let extrema =
-        enrichment_score_for_indices(&signature.abs_scores, &pathway.hit_indices, scratch);
+    let extrema = enrichment_score_for_indices(
+        &signature.abs_scores,
+        &pathway.hit_indices,
+        &pathway.sorted_hit_indices,
+        scratch,
+    );
     let leading_edge = leading_edge_blitz(
         signature,
         &pathway.leading_hits,
@@ -832,6 +969,7 @@ fn score_cleaned_pathway(
         extrema.rmin,
         extrema.min_value,
         extrema.peak_idx,
+        scratch,
     );
     let es = extrema.es;
     let (p_value, nes, fallback_used) = if es > 0.0 {
@@ -958,6 +1096,8 @@ fn clean_pathways(pathways: &[Pathway], signature: &BlitzSignature) -> Vec<Clean
                 .iter()
                 .filter_map(|gene| signature.gene_to_idx.get(gene).copied())
                 .collect::<Vec<_>>();
+            let mut sorted_hit_indices = hit_indices.clone();
+            sorted_hit_indices.sort_unstable();
             let leading_gene_set = PythonStringSet::from_iter(genes.iter().cloned());
             let leading_hits = PythonIntSet::from_iter(
                 leading_gene_set
@@ -968,6 +1108,7 @@ fn clean_pathways(pathways: &[Pathway], signature: &BlitzSignature) -> Vec<Clean
                 name: pathway.name.clone(),
                 genes,
                 hit_indices,
+                sorted_hit_indices,
                 leading_hits,
             }
         })
@@ -1040,10 +1181,18 @@ fn estimate_anchor_fits(
     let processes = options.processes.max(1);
     let fits = if processes == 1 {
         let mut rng = NumpyMt19937::new(options.seed as u32);
-        anchor_sizes
-            .iter()
-            .map(|&size| estimate_anchor(signature, size, options, &mut rng))
-            .collect::<Result<Vec<_>>>()?
+        let mut scratch = AnchorScratch::new(signature.abs_scores.len(), options.permutations);
+        let mut fits = Vec::with_capacity(anchor_sizes.len());
+        for &size in &anchor_sizes {
+            fits.push(estimate_anchor(
+                signature,
+                size,
+                options,
+                &mut rng,
+                &mut scratch,
+            )?);
+        }
+        fits
     } else {
         let worker_count = processes.min(anchor_sizes.len());
         let mut workers = vec![NumpyMt19937::new(options.seed as u32); worker_count];
@@ -1056,9 +1205,12 @@ fn estimate_anchor_fits(
             .into_par_iter()
             .zip(workers.par_iter_mut())
             .map(|(jobs, rng)| {
+                let mut scratch =
+                    AnchorScratch::new(signature.abs_scores.len(), options.permutations);
                 jobs.into_iter()
                     .map(|(idx, size)| {
-                        estimate_anchor(signature, size, options, rng).map(|fit| (idx, fit))
+                        estimate_anchor(signature, size, options, rng, &mut scratch)
+                            .map(|fit| (idx, fit))
                     })
                     .collect::<Result<Vec<_>>>()
             })
@@ -1132,53 +1284,82 @@ fn estimate_anchor(
     set_size: usize,
     options: &BlitzOptions,
     rng: &mut NumpyMt19937,
+    scratch: &mut AnchorScratch,
 ) -> Result<AnchorFit> {
-    let mut es = Vec::with_capacity(options.permutations);
-    let mut permutation = Vec::with_capacity(signature.abs_scores.len());
-    let mut scratch = BlitzScoreScratch::new(signature.abs_scores.len());
-    for _ in 0..options.permutations {
-        let hits = rng.choice_without_replacement_into(
-            signature.abs_scores.len(),
-            set_size,
-            &mut permutation,
-        );
-        let value = enrichment_score_for_hits(&signature.abs_scores, hits, &mut scratch.marker);
-        if value.is_finite() {
-            es.push(value);
+    scratch.es.clear();
+    if let Ok(n_u32) = u32::try_from(signature.abs_scores.len()) {
+        for _ in 0..options.permutations {
+            let hits = rng.choice_without_replacement_u32_into(
+                n_u32,
+                set_size,
+                &mut scratch.permutation_u32,
+            );
+            let value = enrichment_score_for_hits_u32(
+                &signature.abs_scores,
+                hits,
+                &mut scratch.sorted_hits_u32,
+            );
+            if value.is_finite() {
+                scratch.es.push(value);
+            }
+        }
+    } else {
+        for _ in 0..options.permutations {
+            let hits = rng.choice_without_replacement_into(
+                signature.abs_scores.len(),
+                set_size,
+                &mut scratch.permutation,
+            );
+            let value =
+                enrichment_score_for_hits(&signature.abs_scores, hits, &mut scratch.sorted_hits);
+            if value.is_finite() {
+                scratch.es.push(value);
+            }
         }
     }
-    if es.is_empty() {
+    if scratch.es.is_empty() {
         bail!("blitz calibration generated no finite enrichment scores for set size {set_size}.");
     }
 
-    let pos = es.iter().copied().filter(|v| *v > 0.0).collect::<Vec<_>>();
-    let neg = es.iter().copied().filter(|v| *v < 0.0).collect::<Vec<_>>();
+    scratch.pos.clear();
+    scratch.neg.clear();
+    for &value in &scratch.es {
+        if value > 0.0 {
+            scratch.pos.push(value);
+        } else if value < 0.0 {
+            scratch.neg.push(value);
+        }
+    }
     let mut symmetric = options.symmetric;
-    if (neg.len() < 250 || pos.len() < 250) && !symmetric {
+    if (scratch.neg.len() < 250 || scratch.pos.len() < 250) && !symmetric {
         symmetric = true;
     }
 
     let (pos_fit, neg_fit) = if symmetric {
-        let abs = es
-            .iter()
-            .copied()
-            .filter(|v| *v != 0.0)
-            .map(f64::abs)
-            .collect::<Vec<_>>();
-        let fit = fit_gamma_floc0(&abs)?;
+        scratch.abs_samples.clear();
+        scratch.abs_samples.extend(
+            scratch
+                .es
+                .iter()
+                .copied()
+                .filter(|v| *v != 0.0)
+                .map(f64::abs),
+        );
+        let fit = fit_gamma_floc0_with_scratch(&scratch.abs_samples, &mut scratch.gamma_fit)?;
         (fit.clone(), fit)
     } else {
-        let pos_fit = fit_gamma_floc0(&pos)?;
-        let neg_abs = neg.iter().map(|v| -*v).collect::<Vec<_>>();
-        let neg_fit = fit_gamma_floc0(&neg_abs)?;
+        let pos_fit = fit_gamma_floc0_with_scratch(&scratch.pos, &mut scratch.gamma_fit)?;
+        scratch.neg_abs.clear();
+        scratch.neg_abs.extend(scratch.neg.iter().map(|v| -*v));
+        let neg_fit = fit_gamma_floc0_with_scratch(&scratch.neg_abs, &mut scratch.gamma_fit)?;
         (pos_fit, neg_fit)
     };
 
-    let denom = pos.len() + neg.len();
+    let denom = scratch.pos.len() + scratch.neg.len();
     let pos_ratio = if denom == 0 {
         0.5
     } else {
-        pos.len() as f64 / denom as f64
+        scratch.pos.len() as f64 / denom as f64
     };
 
     Ok(AnchorFit {
@@ -1190,23 +1371,25 @@ fn estimate_anchor(
     })
 }
 
-fn fit_gamma_floc0(values: &[f64]) -> Result<GammaFit> {
-    let clean = values
-        .iter()
-        .copied()
-        .filter(|v| v.is_finite() && *v > 0.0)
-        .collect::<Vec<_>>();
-    if clean.is_empty() {
+fn fit_gamma_floc0_with_scratch(values: &[f64], scratch: &mut GammaFitScratch) -> Result<GammaFit> {
+    scratch.clean.clear();
+    scratch
+        .clean
+        .extend(values.iter().copied().filter(|v| v.is_finite() && *v > 0.0));
+    if scratch.clean.is_empty() {
         bail!("cannot fit gamma distribution to an empty positive sample.");
     }
-    let clean_f32 = clean.iter().map(|v| *v as f32).collect::<Vec<_>>();
-    let log_f32 = clean_f32
-        .iter()
-        .map(|v| numpy_log_f32(*v))
-        .collect::<Vec<_>>();
-    let n = clean_f32.len() as f32;
-    let mean = numpy_pairwise_sum_f32(&clean_f32) / n;
-    let mean_log = numpy_pairwise_sum_f32(&log_f32) / n;
+    scratch.clean_f32.clear();
+    scratch
+        .clean_f32
+        .extend(scratch.clean.iter().map(|v| *v as f32));
+    scratch.log_f32.clear();
+    scratch
+        .log_f32
+        .extend(scratch.clean_f32.iter().map(|v| numpy_log_f32(*v)));
+    let n = scratch.clean_f32.len() as f32;
+    let mean = numpy_pairwise_sum_f32(&scratch.clean_f32) / n;
+    let mean_log = numpy_pairwise_sum_f32(&scratch.log_f32) / n;
     let s = numpy_log_f32(mean) - mean_log;
     let estimate = (3.0_f32 - s + ((s - 3.0).powi(2) + 24.0 * s).sqrt()) / (12.0 * s);
     let alpha =
@@ -1546,9 +1729,9 @@ fn scipy_cephes_sqrtpi() -> f64 {
 fn enrichment_score_for_indices(
     abs_scores: &[f64],
     hits: &[usize],
+    sorted_hits: &[usize],
     scratch: &mut BlitzScoreScratch,
 ) -> EnrichmentExtrema {
-    scratch.marker.mark_hits(hits);
     let number_hits = hits.len();
     let number_miss = abs_scores.len().saturating_sub(number_hits);
     scratch.hit_scores.clear();
@@ -1575,23 +1758,54 @@ fn enrichment_score_for_indices(
     let mut rmin = 0usize;
     let mut max_value = f64::NEG_INFINITY;
     let mut min_value = f64::INFINITY;
-    for (i, &abs_score) in abs_scores.iter().enumerate() {
-        let hit_indicator = if scratch.marker.contains(i) { 1.0 } else { 0.0 };
-        csum += hit_indicator * abs_score * norm_hit - (1.0 - hit_indicator) * norm_no_hit;
+    let mut rank = 0usize;
+    for &hit in sorted_hits {
+        if rank < hit {
+            advance_miss_gap_f64(
+                &mut csum,
+                rank,
+                hit - rank,
+                -norm_no_hit,
+                &mut best_idx,
+                &mut best_value,
+                &mut best_abs,
+                &mut rmax,
+                &mut max_value,
+                &mut rmin,
+                &mut min_value,
+            );
+        }
+        csum += abs_scores[hit] * norm_hit;
         if csum >= max_value {
             max_value = csum;
-            rmax = i;
+            rmax = hit;
         }
         if csum <= min_value {
             min_value = csum;
-            rmin = i;
+            rmin = hit;
         }
         let cur_abs = csum.abs();
         if cur_abs > best_abs {
             best_abs = cur_abs;
-            best_idx = i;
+            best_idx = hit;
             best_value = csum;
         }
+        rank = hit + 1;
+    }
+    if rank < abs_scores.len() {
+        advance_miss_gap_f64(
+            &mut csum,
+            rank,
+            abs_scores.len() - rank,
+            -norm_no_hit,
+            &mut best_idx,
+            &mut best_value,
+            &mut best_abs,
+            &mut rmax,
+            &mut max_value,
+            &mut rmin,
+            &mut min_value,
+        );
     }
     EnrichmentExtrema {
         es: if abs_scores.is_empty() {
@@ -1607,7 +1821,260 @@ fn enrichment_score_for_indices(
     }
 }
 
-fn enrichment_score_for_hits(abs_scores: &[f64], hits: &[usize], marker: &mut HitMarker) -> f64 {
+fn enrichment_score_for_hits(
+    abs_scores: &[f64],
+    hits: &[usize],
+    sorted_hits: &mut Vec<usize>,
+) -> f64 {
+    let number_hits = hits.len();
+    let number_miss = abs_scores.len().saturating_sub(number_hits);
+    sorted_hits.clear();
+    let mut sum_hit_scores = 0.0;
+    for &idx in hits {
+        sum_hit_scores += abs_scores[idx];
+        sorted_hits.push(idx);
+    }
+    if sum_hit_scores == 0.0 || number_miss == 0 {
+        return 0.0;
+    }
+    let norm_hit = 1.0 / sum_hit_scores;
+    let norm_no_hit = 1.0 / number_miss as f64;
+    let mut csum = 0.0_f32;
+    let mut best = 0.0_f32;
+    let mut best_abs = f32::NEG_INFINITY;
+
+    sorted_hits.sort_unstable();
+
+    let mut rank = 0usize;
+    for &hit in sorted_hits.iter() {
+        if rank < hit {
+            csum = advance_miss_gap_f32(
+                csum,
+                hit - rank,
+                (-norm_no_hit) as f32,
+                &mut best,
+                &mut best_abs,
+            );
+        }
+        let increment = 1.0 * (abs_scores[hit] * norm_hit + norm_no_hit) - norm_no_hit;
+        csum += increment as f32;
+        let cur_abs = csum.abs();
+        if cur_abs > best_abs {
+            best_abs = cur_abs;
+            best = csum;
+        }
+        rank = hit + 1;
+    }
+    if rank < abs_scores.len() {
+        advance_miss_gap_f32(
+            csum,
+            abs_scores.len() - rank,
+            (-norm_no_hit) as f32,
+            &mut best,
+            &mut best_abs,
+        );
+    }
+    best as f64
+}
+
+fn enrichment_score_for_hits_u32(
+    abs_scores: &[f64],
+    hits: &[u32],
+    sorted_hits: &mut Vec<u32>,
+) -> f64 {
+    let number_hits = hits.len();
+    let number_miss = abs_scores.len().saturating_sub(number_hits);
+    sorted_hits.clear();
+    let mut sum_hit_scores = 0.0;
+    for &idx in hits {
+        sum_hit_scores += abs_scores[idx as usize];
+        sorted_hits.push(idx);
+    }
+    if sum_hit_scores == 0.0 || number_miss == 0 {
+        return 0.0;
+    }
+    let norm_hit = 1.0 / sum_hit_scores;
+    let norm_no_hit = 1.0 / number_miss as f64;
+    let mut csum = 0.0_f32;
+    let mut best = 0.0_f32;
+    let mut best_abs = f32::NEG_INFINITY;
+
+    sorted_hits.sort_unstable();
+
+    let mut rank = 0usize;
+    for &hit in sorted_hits.iter() {
+        let hit = hit as usize;
+        if rank < hit {
+            csum = advance_miss_gap_f32(
+                csum,
+                hit - rank,
+                (-norm_no_hit) as f32,
+                &mut best,
+                &mut best_abs,
+            );
+        }
+        let increment = 1.0 * (abs_scores[hit] * norm_hit + norm_no_hit) - norm_no_hit;
+        csum += increment as f32;
+        let cur_abs = csum.abs();
+        if cur_abs > best_abs {
+            best_abs = cur_abs;
+            best = csum;
+        }
+        rank = hit + 1;
+    }
+    if rank < abs_scores.len() {
+        advance_miss_gap_f32(
+            csum,
+            abs_scores.len() - rank,
+            (-norm_no_hit) as f32,
+            &mut best,
+            &mut best_abs,
+        );
+    }
+    best as f64
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn advance_miss_gap_f64(
+    csum: &mut f64,
+    first_rank: usize,
+    count: usize,
+    increment: f64,
+    best_idx: &mut usize,
+    best_value: &mut f64,
+    best_abs: &mut f64,
+    rmax: &mut usize,
+    max_value: &mut f64,
+    rmin: &mut usize,
+    min_value: &mut f64,
+) {
+    if count == 0 {
+        return;
+    }
+
+    *csum += increment;
+    let first_value = *csum;
+    if first_value >= *max_value {
+        *max_value = first_value;
+        *rmax = first_rank;
+    }
+    let first_abs = first_value.abs();
+    if first_abs > *best_abs {
+        *best_abs = first_abs;
+        *best_idx = first_rank;
+        *best_value = first_value;
+    }
+
+    repeat_add_assign_f64(csum, increment, count - 1);
+
+    let last_value = *csum;
+    let last_rank = first_rank + count - 1;
+    if last_value <= *min_value {
+        *min_value = last_value;
+        *rmin = last_rank;
+    }
+    if count > 1 {
+        let last_abs = last_value.abs();
+        if last_abs > *best_abs {
+            *best_abs = last_abs;
+            *best_idx = last_rank;
+            *best_value = last_value;
+        }
+    }
+}
+
+#[inline(always)]
+fn advance_miss_gap_f32(
+    mut csum: f32,
+    count: usize,
+    increment: f32,
+    best: &mut f32,
+    best_abs: &mut f32,
+) -> f32 {
+    if count == 0 {
+        return csum;
+    }
+
+    csum += increment;
+    let first = csum;
+    let first_abs = first.abs();
+    if first_abs > *best_abs {
+        *best_abs = first_abs;
+        *best = first;
+    }
+
+    csum = repeat_add_f32(csum, increment, count - 1);
+
+    if count > 1 {
+        let last_abs = csum.abs();
+        if last_abs > *best_abs {
+            *best_abs = last_abs;
+            *best = csum;
+        }
+    }
+    csum
+}
+
+#[inline(always)]
+fn repeat_add_assign_f64(value: &mut f64, increment: f64, mut count: usize) {
+    while count >= 16 {
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        *value += increment;
+        count -= 16;
+    }
+    for _ in 0..count {
+        *value += increment;
+    }
+}
+
+#[inline(always)]
+fn repeat_add_f32(mut value: f32, increment: f32, mut count: usize) -> f32 {
+    while count >= 16 {
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        value += increment;
+        count -= 16;
+    }
+    for _ in 0..count {
+        value += increment;
+    }
+    value
+}
+
+#[cfg(test)]
+fn enrichment_score_for_hits_marker_reference(
+    abs_scores: &[f64],
+    hits: &[usize],
+    marker: &mut HitMarker,
+) -> f64 {
     marker.mark_hits(hits);
     let number_hits = hits.len();
     let number_miss = abs_scores.len().saturating_sub(number_hits);
@@ -1633,6 +2100,7 @@ fn enrichment_score_for_hits(abs_scores: &[f64], hits: &[usize], marker: &mut Hi
     best as f64
 }
 
+#[allow(clippy::too_many_arguments)]
 fn leading_edge_blitz(
     signature: &BlitzSignature,
     hits: &PythonIntSet,
@@ -1641,50 +2109,37 @@ fn leading_edge_blitz(
     rmin: usize,
     min_value: f64,
     _peak_idx: usize,
+    scratch: &mut BlitzScoreScratch,
 ) -> Vec<String> {
     let running_len = signature.abs_scores.len();
     if running_len == 0 {
         return Vec::new();
     }
-    let idxs = if max_value > min_value.abs() {
+    if max_value > min_value.abs() {
         if rmax < hits.len() {
-            let filtered = PythonIntSet::from_iter(0..rmax)
-                .iter_values()
-                .filter(|&idx| hits.contains(idx))
-                .collect::<Vec<_>>();
-            PythonIntSet::from_iter(filtered)
-                .iter_values()
-                .collect::<Vec<_>>()
+            scratch
+                .leading_set
+                .insert_filtered(0..rmax, |idx| hits.contains(idx));
         } else {
-            let filtered = hits
-                .iter_values()
-                .filter(|&idx| idx < rmax)
-                .collect::<Vec<_>>();
-            PythonIntSet::from_iter(filtered)
-                .iter_values()
-                .collect::<Vec<_>>()
+            scratch
+                .leading_set
+                .insert_filtered(hits.iter_values(), |idx| idx < rmax);
         }
     } else {
         let range_len = running_len.saturating_sub(rmin);
         if range_len < hits.len() {
-            let filtered = PythonIntSet::from_iter(rmin..running_len)
-                .iter_values()
-                .filter(|&idx| hits.contains(idx))
-                .collect::<Vec<_>>();
-            PythonIntSet::from_iter(filtered)
-                .iter_values()
-                .collect::<Vec<_>>()
+            scratch
+                .leading_set
+                .insert_filtered(rmin..running_len, |idx| hits.contains(idx));
         } else {
-            let filtered = hits
-                .iter_values()
-                .filter(|&idx| idx >= rmin && idx < running_len)
-                .collect::<Vec<_>>();
-            PythonIntSet::from_iter(filtered)
-                .iter_values()
-                .collect::<Vec<_>>()
+            scratch
+                .leading_set
+                .insert_filtered(hits.iter_values(), |idx| idx >= rmin && idx < running_len);
         }
-    };
-    idxs.into_iter()
+    }
+    scratch
+        .leading_set
+        .iter_values()
         .map(|idx| signature.genes[idx].clone())
         .collect()
 }
@@ -1912,6 +2367,8 @@ fn lowess(y: &[f64], x: &[f64], frac: f64) -> Vec<f64> {
     let k = ((frac * n as f64 + 1e-10) as usize).clamp(2, n);
     let mut residual_weights = vec![1.0; n];
     let mut fitted = vec![0.0; n];
+    let mut weights = vec![0.0; n];
+    let mut residuals = Vec::with_capacity(n);
 
     for iter in 0..=LOWESS_ITERS {
         fitted.fill(0.0);
@@ -1926,7 +2383,6 @@ fn lowess(y: &[f64], x: &[f64], frac: f64) -> Vec<f64> {
             }
             let radius = (xval - x[left_end]).max(x[right_end - 1] - xval);
 
-            let mut weights = vec![0.0; n];
             let mut nonzero_weights = 0usize;
             for j in left_end..right_end {
                 let dist = ((x[j] - xval).abs() / radius).clamp(0.0, 1.0);
@@ -1969,11 +2425,8 @@ fn lowess(y: &[f64], x: &[f64], frac: f64) -> Vec<f64> {
             break;
         }
 
-        let mut residuals = y
-            .iter()
-            .zip(&fitted)
-            .map(|(yi, fi)| (yi - fi).abs())
-            .collect::<Vec<_>>();
+        residuals.clear();
+        residuals.extend(y.iter().zip(&fitted).map(|(yi, fi)| (yi - fi).abs()));
         residuals.sort_by(|a, b| a.partial_cmp(b).unwrap());
         let median = if n.is_multiple_of(2) {
             0.5 * (residuals[n / 2 - 1] + residuals[n / 2])
@@ -2209,8 +2662,10 @@ mod tests {
     fn optimized_enrichment_score_extrema_match_running_sum_reference() {
         let abs_scores = vec![3.0, 1.5, 7.0, 2.25, 4.0, 5.5, 0.75, 6.25, 3.75];
         let hits = vec![7, 0, 4, 2];
+        let mut sorted_hits = hits.clone();
+        sorted_hits.sort_unstable();
         let mut scratch = BlitzScoreScratch::new(abs_scores.len());
-        let observed = enrichment_score_for_indices(&abs_scores, &hits, &mut scratch);
+        let observed = enrichment_score_for_indices(&abs_scores, &hits, &sorted_hits, &mut scratch);
 
         let mut hit_indicator = vec![0.0; abs_scores.len()];
         for &hit in &hits {
@@ -2255,6 +2710,32 @@ mod tests {
         assert_eq!(observed.rmin, rmin);
         assert_f64_bits("optimized max", observed.max_value, max_value);
         assert_f64_bits("optimized min", observed.min_value, min_value);
+    }
+
+    #[test]
+    fn sorted_hit_anchor_es_matches_marker_reference_exactly() {
+        let abs_scores = (0..257)
+            .map(|i| (((i * 37 + 11) % 101) as f64 + 1.0) / 17.0)
+            .collect::<Vec<_>>();
+        let hit_sets = [
+            vec![0, 3, 11, 87, 256],
+            vec![255, 7, 128, 1, 64, 9, 200],
+            vec![13, 14, 15, 16, 17, 18, 19, 20],
+            vec![101, 5, 230, 44, 177, 6, 88, 2, 199],
+        ];
+        let mut sorted_hits = Vec::new();
+        let mut sorted_hits_u32 = Vec::new();
+        let mut marker = HitMarker::new(abs_scores.len());
+        for hits in hit_sets {
+            let observed = enrichment_score_for_hits(&abs_scores, &hits, &mut sorted_hits);
+            let hits_u32 = hits.iter().map(|&idx| idx as u32).collect::<Vec<_>>();
+            let observed_u32 =
+                enrichment_score_for_hits_u32(&abs_scores, &hits_u32, &mut sorted_hits_u32);
+            let expected =
+                enrichment_score_for_hits_marker_reference(&abs_scores, &hits, &mut marker);
+            assert_f64_bits("sorted-hit anchor ES", observed, expected);
+            assert_f64_bits("u32 sorted-hit anchor ES", observed_u32, expected);
+        }
     }
 
     #[test]
