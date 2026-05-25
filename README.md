@@ -364,6 +364,12 @@ For the local positive DESeq2 stress workload:
 scripts/bench_blitz_speed.py --reps 1 --json
 ```
 
+Optional local CPU-tuned blitz build, host-specific:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --release -p rsfgsea
+```
+
 Latest local `lung_vs_muscle + GO BP` snapshot: native Rust blitz cold compute
 improved from `~22.2 s` to `9.61 s`, and the in-process Rust warm-cache
 Criterion group measured about `4.03 s`; Python blitzgsea cold was `15.61 s`

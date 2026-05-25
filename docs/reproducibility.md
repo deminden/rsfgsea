@@ -115,6 +115,17 @@ library calls. The CLI leaves it off by default because one-shot subprocess runs
 cannot reuse process memory; Criterion reports that path as
 `blitz_full_memory_cache`.
 
+For local workstation builds, `target-cpu=native` is worth testing:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --release -p rsfgsea
+```
+
+On the AMD Ryzen 7950X3D reference machine, this was a clear local blitz win in
+a two-run screen (`~9.10 s` native CPU build vs `~9.36-9.63 s` portable release
+builds, depending on the source baseline). Keep this out of portable release
+artifacts unless you intentionally want a binary specialized to the build host.
+
 The same run reported 5,324 matched pathways, no size mismatches, no
 leading-edge set mismatches, max finite rounded-output absolute diffs of ES
 `5.0e-9`, NES `2.25e-7`, p-value `5.0e-9`, and FDR `4.99e-9`.

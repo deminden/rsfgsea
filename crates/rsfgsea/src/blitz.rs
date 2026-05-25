@@ -614,17 +614,21 @@ impl NumpyMt19937 {
         const LOWER_MASK: u32 = 0x7fff_ffff;
 
         if self.mti >= N {
-            for kk in 0..(N - M) {
-                let y = (self.mt[kk] & UPPER_MASK) | (self.mt[kk + 1] & LOWER_MASK);
-                self.mt[kk] = self.mt[kk + M] ^ (y >> 1) ^ if y & 1 == 0 { 0 } else { MATRIX_A };
+            let mt = self.mt.as_mut_ptr();
+            unsafe {
+                for kk in 0..(N - M) {
+                    let y = (*mt.add(kk) & UPPER_MASK) | (*mt.add(kk + 1) & LOWER_MASK);
+                    *mt.add(kk) =
+                        *mt.add(kk + M) ^ (y >> 1) ^ if y & 1 == 0 { 0 } else { MATRIX_A };
+                }
+                for kk in (N - M)..(N - 1) {
+                    let y = (*mt.add(kk) & UPPER_MASK) | (*mt.add(kk + 1) & LOWER_MASK);
+                    *mt.add(kk) =
+                        *mt.add(kk + M - N) ^ (y >> 1) ^ if y & 1 == 0 { 0 } else { MATRIX_A };
+                }
+                let y = (*mt.add(N - 1) & UPPER_MASK) | (*mt.add(0) & LOWER_MASK);
+                *mt.add(N - 1) = *mt.add(M - 1) ^ (y >> 1) ^ if y & 1 == 0 { 0 } else { MATRIX_A };
             }
-            for kk in (N - M)..(N - 1) {
-                let y = (self.mt[kk] & UPPER_MASK) | (self.mt[kk + 1] & LOWER_MASK);
-                self.mt[kk] =
-                    self.mt[kk + M - N] ^ (y >> 1) ^ if y & 1 == 0 { 0 } else { MATRIX_A };
-            }
-            let y = (self.mt[N - 1] & UPPER_MASK) | (self.mt[0] & LOWER_MASK);
-            self.mt[N - 1] = self.mt[M - 1] ^ (y >> 1) ^ if y & 1 == 0 { 0 } else { MATRIX_A };
             self.mti = 0;
         }
 
@@ -814,7 +818,7 @@ pub fn fgsea_blitz_with_options(
 pub struct BlitzBenchPrepared {
     signature: BlitzSignature,
     cleaned: Vec<CleanedPathway>,
-    params_by_size: HashMap<usize, BlitzModelParams>,
+    params_by_size: Vec<Option<BlitzModelParams>>,
     options: BlitzOptions,
 }
 
@@ -912,23 +916,32 @@ fn model_params_by_size(
     model: &BlitzModel,
     cleaned: &[CleanedPathway],
     options: &BlitzOptions,
-) -> HashMap<usize, BlitzModelParams> {
-    let mut params_by_size = HashMap::new();
+) -> Vec<Option<BlitzModelParams>> {
+    let max_size = cleaned
+        .iter()
+        .map(|pathway| pathway.genes.len())
+        .max()
+        .unwrap_or(0)
+        .min(options.max_size);
+    let mut params_by_size = vec![None; max_size + 1];
     for pathway in cleaned {
         let size = pathway.genes.len();
         if size < options.min_size || size > options.max_size {
             continue;
         }
-        params_by_size.entry(size).or_insert_with(|| {
+        if size >= params_by_size.len() {
+            continue;
+        }
+        if params_by_size[size].is_none() {
             let size_f = size as f64;
-            BlitzModelParams {
+            params_by_size[size] = Some(BlitzModelParams {
                 pos_alpha: model.alpha_pos.at(size_f),
                 pos_beta: model.beta_pos.at(size_f),
                 pos_ratio: model.pos_ratio.at(size_f).clamp(0.0, 1.0),
                 neg_alpha: model.alpha_neg.at(size_f),
                 neg_beta: model.beta_neg.at(size_f),
-            }
-        });
+            });
+        }
     }
     params_by_size
 }
@@ -936,30 +949,35 @@ fn model_params_by_size(
 fn score_blitz_pathways(
     signature: &BlitzSignature,
     cleaned: &[CleanedPathway],
-    params_by_size: &HashMap<usize, BlitzModelParams>,
+    params_by_size: &[Option<BlitzModelParams>],
     options: &BlitzOptions,
 ) -> Result<Vec<ScoredBlitzPathway>> {
+    let jobs = cleaned
+        .iter()
+        .filter_map(|pathway| {
+            let size = pathway.genes.len();
+            if size < options.min_size || size > options.max_size {
+                return None;
+            }
+            let params = params_by_size
+                .get(size)
+                .and_then(|params| *params)
+                .expect("model parameters should be cached for every kept size");
+            Some((pathway, params))
+        })
+        .collect::<Vec<_>>();
     let processes = options.processes.max(1);
     let score = |scratch: &mut BlitzScoreScratch,
-                 pathway: &CleanedPathway|
-     -> Result<Option<ScoredBlitzPathway>> {
-        let size = pathway.genes.len();
-        if size < options.min_size || size > options.max_size {
-            return Ok(None);
-        }
-        let params = params_by_size
-            .get(&size)
-            .expect("model parameters should be cached for every kept size");
-        score_cleaned_pathway(signature, pathway, *params, options.deep_accuracy, scratch).map(Some)
+                 (pathway, params): &(&CleanedPathway, BlitzModelParams)|
+     -> Result<ScoredBlitzPathway> {
+        score_cleaned_pathway(signature, pathway, *params, options.deep_accuracy, scratch)
     };
 
     if processes == 1 {
         let mut scratch = BlitzScoreScratch::new(signature.abs_scores.len());
-        let mut out = Vec::new();
-        for pathway in cleaned {
-            if let Some(row) = score(&mut scratch, pathway)? {
-                out.push(row);
-            }
+        let mut out = Vec::with_capacity(jobs.len());
+        for job in &jobs {
+            out.push(score(&mut scratch, job)?);
         }
         return Ok(out);
     }
@@ -968,16 +986,14 @@ fn score_blitz_pathways(
         .num_threads(processes)
         .build()?;
     pool.install(|| {
-        let min_len = 128.min(cleaned.len().max(1));
-        cleaned
-            .par_iter()
+        let min_len = 128.min(jobs.len().max(1));
+        jobs.par_iter()
             .with_min_len(min_len)
             .map_init(
                 || BlitzScoreScratch::new(signature.abs_scores.len()),
-                |scratch, pathway| score(scratch, pathway),
+                |scratch, job| score(scratch, job),
             )
             .collect::<Result<Vec<_>>>()
-            .map(|rows| rows.into_iter().flatten().collect())
     })
 }
 
@@ -1425,7 +1441,6 @@ fn estimate_anchor(
     if scratch.es.is_empty() {
         bail!("blitz calibration generated no finite enrichment scores for set size {set_size}.");
     }
-
     scratch.pos.clear();
     scratch.neg.clear();
     for &value in &scratch.es {
@@ -2242,11 +2257,14 @@ fn leading_edge_blitz(
                 .insert_filtered(hits.iter_values(), |idx| idx >= rmin && idx < running_len);
         }
     }
-    scratch
-        .leading_set
-        .iter_values()
-        .map(|idx| signature.genes[idx].clone())
-        .collect()
+    let mut leading_edge = Vec::with_capacity(scratch.leading_set.len());
+    leading_edge.extend(
+        scratch
+            .leading_set
+            .iter_values()
+            .map(|idx| signature.genes[idx].clone()),
+    );
+    leading_edge
 }
 
 #[cfg(test)]
