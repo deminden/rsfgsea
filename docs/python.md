@@ -51,6 +51,7 @@ Important options:
 - `blitz_center=True`
 - `blitz_accuracy=40`
 - `blitz_deep_accuracy=50`
+- `blitz_signature_cache=True`
 
 ## Decor Example
 
@@ -164,7 +165,7 @@ res = rsfgseapy.run_gsea_py(
 )
 ```
 
-Blitz mode rejects `gpu=True`, `method="decor"`, `nperm`, `scoreType` values other than `"std"`, and `gseaParam` values other than `1.0`.
+Blitz mode keeps an in-process null-model cache enabled by default for repeated identical calls. Set `blitz_signature_cache=False` to force cold calibration. It rejects `gpu=True`, `method="decor"`, `nperm`, `scoreType` values other than `"std"`, and `gseaParam` values other than `1.0`.
 
 ## `nPermSimple` vs `nperm`
 

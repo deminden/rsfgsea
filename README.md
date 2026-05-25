@@ -69,7 +69,9 @@ rsfgsea \
 Blitz mode uses `blitzgsea.gsea()` defaults where applicable:
 `permutations=1000`, `anchors=40`, `min_size=5`, `max_size=4000`,
 `processes=4`, `symmetric=false`, `seed=0`, `center=true`, `accuracy=40`, and
-`deep_accuracy=50`. It rejects `gpu`, `method=decor`, `nperm`,
+`deep_accuracy=50`. Library callers keep an in-process blitz null-model cache
+enabled by default for repeated identical calls; the one-shot CLI does not enable
+that cache unless `--blitz-signature-cache` is passed. It rejects `gpu`, `method=decor`, `nperm`,
 `scoreType != "std"`, and `gseaParam != 1.0`.
 
 ### As a Crate
@@ -362,8 +364,9 @@ For the local positive DESeq2 stress workload:
 scripts/bench_blitz_speed.py --reps 1 --json
 ```
 
-Latest local `lung_vs_muscle + GO BP` snapshot: native Rust blitz compute
-improved from `~22.2 s` to `10.29 s`; Python blitzgsea cold was `15.30 s`
+Latest local `lung_vs_muscle + GO BP` snapshot: native Rust blitz cold compute
+improved from `~22.2 s` to `9.61 s`, and the in-process Rust warm-cache
+Criterion group measured about `4.03 s`; Python blitzgsea cold was `15.61 s`
 and warm-cache was `3.56 s`.
 
 ### R fgsea Comparison Benchmark

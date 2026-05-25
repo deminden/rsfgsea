@@ -52,6 +52,7 @@ def test_cpu_blitz_mode_runs(tmp_path: Path) -> None:
         minSize=1,
         maxSize=4,
         blitz_anchors=4,
+        blitz_signature_cache=False,
     )
 
     assert len(results) == 2

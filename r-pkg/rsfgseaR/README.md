@@ -110,7 +110,7 @@ res <- fgsea(
 )
 ```
 
-Blitz mode uses blitz defaults when arguments are omitted (`minSize = 5`, `maxSize = 4000`, seed `0`, four calibration workers) and returns `NA` for `log2err`.
+Blitz mode uses blitz defaults when arguments are omitted (`minSize = 5`, `maxSize = 4000`, seed `0`, four calibration workers) and returns `NA` for `log2err`. `blitz.signature.cache = TRUE` reuses native blitz null-model fits for repeated identical calls in the same R process.
 
 Plot example:
 

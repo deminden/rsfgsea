@@ -369,6 +369,7 @@ fn fgsea_rust_impl(
     blitz_center: bool,
     blitz_accuracy: i32,
     blitz_deep_accuracy: i32,
+    blitz_signature_cache: bool,
 ) -> std::result::Result<Robj, String> {
     if stats.len() != genes.len() {
         return Err("stats and gene names must have the same length.".to_string());
@@ -605,6 +606,7 @@ fn fgsea_rust_impl(
                             center: blitz_center,
                             accuracy: blitz_accuracy as usize,
                             deep_accuracy: blitz_deep_accuracy as usize,
+                            signature_cache: blitz_signature_cache,
                         },
                     )
                     .map_err(|err| err.to_string()),
@@ -688,6 +690,7 @@ fn fgsea_rust(
     blitz_center: bool,
     blitz_accuracy: i32,
     blitz_deep_accuracy: i32,
+    blitz_signature_cache: bool,
 ) -> Robj {
     match fgsea_rust_impl(
         stats,
@@ -723,6 +726,7 @@ fn fgsea_rust(
         blitz_center,
         blitz_accuracy,
         blitz_deep_accuracy,
+        blitz_signature_cache,
     ) {
         Ok(obj) => obj,
         Err(err) => throw_r_error(err),

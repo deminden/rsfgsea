@@ -346,6 +346,7 @@ fn blitz_options_for_bench() -> BlitzOptions {
         center: true,
         accuracy: 40,
         deep_accuracy: 50,
+        signature_cache: true,
     }
 }
 
@@ -401,10 +402,35 @@ fn benchmark_blitz(c: &mut Criterion) {
 
     let workloads = blitz_benchmark_workloads();
     let options = blitz_options_for_bench();
+    let mut cold_options = options.clone();
+    cold_options.signature_cache = false;
 
     {
         let mut group = configure_blitz_group(c, "blitz_full_cold");
         for workload in &workloads {
+            group.throughput(Throughput::Elements(workload.pathways.len() as u64));
+            group.bench_with_input(
+                BenchmarkId::from_parameter(workload.name),
+                workload,
+                |b, workload| {
+                    b.iter(|| {
+                        fgsea_blitz_with_options(
+                            black_box(&workload.ranks),
+                            black_box(&workload.pathways),
+                            black_box(&cold_options),
+                        )
+                    })
+                },
+            );
+        }
+        group.finish();
+    }
+
+    {
+        let mut group = configure_blitz_group(c, "blitz_full_memory_cache");
+        for workload in &workloads {
+            fgsea_blitz_with_options(&workload.ranks, &workload.pathways, &options)
+                .expect("prewarm blitz model cache");
             group.throughput(Throughput::Elements(workload.pathways.len() as u64));
             group.bench_with_input(
                 BenchmarkId::from_parameter(workload.name),

@@ -24,7 +24,7 @@ The API intentionally keeps fgsea-style parameter names while exposing decor fir
 - `sampleSize`
 - `scoreType`
 - `gseaParam`
-- `blitz_anchors`, `blitz_symmetric`, `blitz_center`, `blitz_accuracy`, `blitz_deep_accuracy`
+- `blitz_anchors`, `blitz_symmetric`, `blitz_center`, `blitz_accuracy`, `blitz_deep_accuracy`, `blitz_signature_cache`
 
 ## Installation
 
@@ -150,6 +150,8 @@ results = rsfgseapy.run_gsea_py(
     mode="blitz",
 )
 ```
+
+`blitz_signature_cache=True` reuses native blitz null-model fits for repeated identical calls in the same Python process. Set it to `False` to force cold calibration.
 
 ## Plotting
 

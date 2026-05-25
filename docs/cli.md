@@ -156,6 +156,7 @@ Blitz options:
 - `--blitz-anchors`: number of calibration anchors, default `40`
 - `--blitz-symmetric`: use one symmetric positive/negative null fit
 - `--blitz-no-center`: disable signature centering
+- `--blitz-signature-cache`: enable the in-process blitz null-model cache for repeated embedded CLI-style calls; ordinary one-shot CLI runs leave it off
 - `--blitz-accuracy`: normal-tail accuracy setting retained for blitz compatibility metadata, default `40`
 - `--blitz-deep-accuracy`: deep-tail accuracy setting retained for blitz compatibility metadata, default `50`
 

@@ -32,7 +32,8 @@ fgsea(
   blitz.symmetric = FALSE,
   blitz.center = TRUE,
   blitz.accuracy = 40L,
-  blitz.deep.accuracy = 50L
+  blitz.deep.accuracy = 50L,
+  blitz.signature.cache = TRUE
 )
 }
 \arguments{
@@ -107,6 +108,10 @@ On WSL2, if CUDA is visible but WebGPU selects \code{llvmpipe}, start R with
 \item{blitz.accuracy}{Blitz normal-tail accuracy setting for parity metadata.}
 
 \item{blitz.deep.accuracy}{Blitz deep-tail accuracy setting for parity metadata.}
+
+\item{blitz.signature.cache}{Reuse blitz null-model fits for repeated calls
+with the same preprocessed signature and calibration settings in this R
+process.}
 }
 \value{
 A data frame with fgsea-style result columns.

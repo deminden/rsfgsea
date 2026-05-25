@@ -20,6 +20,7 @@ pub enum EnrichmentMethod {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(default)]
 pub struct BlitzOptions {
     pub permutations: usize,
     pub anchors: usize,
@@ -31,6 +32,7 @@ pub struct BlitzOptions {
     pub center: bool,
     pub accuracy: usize,
     pub deep_accuracy: usize,
+    pub signature_cache: bool,
 }
 
 impl Default for BlitzOptions {
@@ -46,6 +48,7 @@ impl Default for BlitzOptions {
             center: true,
             accuracy: 40,
             deep_accuracy: 50,
+            signature_cache: true,
         }
     }
 }

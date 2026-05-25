@@ -1,7 +1,9 @@
 use crate::core::{BlitzOptions, EnrichmentResult, Pathway, RankedList};
 use anyhow::{Result, bail};
 use rayon::prelude::*;
+use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
+use std::sync::{OnceLock, RwLock};
 use std::time::Instant;
 
 const LOWESS_ITERS: usize = 3;
@@ -77,6 +79,22 @@ struct BlitzModel {
     alpha_neg: LinearInterp,
     beta_neg: LinearInterp,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+struct BlitzModelCacheKey {
+    signature_digest: [u8; 32],
+    signature_len: usize,
+    max_library_size: usize,
+    permutations: usize,
+    anchors: usize,
+    processes: usize,
+    symmetric: bool,
+    seed: u64,
+    center: bool,
+}
+
+static BLITZ_MODEL_CACHE: OnceLock<RwLock<HashMap<BlitzModelCacheKey, BlitzModel>>> =
+    OnceLock::new();
 
 #[derive(Clone)]
 struct CleanedPathway {
@@ -199,6 +217,20 @@ impl BlitzTimingLogger {
         if self.enabled {
             eprintln!("RSFGSEA_BLITZ_TIMING\t{stage}\t{value}");
         }
+    }
+}
+
+fn blitz_model_cache() -> &'static RwLock<HashMap<BlitzModelCacheKey, BlitzModel>> {
+    BLITZ_MODEL_CACHE.get_or_init(|| RwLock::new(HashMap::new()))
+}
+
+#[cfg(test)]
+fn clear_blitz_model_cache() {
+    if let Some(cache) = BLITZ_MODEL_CACHE.get() {
+        cache
+            .write()
+            .expect("blitz model cache lock should not be poisoned")
+            .clear();
     }
 }
 
@@ -744,8 +776,9 @@ pub fn fgsea_blitz_with_options(
     }
 
     let stage = timings.start();
-    let model = estimate_model(&signature, &cleaned, options)?;
+    let (model, model_cache_hit) = estimate_model_with_cache(&signature, &cleaned, options)?;
     timings.finish("estimate_model", stage);
+    timings.value("model_cache_hit", usize::from(model_cache_hit));
 
     let stage = timings.start();
     let params_by_size = model_params_by_size(&model, &cleaned, options);
@@ -1115,6 +1148,53 @@ fn clean_pathways(pathways: &[Pathway], signature: &BlitzSignature) -> Vec<Clean
         .collect()
 }
 
+fn max_cleaned_library_size(library: &[CleanedPathway]) -> usize {
+    library
+        .iter()
+        .map(|pathway| pathway.genes.len())
+        .max()
+        .unwrap_or(1)
+        .max(1)
+}
+
+fn finalize_sha256(hasher: Sha256) -> [u8; 32] {
+    let digest = hasher.finalize();
+    let mut out = [0_u8; 32];
+    out.copy_from_slice(&digest);
+    out
+}
+
+fn update_usize_digest(hasher: &mut Sha256, value: usize) {
+    hasher.update((value as u64).to_le_bytes());
+}
+
+fn blitz_signature_digest(signature: &BlitzSignature) -> [u8; 32] {
+    let mut hasher = Sha256::new();
+    update_usize_digest(&mut hasher, signature.genes.len());
+    for score in &signature.abs_scores {
+        hasher.update(score.to_bits().to_le_bytes());
+    }
+    finalize_sha256(hasher)
+}
+
+fn blitz_model_cache_key(
+    signature: &BlitzSignature,
+    library: &[CleanedPathway],
+    options: &BlitzOptions,
+) -> BlitzModelCacheKey {
+    BlitzModelCacheKey {
+        signature_digest: blitz_signature_digest(signature),
+        signature_len: signature.genes.len(),
+        max_library_size: max_cleaned_library_size(library),
+        permutations: options.permutations,
+        anchors: options.anchors,
+        processes: options.processes,
+        symmetric: options.symmetric,
+        seed: options.seed,
+        center: options.center,
+    }
+}
+
 fn apply_statsmodels_bh_adjustment(results: &mut [EnrichmentResult]) {
     if results.is_empty() {
         return;
@@ -1163,17 +1243,42 @@ fn estimate_model(
     })
 }
 
+fn estimate_model_with_cache(
+    signature: &BlitzSignature,
+    library: &[CleanedPathway],
+    options: &BlitzOptions,
+) -> Result<(BlitzModel, bool)> {
+    if !options.signature_cache {
+        return estimate_model(signature, library, options).map(|model| (model, false));
+    }
+
+    let key = blitz_model_cache_key(signature, library, options);
+    if let Some(model) = blitz_model_cache()
+        .read()
+        .expect("blitz model cache lock should not be poisoned")
+        .get(&key)
+        .cloned()
+    {
+        return Ok((model, true));
+    }
+
+    let model = estimate_model(signature, library, options)?;
+    let mut cache = blitz_model_cache()
+        .write()
+        .expect("blitz model cache lock should not be poisoned");
+    if let Some(model) = cache.get(&key).cloned() {
+        return Ok((model, true));
+    }
+    cache.insert(key, model.clone());
+    Ok((model, false))
+}
+
 fn estimate_anchor_fits(
     signature: &BlitzSignature,
     library: &[CleanedPathway],
     options: &BlitzOptions,
 ) -> Result<(Vec<usize>, Vec<AnchorFit>)> {
-    let max_library_size = library
-        .iter()
-        .map(|pathway| pathway.genes.len())
-        .max()
-        .unwrap_or(1)
-        .max(1);
+    let max_library_size = max_cleaned_library_size(library);
     let anchor_sizes = anchor_set_sizes(max_library_size, signature.genes.len(), options.anchors);
     if anchor_sizes.is_empty() {
         bail!("blitz calibration produced no valid anchor set sizes.");
@@ -2776,6 +2881,89 @@ mod tests {
         }
     }
 
+    #[test]
+    fn blitz_model_cache_reuses_exact_model() {
+        clear_blitz_model_cache();
+        let (signature, cleaned) = reference_inputs();
+        let options = BlitzOptions::default();
+
+        let (cold, first_hit) = estimate_model_with_cache(&signature, &cleaned, &options).unwrap();
+        let (warm, second_hit) = estimate_model_with_cache(&signature, &cleaned, &options).unwrap();
+
+        assert!(!first_hit);
+        assert!(second_hit);
+        assert_linear_interp_bits("alpha_pos", &warm.alpha_pos, &cold.alpha_pos);
+        assert_linear_interp_bits("beta_pos", &warm.beta_pos, &cold.beta_pos);
+        assert_linear_interp_bits("pos_ratio", &warm.pos_ratio, &cold.pos_ratio);
+        assert_linear_interp_bits("alpha_neg", &warm.alpha_neg, &cold.alpha_neg);
+        assert_linear_interp_bits("beta_neg", &warm.beta_neg, &cold.beta_neg);
+    }
+
+    #[test]
+    fn blitz_model_cache_key_changes_for_model_affecting_inputs() {
+        let (signature, cleaned) = reference_inputs();
+        let options = BlitzOptions::default();
+        let key = blitz_model_cache_key(&signature, &cleaned, &options);
+
+        let mut changed_seed = options.clone();
+        changed_seed.seed += 1;
+        assert_ne!(
+            key,
+            blitz_model_cache_key(&signature, &cleaned, &changed_seed)
+        );
+
+        let mut changed_permutations = options.clone();
+        changed_permutations.permutations += 1;
+        assert_ne!(
+            key,
+            blitz_model_cache_key(&signature, &cleaned, &changed_permutations)
+        );
+
+        let mut changed_processes = options.clone();
+        changed_processes.processes += 1;
+        assert_ne!(
+            key,
+            blitz_model_cache_key(&signature, &cleaned, &changed_processes)
+        );
+
+        let mut changed_library = cleaned.clone();
+        let larger_size = max_cleaned_library_size(&cleaned) + 1;
+        changed_library.push(CleanedPathway {
+            name: "cache_key_larger_pathway".to_string(),
+            genes: (0..larger_size)
+                .map(|idx| format!("cache_gene_{idx}"))
+                .collect(),
+            hit_indices: Vec::new(),
+            sorted_hit_indices: Vec::new(),
+            leading_hits: PythonIntSet::new(),
+        });
+        assert_ne!(
+            key,
+            blitz_model_cache_key(&signature, &changed_library, &options)
+        );
+    }
+
+    #[test]
+    fn blitz_model_cache_key_uses_score_distribution_not_gene_names() {
+        let (signature, cleaned) = reference_inputs();
+        let mut renamed_signature = signature.clone();
+        for (idx, gene) in renamed_signature.genes.iter_mut().enumerate() {
+            *gene = format!("renamed_gene_{idx}");
+        }
+        renamed_signature.gene_to_idx = renamed_signature
+            .genes
+            .iter()
+            .enumerate()
+            .map(|(idx, gene)| (gene.clone(), idx))
+            .collect();
+        let options = BlitzOptions::default();
+
+        assert_eq!(
+            blitz_model_cache_key(&signature, &cleaned, &options),
+            blitz_model_cache_key(&renamed_signature, &cleaned, &options)
+        );
+    }
+
     #[derive(Debug, Deserialize)]
     struct AnchorTraceRow {
         set_size: usize,
@@ -2904,6 +3092,17 @@ mod tests {
             expected.to_bits(),
             "{label}: observed {observed:?}, expected {expected:?}"
         );
+    }
+
+    fn assert_linear_interp_bits(label: &str, observed: &LinearInterp, expected: &LinearInterp) {
+        assert_eq!(observed.x.len(), expected.x.len(), "{label} x length");
+        assert_eq!(observed.y.len(), expected.y.len(), "{label} y length");
+        for (idx, (observed, expected)) in observed.x.iter().zip(&expected.x).enumerate() {
+            assert_f64_bits(&format!("{label} x[{idx}]"), *observed, *expected);
+        }
+        for (idx, (observed, expected)) in observed.y.iter().zip(&expected.y).enumerate() {
+            assert_f64_bits(&format!("{label} y[{idx}]"), *observed, *expected);
+        }
     }
 
     #[test]

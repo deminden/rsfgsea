@@ -69,6 +69,7 @@ fn cli_blitz_mode_writes_results() {
             "64",
             "--blitz-anchors",
             "4",
+            "--blitz-signature-cache",
             "--minSize",
             "1",
             "--maxSize",

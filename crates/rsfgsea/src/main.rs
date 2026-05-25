@@ -88,6 +88,10 @@ struct Args {
     #[arg(long = "blitz-no-center")]
     blitz_no_center: bool,
 
+    /// Enable blitz in-process signature model cache for repeated embedded calls
+    #[arg(long = "blitz-signature-cache")]
+    blitz_signature_cache: bool,
+
     /// Blitz normal-tail accuracy setting, kept for parity metadata
     #[arg(long = "blitz-accuracy", default_value_t = 40)]
     blitz_accuracy: usize,
@@ -551,6 +555,7 @@ fn main() -> Result<()> {
                 center: !args.blitz_no_center,
                 accuracy: args.blitz_accuracy,
                 deep_accuracy: args.blitz_deep_accuracy,
+                signature_cache: args.blitz_signature_cache,
             },
         )?
     } else {
@@ -710,6 +715,7 @@ mod tests {
             blitz_anchors: 40,
             blitz_symmetric: false,
             blitz_no_center: false,
+            blitz_signature_cache: false,
             blitz_accuracy: 40,
             blitz_deep_accuracy: 50,
             method: MethodArg::Classic,

@@ -92,7 +92,7 @@ fn apply_decor_release_tuning(
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=None, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false, method="classic", decor_cache=None, decor_expression=None, decor_preset=None, decor_stringency=None, decor_cache_mode="auto", decor_correlation="pearson", decor_redundancy="positive_mean", blitz_anchors=40, blitz_symmetric=false, blitz_center=true, blitz_accuracy=40, blitz_deep_accuracy=50))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=None, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false, method="classic", decor_cache=None, decor_expression=None, decor_preset=None, decor_stringency=None, decor_cache_mode="auto", decor_correlation="pearson", decor_redundancy="positive_mean", blitz_anchors=40, blitz_symmetric=false, blitz_center=true, blitz_accuracy=40, blitz_deep_accuracy=50, blitz_signature_cache=true))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
@@ -122,6 +122,7 @@ fn run_gsea_py(
     blitz_center: bool,
     blitz_accuracy: usize,
     blitz_deep_accuracy: usize,
+    blitz_signature_cache: bool,
 ) -> PyResult<Vec<HashMap<String, Py<PyAny>>>> {
     if sampleSize == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -274,6 +275,7 @@ fn run_gsea_py(
                 center: blitz_center,
                 accuracy: blitz_accuracy,
                 deep_accuracy: blitz_deep_accuracy,
+                signature_cache: blitz_signature_cache,
             },
         )
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?,

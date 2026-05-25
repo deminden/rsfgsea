@@ -104,10 +104,16 @@ Latest local single-run snapshot on `lung_vs_muscle + GO BP`:
 | Metric | Value |
 | :--- | ---: |
 | Native Rust blitz compute before speed pass | `~22.2 s` |
-| Native Rust blitz compute after speed pass | `10.29 s` |
-| Python blitzgsea cold | `15.30 s` |
+| Native Rust blitz compute after speed pass | `9.61 s` |
+| Native Rust blitz in-process warm cache | `~4.03 s` |
+| Python blitzgsea cold | `15.61 s` |
 | Python blitzgsea warm cache | `3.56 s` |
-| Rust speedup vs previous native cold compute | `2.16x` |
+| Rust speedup vs previous native cold compute | `2.31x` |
+
+Native blitz also has an in-process null-model cache for repeated identical
+library calls. The CLI leaves it off by default because one-shot subprocess runs
+cannot reuse process memory; Criterion reports that path as
+`blitz_full_memory_cache`.
 
 The same run reported 5,324 matched pathways, no size mismatches, no
 leading-edge set mismatches, max finite rounded-output absolute diffs of ES

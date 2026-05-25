@@ -494,6 +494,9 @@ plotGseaTable <- function(
 #' @param blitz.center Center signature values before blitz scoring.
 #' @param blitz.accuracy Blitz normal-tail accuracy setting for parity metadata.
 #' @param blitz.deep.accuracy Blitz deep-tail accuracy setting for parity metadata.
+#' @param blitz.signature.cache Reuse blitz null-model fits for repeated calls
+#'   with the same preprocessed signature and calibration settings in this R
+#'   process.
 #'
 #' @return A data frame with fgsea-style result columns.
 #' @export
@@ -525,7 +528,8 @@ fgsea <- function(
   blitz.symmetric = FALSE,
   blitz.center = TRUE,
   blitz.accuracy = 40L,
-  blitz.deep.accuracy = 50L
+  blitz.deep.accuracy = 50L,
+  blitz.signature.cache = TRUE
 ) {
   stats <- .normalize_stats(stats)
   .validate_integerish_scalar(nPermSimple, "nPermSimple", min_value = 1L)
@@ -574,6 +578,9 @@ fgsea <- function(
   }
   if (!is.logical(blitz.center) || length(blitz.center) != 1L || is.na(blitz.center)) {
     stop("blitz.center must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(blitz.signature.cache) || length(blitz.signature.cache) != 1L || is.na(blitz.signature.cache)) {
+    stop("blitz.signature.cache must be TRUE or FALSE.", call. = FALSE)
   }
   if (!is.null(output) && (!is.character(output) || length(output) != 1L)) {
     stop("output must be NULL or a single file path.", call. = FALSE)
@@ -658,7 +665,8 @@ fgsea <- function(
     isTRUE(blitz.symmetric),
     isTRUE(blitz.center),
     as.integer(blitz.accuracy),
-    as.integer(blitz.deep.accuracy)
+    as.integer(blitz.deep.accuracy),
+    isTRUE(blitz.signature.cache)
   )
 
   result_df <- .as_fgsea_df(result)
