@@ -615,8 +615,8 @@ fgsea <- function(
     if (tolower(decor.correlation) == "spearman") {
       stop("spearman decor correlation is not implemented yet.", call. = FALSE)
     }
-    if (gpu || tolower(mode) == "multilevel" || (tolower(mode) == "fgsea" && is.null(nperm))) {
-      stop("decor supports CPU fixed-permutation simple runs; use mode = 'simple' or provide nperm without gpu.", call. = FALSE)
+    if (gpu) {
+      stop("decor supports CPU execution only; gpu is not supported with method = 'decor'.", call. = FALSE)
     }
   } else if (!is.null(decor.cache) || !is.null(decor.expression) || !is.null(decor.stringency) || tolower(decor.preset) != "balanced") {
     stop("decor arguments require method = 'decor'.", call. = FALSE)

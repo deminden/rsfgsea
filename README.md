@@ -26,9 +26,10 @@ cargo build --workspace --release
 ```
 
 Decor is the first public track for redundancy-aware preranked GSEA. It runs as
-a fixed-permutation simple workflow. The minimal CLI keeps the validated default
-preset: `balanced`, implemented as threshold-rational decor with `tau=0.04`
-and `alpha=60`.
+a CPU workflow: fixed-permutation simple when `--nperm` is set, and decor
+multilevel refinement when wrapper mode omits `--nperm` or `--mode multilevel`
+is requested. The minimal CLI keeps the validated default preset: `balanced`,
+implemented as threshold-rational decor with `tau=0.04` and `alpha=60`.
 
 ```bash
 rsfgsea \

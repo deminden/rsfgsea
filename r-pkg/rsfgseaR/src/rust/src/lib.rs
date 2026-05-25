@@ -451,14 +451,14 @@ fn fgsea_rust_impl(
         return Err("decor.scale.epsilon must be a finite numeric value > 0.".to_string());
     }
     if method == EnrichmentMethod::Decor {
-        if gpu
-            || mode == InterfaceMode::Multilevel
-            || (mode == InterfaceMode::Fgsea && nperm.is_none())
-        {
+        if gpu {
             return Err(
-                "decor supports CPU fixed-permutation simple runs; use mode = 'simple' or provide nperm without gpu."
+                "decor supports CPU execution only; gpu is not supported with method = 'decor'."
                     .to_string(),
             );
+        }
+        if mode == InterfaceMode::Multilevel && nperm.is_some() {
+            return Err("nperm is only valid with mode = 'fgsea' or mode = 'simple'.".to_string());
         }
         let cache_path = decor_cache
             .into_option()
@@ -489,21 +489,40 @@ fn fgsea_rust_impl(
         } else {
             ranks.len().saturating_sub(1)
         };
+        let decor_multilevel =
+            mode == InterfaceMode::Multilevel || (mode == InterfaceMode::Fgsea && nperm.is_none());
         let results = run_with_optional_thread_pool(nproc, || {
-            fgsea_decor_simple_with_options(
-                &ranks,
-                &pathways.pathways,
-                &cache,
-                &options,
-                nperm.unwrap_or(n_perm_simple as usize),
-                seed,
-                min_size,
-                max_size,
-                eps,
-                score_type,
-                gsea_param,
-                sample_size as usize,
-            )
+            if decor_multilevel {
+                fgsea_decor_multilevel_with_options(
+                    &ranks,
+                    &pathways.pathways,
+                    &cache,
+                    &options,
+                    n_perm_simple as usize,
+                    seed,
+                    min_size,
+                    max_size,
+                    eps,
+                    score_type,
+                    gsea_param,
+                    sample_size as usize,
+                )
+            } else {
+                fgsea_decor_simple_with_options(
+                    &ranks,
+                    &pathways.pathways,
+                    &cache,
+                    &options,
+                    nperm.unwrap_or(n_perm_simple as usize),
+                    seed,
+                    min_size,
+                    max_size,
+                    eps,
+                    score_type,
+                    gsea_param,
+                    sample_size as usize,
+                )
+            }
         })?
         .map_err(|err| err.to_string())?;
 

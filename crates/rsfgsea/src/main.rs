@@ -366,10 +366,11 @@ fn main() -> Result<()> {
     if args.decor_expression_format == DecorExpressionFormatArg::Csv {
         bail!("CSV decor expression format is not implemented yet; use tab-separated input.");
     }
+    if args.mode == CliMode::Multilevel && args.nperm.is_some() {
+        bail!("--nperm is only valid with --mode fgsea or --mode simple.");
+    }
     if args.method == MethodArg::Decor && args.gpu {
-        bail!(
-            "decor supports CPU fixed-permutation simple runs; use --mode simple or provide --nperm without --gpu."
-        );
+        bail!("decor supports CPU execution only; --gpu is not supported with --method decor.");
     }
     if args.mode == CliMode::Blitz {
         if args.gpu {
@@ -388,15 +389,6 @@ fn main() -> Result<()> {
             bail!("--mode blitz supports only --gseaParam 1.");
         }
     }
-    if args.method == MethodArg::Decor
-        && (args.mode == CliMode::Multilevel
-            || (args.mode == CliMode::Fgsea && args.nperm.is_none()))
-    {
-        bail!(
-            "decor supports CPU fixed-permutation simple runs; use --mode simple or provide --nperm."
-        );
-    }
-
     if args.nproc > 0 {
         rayon::ThreadPoolBuilder::new()
             .num_threads(args.nproc)
@@ -524,20 +516,39 @@ fn main() -> Result<()> {
         if let Some(target) = resolved.target_median_penalty {
             println!("Decor target median penalty={target}");
         }
-        fgsea_decor_simple_with_options(
-            &ranks,
-            &pd.pathways,
-            &cache,
-            &options,
-            args.nperm.unwrap_or(args.n_perm_simple),
-            Some(seed),
-            min_size,
-            max_size,
-            args.eps,
-            score_type,
-            args.gsea_param,
-            args.sample_size,
-        )?
+        let decor_multilevel = args.mode == CliMode::Multilevel
+            || (args.mode == CliMode::Fgsea && args.nperm.is_none());
+        if decor_multilevel {
+            fgsea_decor_multilevel_with_options(
+                &ranks,
+                &pd.pathways,
+                &cache,
+                &options,
+                args.n_perm_simple,
+                Some(seed),
+                min_size,
+                max_size,
+                args.eps,
+                score_type,
+                args.gsea_param,
+                args.sample_size,
+            )?
+        } else {
+            fgsea_decor_simple_with_options(
+                &ranks,
+                &pd.pathways,
+                &cache,
+                &options,
+                args.nperm.unwrap_or(args.n_perm_simple),
+                Some(seed),
+                min_size,
+                max_size,
+                args.eps,
+                score_type,
+                args.gsea_param,
+                args.sample_size,
+            )?
+        }
     } else if args.gpu {
         run_gpu_mode(&args, &ranks, &pd.pathways, score_type, max_size, seed)?
     } else if args.mode == CliMode::Blitz {
@@ -573,23 +584,18 @@ fn main() -> Result<()> {
                 args.gsea_param,
                 args.sample_size,
             ),
-            CliMode::Multilevel => {
-                if args.nperm.is_some() {
-                    bail!("--nperm is only valid with --mode fgsea or --mode simple.");
-                }
-                fgsea_multilevel_with_sample_size(
-                    &ranks,
-                    &pd.pathways,
-                    args.n_perm_simple,
-                    Some(seed),
-                    min_size,
-                    max_size,
-                    args.eps,
-                    score_type,
-                    args.gsea_param,
-                    args.sample_size,
-                )
-            }
+            CliMode::Multilevel => fgsea_multilevel_with_sample_size(
+                &ranks,
+                &pd.pathways,
+                args.n_perm_simple,
+                Some(seed),
+                min_size,
+                max_size,
+                args.eps,
+                score_type,
+                args.gsea_param,
+                args.sample_size,
+            ),
             CliMode::Simple => fgsea_simple_with_sample_size(
                 &ranks,
                 &pd.pathways,

@@ -189,12 +189,14 @@ fn run_gsea_py(
         }
     }
     if method == EnrichmentMethod::Decor {
-        if gpu
-            || mode == InterfaceMode::Multilevel
-            || (mode == InterfaceMode::Fgsea && nperm.is_none())
-        {
+        if gpu {
             return Err(pyo3::exceptions::PyValueError::new_err(
-                "decor supports CPU fixed-permutation simple runs; use mode='simple' or provide nperm without gpu.",
+                "decor supports CPU execution only; gpu is not supported with method='decor'.",
+            ));
+        }
+        if mode == InterfaceMode::Multilevel && nperm.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "nperm is only valid with mode='fgsea' or mode='simple'.",
             ));
         }
         let cache_path = decor_cache.ok_or_else(|| {
@@ -215,20 +217,39 @@ fn run_gsea_py(
         )
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         let max_size = maxSize.unwrap_or_else(|| rs_ranks.len().saturating_sub(1));
-        let results = fgsea_decor_simple_with_options(
-            &rs_ranks,
-            &pd.pathways,
-            &cache,
-            &options,
-            nperm.unwrap_or(nPermSimple),
-            seed,
-            min_size,
-            max_size,
-            eps,
-            st,
-            gseaParam,
-            sampleSize,
-        )
+        let decor_multilevel =
+            mode == InterfaceMode::Multilevel || (mode == InterfaceMode::Fgsea && nperm.is_none());
+        let results = if decor_multilevel {
+            fgsea_decor_multilevel_with_options(
+                &rs_ranks,
+                &pd.pathways,
+                &cache,
+                &options,
+                nPermSimple,
+                seed,
+                min_size,
+                max_size,
+                eps,
+                st,
+                gseaParam,
+                sampleSize,
+            )
+        } else {
+            fgsea_decor_simple_with_options(
+                &rs_ranks,
+                &pd.pathways,
+                &cache,
+                &options,
+                nperm.unwrap_or(nPermSimple),
+                seed,
+                min_size,
+                max_size,
+                eps,
+                st,
+                gseaParam,
+                sampleSize,
+            )
+        }
         .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
         return results_to_py(py, results);
     } else if decor_cache.is_some() || decor_expression.is_some() {

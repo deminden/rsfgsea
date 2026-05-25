@@ -147,8 +147,8 @@ test_that("fgsea validates decor arguments", {
     "requires decor.cache"
   )
   expect_error(
-    rsfgseaR::fgsea(pathways = pathways, stats = stats, method = "decor", mode = "multilevel", decor.cache = tempfile()),
-    "decor supports CPU fixed-permutation simple runs"
+    rsfgseaR::fgsea(pathways = pathways, stats = stats, method = "decor", mode = "multilevel", nperm = 50L, decor.cache = tempfile()),
+    "nperm is only valid"
   )
   expect_error(
     rsfgseaR::fgsea(pathways = pathways, stats = stats, method = "decor", mode = "simple", nperm = 50L, decor.cache = tempfile(), decor.preset = "bogus"),
@@ -186,6 +186,21 @@ test_that("decor balanced preset builds cache and runs", {
 
   expect_true(file.exists(cache_path))
   expect_equal(nrow(decor), 2L)
+
+  decor_multilevel <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    method = "decor",
+    mode = "multilevel",
+    nPermSimple = 25L,
+    sampleSize = 11L,
+    seed = 42L,
+    decor.cache = cache_path,
+    decor.expression = expr_path,
+    decor.preset = "balanced"
+  )
+
+  expect_equal(nrow(decor_multilevel), 2L)
 })
 
 test_that("decor accepts named presets", {

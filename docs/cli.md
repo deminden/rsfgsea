@@ -56,7 +56,8 @@ GMT:
 
 - redundancy-aware preranked GSEA method
 - first-class path for expression-correlated pathway genes
-- uses CPU fixed-permutation simple mode
+- uses CPU fixed-permutation simple mode when `--nperm` is provided
+- uses decor multilevel refinement in wrapper mode when `--nperm` is omitted, or in explicit `--mode multilevel`
 - supports calibrated presets and the `--decor-stringency` ladder
 
 `--method classic`

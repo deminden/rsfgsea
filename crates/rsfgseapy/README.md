@@ -72,7 +72,9 @@ Full benchmark setup, thread-scaling tables, and parity notes are in:
 
 ## Decor Example
 
-Decor supports CPU fixed-permutation simple runs.
+Decor is CPU-only. It uses fixed-permutation simple runs when `nperm` is set,
+and decor multilevel refinement when `mode="multilevel"` or wrapper mode omits
+`nperm`.
 
 ```python
 import rsfgseapy

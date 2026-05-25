@@ -19,7 +19,8 @@ pub use crate::core::{
 };
 pub use crate::decor::{
     DecorCache, DecorCacheMetadata, DecorCacheStatus, calculate_es_decor,
-    ensure_decor_cache_for_paths, fgsea_decor_simple_with_options,
+    ensure_decor_cache_for_paths, fgsea_decor_multilevel_with_options,
+    fgsea_decor_multilevel_with_sample_size, fgsea_decor_simple_with_options,
     fgsea_decor_simple_with_sample_size,
 };
 pub use crate::io::{read_gmt, read_ranked_list};

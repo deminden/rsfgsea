@@ -432,7 +432,7 @@ fn synthetic_decor_simple_snapshot_is_thread_count_independent() {
 }
 
 #[test]
-fn decor_cli_rejects_multilevel() {
+fn decor_cli_multilevel_runs() {
     let dir = tempdir().unwrap();
     let output = dir.path().join("decor.tsv");
     let cache = dir.path().join("decor-cache.tsv");
@@ -451,12 +451,18 @@ fn decor_cli_rejects_multilevel() {
             output.to_str().unwrap(),
             "--decor-cache",
             cache.to_str().unwrap(),
+            "--decor-expression",
+            "tests/data/decor_expression.tsv",
+            "--nPermSimple",
+            "32",
+            "--sampleSize",
+            "11",
         ])
         .assert()
-        .failure()
-        .stderr(predicate::str::contains(
-            "decor supports CPU fixed-permutation simple runs",
-        ));
+        .success();
+
+    let content = fs::read_to_string(output).unwrap();
+    assert!(content.contains("PW_REDUNDANT"));
 }
 
 #[test]

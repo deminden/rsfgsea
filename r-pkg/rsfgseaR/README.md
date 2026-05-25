@@ -6,7 +6,7 @@ Analysis workflows.
 
 Current public entrypoints:
 
-- `fgsea(..., method = "decor")` for redundancy-aware decor execution
+- `fgsea(..., method = "decor")` for CPU redundancy-aware decor execution; set `nperm` for fixed-permutation simple runs, or omit it/use `mode = "multilevel"` for decor multilevel refinement
 - `fgsea()` for classic wrapper-style execution
 - `fgseaSimple()` for fixed-permutation simple mode
 - `fgseaMultilevel()` for multilevel refinement

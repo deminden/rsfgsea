@@ -1,13 +1,17 @@
 use crate::algo::{IntoSeed, resolve_rng_seed};
 use crate::algo_support::{
     apply_bh_adjustment, build_gene_index, compute_nes, leading_edge, mode_fraction_count,
-    selected_tail_count, simple_log2err, warn_prepare_stats,
+    multilevel_error, selected_tail_count, should_refine_multilevel, simple_log2err,
+    warn_prepare_stats,
 };
 use crate::core::{
     DecorCacheMode, DecorCorrelation, DecorOptions, DecorRedundancy, DecorWeightFormula,
     EnrichmentResult, Pathway, RankedList, ScoreType,
 };
-use crate::rng_compat::{RLecuyerCmrgSeedCompat, RSampleKind};
+use crate::esruler_compat::beta_mean_log;
+use crate::rng_compat::{
+    Mt19937Compat, RLecuyerCmrgSeedCompat, RSampleKind, combination, uid_wrapper,
+};
 use anyhow::{Context, Result, bail};
 use flate2::Compression;
 use flate2::read::GzDecoder;
@@ -24,6 +28,8 @@ const CACHE_FORMAT: &str = "rsfgsea-decor-cache";
 const CACHE_VERSION: &str = "1";
 const GENE_ID_MODE: &str = "verbatim";
 const DECOR_BATCH_MIN_GROUP_PATHWAYS: usize = 16;
+const DECOR_MULTILEVEL_MAX_LEVELS: usize = 256;
+const DECOR_MULTILEVEL_MIX_SCALE: usize = 2;
 
 #[derive(Debug, Clone)]
 pub struct DecorFormulaContext {
@@ -638,6 +644,219 @@ fn update_decor_null_count(count: &mut DecorNullCounts, rand_es: f64, observed_e
     }
 }
 
+#[derive(Clone, Debug)]
+struct DecorTailSample {
+    hits: Vec<usize>,
+    score: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DecorMultilevelTail {
+    p_tail: f64,
+}
+
+#[inline]
+fn decor_tail_score(
+    stats_abs: &[f64],
+    hits: &[usize],
+    penalty: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+    positive_tail: bool,
+) -> f64 {
+    let (es, _) = calculate_es_decor_prechecked(stats_abs, hits, penalty, n_total, score_type);
+    if positive_tail { es } else { -es }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decor_random_tail_sample(
+    stats_abs: &[f64],
+    penalty: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+    positive_tail: bool,
+    rng: &mut Mt19937Compat,
+) -> DecorTailSample {
+    let mut hits = combination(0, n_total - 1, penalty.len(), rng);
+    hits.sort_unstable();
+    let score = decor_tail_score(
+        stats_abs,
+        &hits,
+        penalty,
+        n_total,
+        score_type,
+        positive_tail,
+    );
+    DecorTailSample { hits, score }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decor_mix_tail_sample(
+    sample: &mut DecorTailSample,
+    bound: f64,
+    stats_abs: &[f64],
+    penalty: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+    positive_tail: bool,
+    rng: &mut Mt19937Compat,
+) {
+    let k = sample.hits.len();
+    if k == 0 || k >= n_total {
+        return;
+    }
+
+    let target_accepts = (k / DECOR_MULTILEVEL_MIX_SCALE).max(1);
+    let max_attempts = target_accepts.saturating_mul(k.max(8)).saturating_mul(16);
+    let mut accepts = 0usize;
+    let mut attempts = 0usize;
+    while accepts < target_accepts && attempts < max_attempts {
+        attempts += 1;
+        let old_slot = uid_wrapper(0, k - 1, rng);
+        let old_value = sample.hits[old_slot];
+        let new_value = uid_wrapper(0, n_total - 1, rng);
+        if new_value != old_value && sample.hits.binary_search(&new_value).is_ok() {
+            continue;
+        }
+
+        let mut candidate = sample.hits.clone();
+        candidate[old_slot] = new_value;
+        candidate.sort_unstable();
+        let score = decor_tail_score(
+            stats_abs,
+            &candidate,
+            penalty,
+            n_total,
+            score_type,
+            positive_tail,
+        );
+        if score >= bound {
+            sample.hits = candidate;
+            sample.score = score;
+            accepts += 1;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_decor_multilevel_tail(
+    stats_abs: &[f64],
+    penalty: &[f64],
+    n_total: usize,
+    observed_es: f64,
+    score_type: ScoreType,
+    sample_size: usize,
+    seed: u64,
+    eps: f64,
+) -> Option<DecorMultilevelTail> {
+    let k = penalty.len();
+    if k == 0 || n_total == 0 {
+        return Some(DecorMultilevelTail { p_tail: 1.0 });
+    }
+    if k >= n_total {
+        return Some(DecorMultilevelTail { p_tail: 1.0 });
+    }
+
+    let target = observed_es.abs();
+    if target <= 0.0 || !target.is_finite() {
+        return Some(DecorMultilevelTail { p_tail: 1.0 });
+    }
+
+    let sample_size = sample_size.max(3);
+    let positive_tail = observed_es >= 0.0;
+    let eps_ln = (eps > 0.0).then(|| eps.ln());
+    let mut rng = Mt19937Compat::new(seed as u32);
+    let mut samples = (0..sample_size)
+        .map(|_| {
+            decor_random_tail_sample(
+                stats_abs,
+                penalty,
+                n_total,
+                score_type,
+                positive_tail,
+                &mut rng,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut adj_log_pval = 0.0_f64;
+    let mut last_bound = f64::NEG_INFINITY;
+    for _ in 0..DECOR_MULTILEVEL_MAX_LEVELS {
+        samples.sort_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let central_score = samples[sample_size / 2].score;
+        if !central_score.is_finite() {
+            return None;
+        }
+
+        if central_score >= target {
+            let numerator = samples
+                .iter()
+                .filter(|sample| sample.score >= target)
+                .count();
+            if numerator == 0 {
+                return None;
+            }
+            adj_log_pval += beta_mean_log(numerator, sample_size);
+            return Some(DecorMultilevelTail {
+                p_tail: adj_log_pval.exp().clamp(0.0, 1.0),
+            });
+        }
+
+        let mut start_from = samples.partition_point(|sample| sample.score < central_score);
+        if start_from == 0 {
+            while start_from < sample_size && samples[start_from].score == samples[0].score {
+                start_from += 1;
+            }
+        }
+        if start_from == 0 || start_from == sample_size {
+            return None;
+        }
+
+        let bound = samples[start_from - 1].score;
+        if bound <= last_bound {
+            return None;
+        }
+        last_bound = bound;
+
+        let high_count = sample_size - start_from;
+        adj_log_pval += beta_mean_log(high_count + 1, sample_size);
+        if let Some(eps_ln) = eps_ln
+            && adj_log_pval < eps_ln
+        {
+            return Some(DecorMultilevelTail {
+                p_tail: adj_log_pval.exp().clamp(0.0, 1.0),
+            });
+        }
+
+        let high_samples = samples[start_from..].to_vec();
+        let high_last = high_samples.len() - 1;
+        samples.clear();
+        samples.reserve(sample_size);
+        for _ in 0..sample_size {
+            let source = uid_wrapper(0, high_last, &mut rng);
+            let mut sample = high_samples[source].clone();
+            decor_mix_tail_sample(
+                &mut sample,
+                bound,
+                stats_abs,
+                penalty,
+                n_total,
+                score_type,
+                positive_tail,
+                &mut rng,
+            );
+            samples.push(sample);
+        }
+    }
+
+    None
+}
+
 pub fn file_sha256(path: &Path) -> Result<String> {
     let mut file =
         File::open(path).with_context(|| format!("Failed to open '{}'", path.display()))?;
@@ -1245,14 +1464,93 @@ pub fn fgsea_decor_simple_with_options<S: IntoSeed>(
     _sample_size: usize,
 ) -> Result<Vec<EnrichmentResult>> {
     let seed = resolve_rng_seed(seed.into_seed());
-    run_decor_simple_internal(
-        ranks, pathways, cache, options, n_perm, seed, min_size, max_size, eps, score_type,
+    run_decor_internal(
+        ranks,
+        pathways,
+        cache,
+        options,
+        n_perm,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
         gsea_param,
+        false,
+        _sample_size,
     )
 }
 
 #[allow(clippy::too_many_arguments)]
-fn run_decor_simple_internal(
+pub fn fgsea_decor_multilevel_with_sample_size<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    cache: &DecorCache,
+    alpha: f64,
+    n_perm_simple: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+) -> Result<Vec<EnrichmentResult>> {
+    let options = DecorOptions {
+        alpha,
+        ..DecorOptions::default()
+    };
+    fgsea_decor_multilevel_with_options(
+        ranks,
+        pathways,
+        cache,
+        &options,
+        n_perm_simple,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        sample_size,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_decor_multilevel_with_options<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    cache: &DecorCache,
+    options: &DecorOptions,
+    n_perm_simple: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+) -> Result<Vec<EnrichmentResult>> {
+    let seed = resolve_rng_seed(seed.into_seed());
+    run_decor_internal(
+        ranks,
+        pathways,
+        cache,
+        options,
+        n_perm_simple,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        true,
+        sample_size,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_decor_internal(
     ranks: &RankedList,
     pathways: &[Pathway],
     cache: &DecorCache,
@@ -1264,6 +1562,8 @@ fn run_decor_simple_internal(
     eps: f64,
     score_type: ScoreType,
     gsea_param: f64,
+    allow_multilevel: bool,
+    sample_size: usize,
 ) -> Result<Vec<EnrichmentResult>> {
     let formula_context = DecorFormulaContext::from_cache(cache, options)?;
     let gene_to_idx = build_gene_index(ranks);
@@ -1272,8 +1572,10 @@ fn run_decor_simple_internal(
     let min_size = min_size.max(1);
     let max_size = max_size.min(n_total.saturating_sub(1));
     let eps = eps.clamp(0.0, 1.0);
+    let sample_size = sample_size.max(3);
     let (_abs_weights, scaled_scores, _ns_total) = ranks.prepare(gsea_param);
     let simple_stats: Vec<f64> = scaled_scores.iter().map(|&v| v as f64).collect();
+    let simple_stats_abs: Vec<f64> = simple_stats.iter().map(|v| v.abs()).collect();
 
     // Observed pathways keep their pathway-specific decor penalties; the
     // permutation calibration below preserves pathway size while drawing rank
@@ -1313,7 +1615,6 @@ fn run_decor_simple_internal(
         .collect();
 
     if n_perm > 0 && !work.is_empty() {
-        let simple_stats_abs: Vec<f64> = simple_stats.iter().map(|v| v.abs()).collect();
         let mut size_groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
         for (idx, w) in work.iter().enumerate() {
             size_groups.entry(w.size).or_default().push(idx);
@@ -1387,7 +1688,10 @@ fn run_decor_simple_internal(
         }
     }
 
-    for w in &mut work {
+    let mut n_more_extreme_vec = vec![0u64; work.len()];
+    let mut mode_fraction_vec = vec![0u64; work.len()];
+
+    for (idx, w) in work.iter_mut().enumerate() {
         let le_zero_mean = if w.n_le_zero > 0 {
             w.le_zero_sum / w.n_le_zero as f64
         } else {
@@ -1408,11 +1712,73 @@ fn run_decor_simple_internal(
             selected_tail_count(score_type, w.es, w.n_le_es as u64, w.n_ge_es as u64);
         let mode_fraction =
             mode_fraction_count(score_type, w.es, w.n_le_zero as u64, w.n_ge_zero as u64);
+        n_more_extreme_vec[idx] = n_more_extreme;
+        mode_fraction_vec[idx] = mode_fraction;
         w.log2err = if w.p_value.is_finite() && mode_fraction > 0 {
             simple_log2err(n_more_extreme, n_perm)
         } else {
             None
         };
+        if allow_multilevel && mode_fraction < 10 {
+            w.p_value = f64::NAN;
+            w.nes = None;
+            w.log2err = None;
+        }
+    }
+
+    if allow_multilevel && n_perm > 0 && !work.is_empty() {
+        let refine_indices = work
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, w)| {
+                (w.p_value.is_finite()
+                    && should_refine_multilevel(
+                        n_more_extreme_vec[idx],
+                        mode_fraction_vec[idx],
+                        n_perm,
+                        sample_size,
+                        w.p_value,
+                    ))
+                .then_some(idx)
+            })
+            .collect::<Vec<_>>();
+
+        let multilevel_results = refine_indices
+            .par_iter()
+            .map(|&idx| {
+                let denom_prob = (mode_fraction_vec[idx] + 1) as f64 / (n_perm + 1) as f64;
+                let eps_tail = eps * denom_prob;
+                let seed = decor_pathway_seed(seed, idx.wrapping_add(1_000_003)) as u64;
+                let estimate = run_decor_multilevel_tail(
+                    &simple_stats_abs,
+                    &work[idx].penalty,
+                    n_total,
+                    work[idx].es,
+                    score_type,
+                    sample_size,
+                    seed,
+                    eps_tail,
+                );
+                (idx, denom_prob, estimate)
+            })
+            .collect::<Vec<_>>();
+
+        for (idx, denom_prob, estimate) in multilevel_results {
+            let Some(estimate) = estimate else {
+                continue;
+            };
+            if denom_prob <= 0.0 || !estimate.p_tail.is_finite() {
+                continue;
+            }
+            let refined = (estimate.p_tail / denom_prob).min(1.0);
+            if refined < eps {
+                work[idx].p_value = eps;
+                work[idx].log2err = None;
+            } else {
+                work[idx].p_value = refined;
+                work[idx].log2err = Some(multilevel_error(refined, sample_size));
+            }
+        }
     }
 
     let mut final_results: Vec<EnrichmentResult> = work

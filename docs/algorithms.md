@@ -42,7 +42,7 @@ For `abs_mean`, the absolute correlation is averaged instead. Gene identifiers a
 
 The decor cache stores derived redundancy scores, not the full pairwise correlation matrix. The transparent TSV cache includes metadata such as GMT SHA256, expression SHA256, correlation method, redundancy method, expression matrix assumptions, and row counts. `alpha` is not part of cache compatibility because it is applied at runtime.
 
-For each pathway, observed decor ES uses each hit gene's own redundancy score. Each simple-mode permutation draws a random gene set of the same size, sorts sampled hit positions by rank, and applies the same ordered redundancy profile from the observed pathway. This keeps the pathway's redundancy burden fixed while testing ranked-position enrichment.
+For each pathway, observed decor ES uses each hit gene's own redundancy score. Each simple-mode permutation draws a random gene set of the same size, sorts sampled hit positions by rank, and applies the same ordered redundancy profile from the observed pathway. This keeps the pathway's redundancy burden fixed while testing ranked-position enrichment. Decor multilevel mode reuses that fixed-profile simple screen, then adaptively refines only pathways where the simple tail estimate is noisier than the decor multilevel estimate.
 
 The base hit weight is always:
 
@@ -67,10 +67,10 @@ For users who want a single high-level knob, `decor-stringency` maps onto this s
 
 Because GSEA hit increments are normalized by total hit weight, a uniform multiplicative penalty across all hits in one pathway cancels out in the observed ES walk. Presets mainly affect ES through relative differences among genes within a pathway. Pathway-wide redundancy burden is handled by the decor permutation calibration rather than by expecting uniform scaling to change observed ES.
 
-Limitations in the first implementation:
+Current limitations:
 
-- only CPU fixed-permutation simple mode is supported
-- multilevel and GPU decor are rejected
+- decor is CPU-only; GPU decor is rejected
+- decor multilevel is a decor-specific adaptive tail estimator rather than an R `fgseaMultilevel` parity target
 - Pearson expression correlation is implemented; Spearman is reserved
 - decor does not perform covariance whitening and does not fully decorrelate expression
 - decor does not implement cameraPR or CorrSEA
