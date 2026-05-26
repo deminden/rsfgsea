@@ -234,6 +234,54 @@ test_that("decor accepts named presets", {
   }
 })
 
+test_that("decor explicit formula matches balanced preset", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  expr_path <- tempfile(fileext = ".tsv")
+  cache_path <- tempfile(fileext = ".decor.tsv")
+  writeLines(
+    c(
+      "gene\ts1\ts2\ts3\ts4",
+      "g1\t1\t2\t3\t4",
+      "g2\t1.1\t2.1\t3.1\t4.1",
+      "g3\t4\t3\t2\t1",
+      "g4\t2\t1\t2\t1"
+    ),
+    expr_path
+  )
+
+  preset <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    method = "decor",
+    mode = "simple",
+    nperm = 50L,
+    seed = 42L,
+    decor.cache = cache_path,
+    decor.expression = expr_path,
+    decor.preset = "balanced"
+  )
+  explicit <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    method = "decor",
+    mode = "simple",
+    nperm = 50L,
+    seed = 42L,
+    decor.cache = cache_path,
+    decor.weight.formula = "threshold-rational",
+    decor.alpha = 60,
+    decor.threshold = 0.04
+  )
+
+  expect_equal(preset$pathway, explicit$pathway)
+  expect_equal(preset$size, explicit$size)
+  expect_equal(preset$es, explicit$es)
+  expect_equal(preset$nes, explicit$nes)
+  expect_equal(preset$pval, explicit$pval)
+  expect_equal(preset$padj, explicit$padj)
+})
+
 test_that("decor accepts stringency ladder", {
   stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
   pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))

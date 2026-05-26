@@ -23,6 +23,12 @@ fgsea(
   decor.expression = NULL,
   decor.preset = "balanced",
   decor.stringency = NULL,
+  decor.weight.formula = NULL,
+  decor.alpha = NULL,
+  decor.threshold = NULL,
+  decor.gamma = NULL,
+  decor.penalty.floor = NULL,
+  decor.scale.epsilon = 1e-12,
   decor.cache.mode = "auto",
   decor.correlation = "pearson",
   decor.redundancy = "positive_mean",
@@ -81,6 +87,22 @@ held-out-validated threshold preset. Other choices are \code{"sensitive"},
 \item{decor.stringency}{Optional numeric 0-100 convenience control. When set,
 it autoswitches between the calibrated decor presets instead of exposing
 formula-level controls.}
+
+\item{decor.weight.formula}{Optional explicit decor hit-weight formula,
+currently one of \code{"raw-rational"}, \code{"exp-scaled"}, or
+\code{"threshold-rational"}.}
+
+\item{decor.alpha}{Optional explicit decor redundancy penalty strength.}
+
+\item{decor.threshold}{Optional explicit decor threshold tau for
+threshold-rational weights.}
+
+\item{decor.gamma}{Optional explicit gamma parameter for formula families
+that use it.}
+
+\item{decor.penalty.floor}{Optional explicit lower bound on decor penalties.}
+
+\item{decor.scale.epsilon}{Small positive epsilon for scaled decor formulas.}
 
 \item{decor.cache.mode}{One of \code{"auto"}, \code{"reuse"}, \code{"rebuild"}.}
 

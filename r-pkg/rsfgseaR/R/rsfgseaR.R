@@ -55,6 +55,30 @@ NULL
   }
 }
 
+.validate_nonnegative_scalar <- function(value, name, allow_null = FALSE) {
+  if (is.null(value)) {
+    if (allow_null) {
+      return(invisible(NULL))
+    }
+    stop(name, " must not be NULL.", call. = FALSE)
+  }
+  if (length(value) != 1L || !is.numeric(value) || !is.finite(value) || value < 0) {
+    stop(name, " must be a single finite numeric value >= 0.", call. = FALSE)
+  }
+}
+
+.validate_unit_interval_floor <- function(value, name, allow_null = FALSE) {
+  if (is.null(value)) {
+    if (allow_null) {
+      return(invisible(NULL))
+    }
+    stop(name, " must not be NULL.", call. = FALSE)
+  }
+  if (length(value) != 1L || !is.numeric(value) || !is.finite(value) || value < 0 || value >= 1) {
+    stop(name, " must be a single finite numeric value >= 0 and < 1.", call. = FALSE)
+  }
+}
+
 .validate_choice <- function(value, name, choices) {
   if (!is.character(value) || length(value) != 1L || !(tolower(value) %in% choices)) {
     stop(name, " must be one of: ", paste(choices, collapse = ", "), ".", call. = FALSE)
@@ -478,6 +502,16 @@ plotGseaTable <- function(
 #' @param decor.stringency Optional numeric 0-100 convenience control. When set,
 #'   it autoswitches between the calibrated decor presets instead of exposing
 #'   formula-level controls.
+#' @param decor.weight.formula Optional explicit decor hit-weight formula,
+#'   currently one of `"raw-rational"`, `"exp-scaled"`, or
+#'   `"threshold-rational"`.
+#' @param decor.alpha Optional explicit decor redundancy penalty strength.
+#' @param decor.threshold Optional explicit decor threshold tau for
+#'   threshold-rational weights.
+#' @param decor.gamma Optional explicit gamma parameter for formula families
+#'   that use it.
+#' @param decor.penalty.floor Optional explicit lower bound on decor penalties.
+#' @param decor.scale.epsilon Small positive epsilon for scaled decor formulas.
 #' @param decor.cache.mode One of `"auto"`, `"reuse"`, `"rebuild"`.
 #' @param decor.correlation Correlation method for decor cache building. Only
 #'   `"pearson"` is currently implemented.
@@ -519,6 +553,12 @@ fgsea <- function(
   decor.expression = NULL,
   decor.preset = "balanced",
   decor.stringency = NULL,
+  decor.weight.formula = NULL,
+  decor.alpha = NULL,
+  decor.threshold = NULL,
+  decor.gamma = NULL,
+  decor.penalty.floor = NULL,
+  decor.scale.epsilon = 1e-12,
   decor.cache.mode = "auto",
   decor.correlation = "pearson",
   decor.redundancy = "positive_mean",
@@ -564,6 +604,14 @@ fgsea <- function(
   .validate_choice(decor.cache.mode, "decor.cache.mode", c("auto", "reuse", "rebuild"))
   .validate_choice(decor.correlation, "decor.correlation", c("pearson", "spearman"))
   .validate_choice(decor.redundancy, "decor.redundancy", c("positive_mean", "abs_mean"))
+  if (!is.null(decor.weight.formula)) {
+    .validate_choice(decor.weight.formula, "decor.weight.formula", c("raw-rational", "exp-scaled", "threshold-rational"))
+  }
+  .validate_nonnegative_scalar(decor.alpha, "decor.alpha", allow_null = TRUE)
+  .validate_unit_interval_floor(decor.threshold, "decor.threshold", allow_null = TRUE)
+  .validate_nonnegative_scalar(decor.gamma, "decor.gamma", allow_null = TRUE)
+  .validate_unit_interval_floor(decor.penalty.floor, "decor.penalty.floor", allow_null = TRUE)
+  .validate_positive_scalar(decor.scale.epsilon, "decor.scale.epsilon")
   if (!is.null(decor.cache) && (!is.character(decor.cache) || length(decor.cache) != 1L || identical(decor.cache, ""))) {
     stop("decor.cache must be NULL or a single file path.", call. = FALSE)
   }
@@ -626,6 +674,21 @@ fgsea <- function(
   } else {
     .resolve_decor_stringency(decor.stringency)
   }
+  if (!is.null(decor.weight.formula)) {
+    decor.resolved$weight.formula <- decor.weight.formula
+  }
+  if (!is.null(decor.alpha)) {
+    decor.resolved$alpha <- decor.alpha
+  }
+  if (!is.null(decor.threshold)) {
+    decor.resolved$threshold <- decor.threshold
+  }
+  if (!is.null(decor.gamma)) {
+    decor.resolved$gamma <- decor.gamma
+  }
+  if (!is.null(decor.penalty.floor)) {
+    decor.resolved$penalty.floor <- decor.penalty.floor
+  }
 
   pathways_info <- .normalize_pathways(pathways)
   if (pathways_info$cleanup) {
@@ -660,7 +723,7 @@ fgsea <- function(
     as.numeric(decor.resolved$threshold),
     as.numeric(decor.resolved$gamma),
     as.numeric(decor.resolved$penalty.floor),
-    1e-12,
+    as.numeric(decor.scale.epsilon),
     as.integer(blitz.anchors),
     isTRUE(blitz.symmetric),
     isTRUE(blitz.center),

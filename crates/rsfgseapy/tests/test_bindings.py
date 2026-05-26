@@ -157,6 +157,85 @@ def test_decor_accepts_named_presets(tmp_path: Path) -> None:
         assert len(results) == 2
 
 
+def test_decor_explicit_formula_matches_balanced_preset(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    expression_path = write_expression(tmp_path)
+    cache_path = tmp_path / "decor-cache.tsv"
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    preset = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        method="decor",
+        mode="simple",
+        nperm=50,
+        seed=42,
+        decor_cache=str(cache_path),
+        decor_expression=str(expression_path),
+        decor_preset="balanced",
+    )
+    explicit = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        method="decor",
+        mode="simple",
+        nperm=50,
+        seed=42,
+        decor_cache=str(cache_path),
+        decor_weight_formula="threshold-rational",
+        decor_alpha=60.0,
+        decor_threshold=0.04,
+    )
+
+    assert len(preset) == len(explicit)
+    for lhs, rhs in zip(preset, explicit):
+        assert lhs["pathway"] == rhs["pathway"]
+        assert lhs["size"] == rhs["size"]
+        assert lhs["es"] == pytest.approx(rhs["es"])
+        assert lhs["nes"] == pytest.approx(rhs["nes"])
+        assert lhs["pval"] == pytest.approx(rhs["pval"])
+        assert lhs["padj"] == pytest.approx(rhs["padj"])
+
+
+def test_decor_multilevel_and_wrapper_without_nperm_run(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    expression_path = write_expression(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    explicit_cache = tmp_path / "decor-cache-explicit.tsv"
+    explicit = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        method="decor",
+        mode="multilevel",
+        nPermSimple=50,
+        sampleSize=11,
+        seed=42,
+        decor_cache=str(explicit_cache),
+        decor_expression=str(expression_path),
+        decor_preset="balanced",
+    )
+
+    wrapper_cache = tmp_path / "decor-cache-wrapper.tsv"
+    wrapper = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        method="decor",
+        mode="fgsea",
+        nperm=None,
+        nPermSimple=50,
+        sampleSize=11,
+        seed=42,
+        decor_cache=str(wrapper_cache),
+        decor_expression=str(expression_path),
+    )
+
+    assert len(explicit) == 2
+    assert len(wrapper) == 2
+    assert {row["pathway"] for row in explicit} == {"PW_A", "PW_B"}
+    assert all({"pval", "padj", "es", "nes", "log2err"} <= row.keys() for row in explicit)
+
+
 def test_decor_accepts_stringency_ladder(tmp_path: Path) -> None:
     gmt_path = write_gmt(tmp_path)
     expression_path = write_expression(tmp_path)

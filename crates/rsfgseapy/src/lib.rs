@@ -63,6 +63,10 @@ fn parse_decor_redundancy(redundancy: &str) -> PyResult<DecorRedundancy> {
     }
 }
 
+fn parse_decor_weight_formula(formula: &str) -> PyResult<DecorWeightFormula> {
+    DecorWeightFormula::from_str(formula).map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
 fn parse_decor_preset(preset: &str) -> PyResult<DecorPreset> {
     DecorPreset::from_str(preset).map_err(pyo3::exceptions::PyValueError::new_err)
 }
@@ -89,10 +93,63 @@ fn apply_decor_release_tuning(
     Ok(())
 }
 
+fn apply_decor_formula_overrides(
+    options: &mut DecorOptions,
+    decor_weight_formula: Option<&str>,
+    decor_alpha: Option<f64>,
+    decor_threshold: Option<f64>,
+    decor_gamma: Option<f64>,
+    decor_penalty_floor: Option<f64>,
+    decor_scale_epsilon: f64,
+) -> PyResult<()> {
+    if let Some(formula) = decor_weight_formula {
+        options.weight_formula = parse_decor_weight_formula(formula)?;
+    }
+    if let Some(alpha) = decor_alpha {
+        if alpha < 0.0 || !alpha.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "decor_alpha must be a finite numeric value >= 0.",
+            ));
+        }
+        options.alpha = alpha;
+    }
+    if let Some(threshold) = decor_threshold {
+        if !(0.0..1.0).contains(&threshold) || !threshold.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "decor_threshold must be a finite numeric value >= 0 and < 1.",
+            ));
+        }
+        options.threshold_tau = threshold;
+    }
+    if let Some(gamma) = decor_gamma {
+        if gamma < 0.0 || !gamma.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "decor_gamma must be a finite numeric value >= 0.",
+            ));
+        }
+        options.gamma = gamma;
+    }
+    if let Some(penalty_floor) = decor_penalty_floor {
+        if !(0.0..1.0).contains(&penalty_floor) || !penalty_floor.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "decor_penalty_floor must be a finite numeric value >= 0 and < 1.",
+            ));
+        }
+        options.penalty_floor = penalty_floor;
+    }
+    if decor_scale_epsilon <= 0.0 || !decor_scale_epsilon.is_finite() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "decor_scale_epsilon must be a finite numeric value > 0.",
+        ));
+    }
+    options.scale_epsilon = decor_scale_epsilon;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=None, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false, method="classic", decor_cache=None, decor_expression=None, decor_preset=None, decor_stringency=None, decor_cache_mode="auto", decor_correlation="pearson", decor_redundancy="positive_mean", blitz_anchors=40, blitz_symmetric=false, blitz_center=true, blitz_accuracy=40, blitz_deep_accuracy=50, blitz_signature_cache=true))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=None, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false, method="classic", decor_cache=None, decor_expression=None, decor_preset=None, decor_stringency=None, decor_weight_formula=None, decor_alpha=None, decor_threshold=None, decor_gamma=None, decor_penalty_floor=None, decor_scale_epsilon=1e-12, decor_cache_mode="auto", decor_correlation="pearson", decor_redundancy="positive_mean", blitz_anchors=40, blitz_symmetric=false, blitz_center=true, blitz_accuracy=40, blitz_deep_accuracy=50, blitz_signature_cache=true))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
@@ -114,6 +171,12 @@ fn run_gsea_py(
     decor_expression: Option<String>,
     decor_preset: Option<&str>,
     decor_stringency: Option<f64>,
+    decor_weight_formula: Option<&str>,
+    decor_alpha: Option<f64>,
+    decor_threshold: Option<f64>,
+    decor_gamma: Option<f64>,
+    decor_penalty_floor: Option<f64>,
+    decor_scale_epsilon: f64,
     decor_cache_mode: &str,
     decor_correlation: &str,
     decor_redundancy: &str,
@@ -204,6 +267,15 @@ fn run_gsea_py(
         })?;
         let mut options = DecorOptions::default();
         apply_decor_release_tuning(&mut options, decor_preset, decor_stringency)?;
+        apply_decor_formula_overrides(
+            &mut options,
+            decor_weight_formula,
+            decor_alpha,
+            decor_threshold,
+            decor_gamma,
+            decor_penalty_floor,
+            decor_scale_epsilon,
+        )?;
         options.cache_path = Some(PathBuf::from(cache_path));
         options.expression_path = decor_expression.map(PathBuf::from);
         options.cache_mode = parse_decor_cache_mode(decor_cache_mode)?;
