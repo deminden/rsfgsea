@@ -439,6 +439,43 @@ fn decor_pathway_seed(seed: u64, pathway_idx: usize) -> u32 {
     if mixed == 0 { 1 } else { mixed }
 }
 
+fn sanitize_positive_threshold(value: f64, fallback: f64) -> f64 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        fallback
+    }
+}
+
+fn median_f64(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        Some((values[mid - 1] + values[mid]) / 2.0)
+    } else {
+        Some(values[mid])
+    }
+}
+
+fn sample_sd(values: &[f64]) -> Option<f64> {
+    if values.len() < 2 {
+        return None;
+    }
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let var = values
+        .iter()
+        .map(|value| {
+            let delta = value - mean;
+            delta * delta
+        })
+        .sum::<f64>()
+        / (values.len() - 1) as f64;
+    Some(var.sqrt())
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct DecorNullCounts {
     n_le_es: usize,
@@ -474,6 +511,46 @@ struct DecorWorking {
     p_value: f64,
     padj: Option<f64>,
     log2err: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DecorTailReliabilityOptions {
+    pub pvalue_threshold: f64,
+    pub log2err_threshold: f64,
+    pub first_sample_size: usize,
+    pub first_seeds: usize,
+    pub final_sample_size: usize,
+    pub final_seeds: usize,
+    pub max_log10_range: f64,
+}
+
+impl DecorTailReliabilityOptions {
+    pub fn adaptive_default() -> Self {
+        Self {
+            pvalue_threshold: 1e-4,
+            log2err_threshold: 0.75,
+            first_sample_size: 401,
+            first_seeds: 3,
+            final_sample_size: 801,
+            final_seeds: 5,
+            max_log10_range: 0.25,
+        }
+    }
+
+    fn normalized(self, base_sample_size: usize) -> Self {
+        let base_sample_size = base_sample_size.max(3);
+        let first_sample_size = self.first_sample_size.max(base_sample_size).max(3);
+        let final_sample_size = self.final_sample_size.max(first_sample_size).max(3);
+        Self {
+            pvalue_threshold: sanitize_positive_threshold(self.pvalue_threshold, 1e-4),
+            log2err_threshold: sanitize_positive_threshold(self.log2err_threshold, 0.75),
+            first_sample_size,
+            first_seeds: self.first_seeds.max(1),
+            final_sample_size,
+            final_seeds: self.final_seeds.max(self.first_seeds).max(1),
+            max_log10_range: sanitize_positive_threshold(self.max_log10_range, 0.25),
+        }
+    }
 }
 
 struct DecorRuntimeSizeGroup {
@@ -653,6 +730,12 @@ struct DecorTailSample {
 #[derive(Clone, Copy, Debug)]
 struct DecorMultilevelTail {
     p_tail: f64,
+}
+
+#[derive(Clone, Debug)]
+struct DecorAdaptiveTailResult {
+    p_value: f64,
+    log2err: Option<f64>,
 }
 
 #[inline]
@@ -855,6 +938,136 @@ fn run_decor_multilevel_tail(
     }
 
     None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decor_tail_replicates(
+    stats_abs: &[f64],
+    penalty: &[f64],
+    n_total: usize,
+    observed_es: f64,
+    score_type: ScoreType,
+    sample_size: usize,
+    base_seed: u64,
+    work_idx: usize,
+    tier_salt: usize,
+    n_seeds: usize,
+    denom_prob: f64,
+    eps_tail: f64,
+) -> Vec<f64> {
+    (0..n_seeds)
+        .filter_map(|rep| {
+            let seed = decor_pathway_seed(
+                base_seed,
+                work_idx
+                    .wrapping_add(tier_salt)
+                    .wrapping_add(rep.wrapping_mul(131_071)),
+            ) as u64;
+            let estimate = run_decor_multilevel_tail(
+                stats_abs,
+                penalty,
+                n_total,
+                observed_es,
+                score_type,
+                sample_size,
+                seed,
+                eps_tail,
+            )?;
+            if denom_prob <= 0.0 || !estimate.p_tail.is_finite() {
+                return None;
+            }
+            let refined = (estimate.p_tail / denom_prob).min(1.0);
+            (refined.is_finite() && refined > 0.0).then_some(refined)
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn summarize_adaptive_tail_values(
+    mut values: Vec<f64>,
+    sample_size: usize,
+    eps: f64,
+) -> Option<(DecorAdaptiveTailResult, f64)> {
+    values.retain(|value| value.is_finite() && *value > 0.0);
+    let mut median_values = values.clone();
+    let median = median_f64(&mut median_values)?;
+    let p_value = median.max(eps).min(1.0);
+    let neglog_values = values
+        .iter()
+        .map(|value| -value.log10())
+        .collect::<Vec<_>>();
+    let range_log10 = neglog_values
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max)
+        - neglog_values.iter().copied().fold(f64::INFINITY, f64::min);
+    let log2_values = values.iter().map(|value| value.log2()).collect::<Vec<_>>();
+    let empirical_log2err = sample_sd(&log2_values);
+    let model_log2err = (p_value > eps).then_some(multilevel_error(p_value, sample_size));
+    let log2err = match (model_log2err, empirical_log2err) {
+        (Some(model), Some(empirical)) => Some(model.max(empirical)),
+        (Some(model), None) => Some(model),
+        (None, Some(empirical)) => Some(empirical),
+        (None, None) => None,
+    };
+    Some((DecorAdaptiveTailResult { p_value, log2err }, range_log10))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_decor_adaptive_tail(
+    stats_abs: &[f64],
+    work: &DecorWorking,
+    n_total: usize,
+    score_type: ScoreType,
+    base_seed: u64,
+    work_idx: usize,
+    denom_prob: f64,
+    eps: f64,
+    options: DecorTailReliabilityOptions,
+) -> Option<DecorAdaptiveTailResult> {
+    if denom_prob <= 0.0 || !work.p_value.is_finite() {
+        return None;
+    }
+    let eps_tail = eps * denom_prob;
+    let first_values = decor_tail_replicates(
+        stats_abs,
+        &work.penalty,
+        n_total,
+        work.es,
+        score_type,
+        options.first_sample_size,
+        base_seed,
+        work_idx,
+        2_000_003,
+        options.first_seeds,
+        denom_prob,
+        eps_tail,
+    );
+    let (first_result, first_range) =
+        summarize_adaptive_tail_values(first_values, options.first_sample_size, eps)?;
+    if first_range <= options.max_log10_range
+        || options.final_sample_size == options.first_sample_size
+    {
+        return Some(first_result);
+    }
+
+    let final_values = decor_tail_replicates(
+        stats_abs,
+        &work.penalty,
+        n_total,
+        work.es,
+        score_type,
+        options.final_sample_size,
+        base_seed,
+        work_idx,
+        3_000_003,
+        options.final_seeds,
+        denom_prob,
+        eps_tail,
+    );
+    summarize_adaptive_tail_values(final_values, options.final_sample_size, eps)
+        .map(|(result, _range)| result)
+        .or(Some(first_result))
 }
 
 pub fn file_sha256(path: &Path) -> Result<String> {
@@ -1478,6 +1691,7 @@ pub fn fgsea_decor_simple_with_options<S: IntoSeed>(
         gsea_param,
         false,
         _sample_size,
+        None,
     )
 }
 
@@ -1546,6 +1760,42 @@ pub fn fgsea_decor_multilevel_with_options<S: IntoSeed>(
         gsea_param,
         true,
         sample_size,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_decor_multilevel_adaptive_with_options<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    cache: &DecorCache,
+    options: &DecorOptions,
+    n_perm_simple: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+    tail_reliability: DecorTailReliabilityOptions,
+) -> Result<Vec<EnrichmentResult>> {
+    let seed = resolve_rng_seed(seed.into_seed());
+    run_decor_internal(
+        ranks,
+        pathways,
+        cache,
+        options,
+        n_perm_simple,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        true,
+        sample_size,
+        Some(tail_reliability),
     )
 }
 
@@ -1564,6 +1814,7 @@ fn run_decor_internal(
     gsea_param: f64,
     allow_multilevel: bool,
     sample_size: usize,
+    tail_reliability: Option<DecorTailReliabilityOptions>,
 ) -> Result<Vec<EnrichmentResult>> {
     let formula_context = DecorFormulaContext::from_cache(cache, options)?;
     let gene_to_idx = build_gene_index(ranks);
@@ -1777,6 +2028,51 @@ fn run_decor_internal(
             } else {
                 work[idx].p_value = refined;
                 work[idx].log2err = Some(multilevel_error(refined, sample_size));
+            }
+        }
+
+        if let Some(options) = tail_reliability {
+            let options = options.normalized(sample_size);
+            let error_trigger_pvalue_window = (options.pvalue_threshold * 10.0).clamp(1e-3, 1.0);
+            let adaptive_indices = work
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, w)| {
+                    let triggered_by_p = w.p_value.is_finite()
+                        && w.p_value > 0.0
+                        && w.p_value <= options.pvalue_threshold;
+                    let triggered_by_err = w.p_value.is_finite()
+                        && w.p_value > 0.0
+                        && w.p_value <= error_trigger_pvalue_window
+                        && w.log2err
+                            .is_some_and(|log2err| log2err >= options.log2err_threshold);
+                    (mode_fraction_vec[idx] >= 10 && (triggered_by_p || triggered_by_err))
+                        .then_some(idx)
+                })
+                .collect::<Vec<_>>();
+
+            let adaptive_results = adaptive_indices
+                .par_iter()
+                .filter_map(|&idx| {
+                    let denom_prob = (mode_fraction_vec[idx] + 1) as f64 / (n_perm + 1) as f64;
+                    run_decor_adaptive_tail(
+                        &simple_stats_abs,
+                        &work[idx],
+                        n_total,
+                        score_type,
+                        seed,
+                        idx,
+                        denom_prob,
+                        eps,
+                        options,
+                    )
+                    .map(|result| (idx, result))
+                })
+                .collect::<Vec<_>>();
+
+            for (idx, result) in adaptive_results {
+                work[idx].p_value = result.p_value;
+                work[idx].log2err = result.log2err;
             }
         }
     }

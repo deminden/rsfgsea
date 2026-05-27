@@ -140,6 +140,7 @@ Decor options:
 - `--decor-cache-mode`: `auto`, `reuse`, or `rebuild`
 - `--decor-expression-format`: `auto` or `tsv`; CSV is parsed as an option but not implemented yet
 - `--decor-expression-has-header`: `true` or `false`, default `true`
+- `--decor-tail-reliability adaptive`: experimental opt-in reliability pass for decor multilevel lower-tail results
 
 Decor presets:
 
@@ -151,6 +152,13 @@ Decor presets:
 Stringency is a preset ladder, not a continuous formula interpolation: `0 <= x < 35` resolves to `sensitive`, `35 <= x < 65` to `balanced`, `65 <= x < 85` to `specific`, and `85 <= x <= 100` to `strict`.
 
 The CLI prints the resolved preset, formula, and parameters for reproducibility.
+
+Decor multilevel lower-tail caveat:
+
+- `log2err` should be inspected for very small decor multilevel p-values, especially when conclusions depend on the exact ordering of the strongest pathways.
+- Very broad GO terms can be expensive to refine because decor multilevel samples pathway-specific penalized hit profiles rather than the size-only classic fgsea null.
+- `--decor-tail-reliability adaptive` can be used as an explicit final-analysis check for low-tail decor results, but it is not the default because a small number of large triggered pathways can dominate runtime.
+- For broad ontology collections, consider whether very large terms are scientifically useful before increasing `sampleSize` or enabling adaptive reliability for final runs.
 
 Blitz options:
 

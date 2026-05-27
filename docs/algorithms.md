@@ -44,6 +44,10 @@ The decor cache stores derived redundancy scores, not the full pairwise correlat
 
 For each pathway, observed decor ES uses each hit gene's own redundancy score. Each simple-mode permutation draws a random gene set of the same size, sorts sampled hit positions by rank, and applies the same ordered redundancy profile from the observed pathway. This keeps the pathway's redundancy burden fixed while testing ranked-position enrichment. Decor multilevel mode reuses that fixed-profile simple screen, then adaptively refines only pathways where the simple tail estimate is noisier than the decor multilevel estimate.
 
+Decor multilevel is therefore pathway-specific in a way that classic fgsea multilevel is not. Classic multilevel groups pathways by size and samples an unweighted size-`k` null. Decor multilevel must sample random size-`k` hit profiles and score them with the pathway's fixed decor penalty vector. This is useful for preserving the decor null definition, but very broad, highly redundant GO terms can make lower-tail refinement slower and more variable than classic size-only refinement.
+
+For final low-tail decor analyses, inspect `log2err`. If exact ranking among very small p-values matters, use a targeted reliability rerun such as CLI `--decor-tail-reliability adaptive` or a larger `sampleSize`/`nPermSimple` on the relevant subset. Do not interpret decor multilevel as fully calibrated for every biological null; it remains an empirical/statistical tail estimate whose behavior should be checked for the data type and pathway collection.
+
 The base hit weight is always:
 
 ```text

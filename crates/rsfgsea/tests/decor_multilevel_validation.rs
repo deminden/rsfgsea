@@ -464,3 +464,47 @@ g8\t0\t1\t0\t1\n",
     assert!(!content.contains("NaN"));
     assert!(!content.to_ascii_lowercase().contains("inf"));
 }
+
+#[test]
+fn decor_adaptive_tail_reliability_runs_on_tiny_fixture() {
+    let (ranks, gmt, expression) = fixture_paths();
+    let dir = tempdir().unwrap();
+    let cache = dir.path().join("decor-cache.tsv");
+    let output = dir.path().join("adaptive.tsv");
+
+    cli_bin()
+        .args([
+            "--method",
+            "decor",
+            "--mode",
+            "multilevel",
+            "--nPermSimple",
+            "128",
+            "--sampleSize",
+            "11",
+            "--decor-tail-reliability",
+            "adaptive",
+            "--seed",
+            "42",
+            "--ranks",
+            ranks,
+            "--gmt",
+            gmt,
+            "--output",
+            output.to_str().unwrap(),
+            "--decor-cache",
+            cache.to_str().unwrap(),
+            "--decor-expression",
+            expression,
+            "--minSize",
+            "1",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("Decor tail reliability=adaptive"));
+
+    let content = fs::read_to_string(output).unwrap();
+    assert!(content.contains("pathway\tsize\tes\tnes\tpval\tpadj\tlog2err\tleading_edge"));
+    assert!(!content.contains("NaN"));
+    assert!(!content.to_ascii_lowercase().contains("inf"));
+}

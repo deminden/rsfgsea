@@ -55,6 +55,64 @@ struct Args {
     )]
     sample_size: usize,
 
+    /// Decor lower-tail reliability mode for multilevel runs
+    #[arg(
+        long = "decor-tail-reliability",
+        value_enum,
+        default_value_t = DecorTailReliabilityArg::Off
+    )]
+    decor_tail_reliability: DecorTailReliabilityArg,
+
+    /// Adaptive decor tail trigger p-value threshold
+    #[arg(
+        long = "decor-tail-pvalue-threshold",
+        default_value_t = 1e-4,
+        hide = true
+    )]
+    decor_tail_pvalue_threshold: f64,
+
+    /// Adaptive decor tail trigger log2err threshold
+    #[arg(
+        long = "decor-tail-log2err-threshold",
+        default_value_t = 0.75,
+        hide = true
+    )]
+    decor_tail_log2err_threshold: f64,
+
+    /// First adaptive decor tail sample size
+    #[arg(
+        long = "decor-tail-first-sampleSize",
+        visible_alias = "decor-tail-first-sample-size",
+        default_value_t = 401,
+        hide = true
+    )]
+    decor_tail_first_sample_size: usize,
+
+    /// First adaptive decor tail seed count
+    #[arg(long = "decor-tail-first-seeds", default_value_t = 3, hide = true)]
+    decor_tail_first_seeds: usize,
+
+    /// Final adaptive decor tail sample size for unstable first-tier estimates
+    #[arg(
+        long = "decor-tail-final-sampleSize",
+        visible_alias = "decor-tail-final-sample-size",
+        default_value_t = 801,
+        hide = true
+    )]
+    decor_tail_final_sample_size: usize,
+
+    /// Final adaptive decor tail seed count for unstable first-tier estimates
+    #[arg(long = "decor-tail-final-seeds", default_value_t = 5, hide = true)]
+    decor_tail_final_seeds: usize,
+
+    /// Escalate adaptive decor tail estimates when first-tier -log10(p) range exceeds this value
+    #[arg(
+        long = "decor-tail-max-log10-range",
+        default_value_t = 0.25,
+        hide = true
+    )]
+    decor_tail_max_log10_range: f64,
+
     /// Score type (std, pos, neg)
     #[arg(
         long = "scoreType",
@@ -187,6 +245,12 @@ enum CliMode {
 enum MethodArg {
     Classic,
     Decor,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorTailReliabilityArg {
+    Off,
+    Adaptive,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -330,6 +394,26 @@ fn main() -> Result<()> {
     if args.sample_size == 0 {
         bail!("--sampleSize must be greater than 0.");
     }
+    if args.decor_tail_reliability == DecorTailReliabilityArg::Adaptive {
+        if args.decor_tail_pvalue_threshold <= 0.0 || !args.decor_tail_pvalue_threshold.is_finite()
+        {
+            bail!("--decor-tail-pvalue-threshold must be finite and > 0.");
+        }
+        if args.decor_tail_log2err_threshold <= 0.0
+            || !args.decor_tail_log2err_threshold.is_finite()
+        {
+            bail!("--decor-tail-log2err-threshold must be finite and > 0.");
+        }
+        if args.decor_tail_first_sample_size == 0 || args.decor_tail_final_sample_size == 0 {
+            bail!("adaptive decor tail sample sizes must be greater than 0.");
+        }
+        if args.decor_tail_first_seeds == 0 || args.decor_tail_final_seeds == 0 {
+            bail!("adaptive decor tail seed counts must be greater than 0.");
+        }
+        if args.decor_tail_max_log10_range <= 0.0 || !args.decor_tail_max_log10_range.is_finite() {
+            bail!("--decor-tail-max-log10-range must be finite and > 0.");
+        }
+    }
     if args.min_size.is_some_and(|min_size| min_size == 0) {
         bail!("--minSize must be greater than 0.");
     }
@@ -371,6 +455,11 @@ fn main() -> Result<()> {
     }
     if args.method == MethodArg::Decor && args.gpu {
         bail!("decor supports CPU execution only; --gpu is not supported with --method decor.");
+    }
+    if args.method != MethodArg::Decor
+        && args.decor_tail_reliability == DecorTailReliabilityArg::Adaptive
+    {
+        bail!("--decor-tail-reliability applies only to --method decor.");
     }
     if args.mode == CliMode::Blitz {
         if args.gpu {
@@ -519,20 +608,57 @@ fn main() -> Result<()> {
         let decor_multilevel = args.mode == CliMode::Multilevel
             || (args.mode == CliMode::Fgsea && args.nperm.is_none());
         if decor_multilevel {
-            fgsea_decor_multilevel_with_options(
-                &ranks,
-                &pd.pathways,
-                &cache,
-                &options,
-                args.n_perm_simple,
-                Some(seed),
-                min_size,
-                max_size,
-                args.eps,
-                score_type,
-                args.gsea_param,
-                args.sample_size,
-            )?
+            if args.decor_tail_reliability == DecorTailReliabilityArg::Adaptive {
+                let tail_reliability = DecorTailReliabilityOptions {
+                    pvalue_threshold: args.decor_tail_pvalue_threshold,
+                    log2err_threshold: args.decor_tail_log2err_threshold,
+                    first_sample_size: args.decor_tail_first_sample_size,
+                    first_seeds: args.decor_tail_first_seeds,
+                    final_sample_size: args.decor_tail_final_sample_size,
+                    final_seeds: args.decor_tail_final_seeds,
+                    max_log10_range: args.decor_tail_max_log10_range,
+                };
+                println!(
+                    "Decor tail reliability=adaptive: p<={}, log2err>={}, first sampleSize={} seeds={}, final sampleSize={} seeds={}, max -log10(p) range={}",
+                    tail_reliability.pvalue_threshold,
+                    tail_reliability.log2err_threshold,
+                    tail_reliability.first_sample_size,
+                    tail_reliability.first_seeds,
+                    tail_reliability.final_sample_size,
+                    tail_reliability.final_seeds,
+                    tail_reliability.max_log10_range
+                );
+                fgsea_decor_multilevel_adaptive_with_options(
+                    &ranks,
+                    &pd.pathways,
+                    &cache,
+                    &options,
+                    args.n_perm_simple,
+                    Some(seed),
+                    min_size,
+                    max_size,
+                    args.eps,
+                    score_type,
+                    args.gsea_param,
+                    args.sample_size,
+                    tail_reliability,
+                )?
+            } else {
+                fgsea_decor_multilevel_with_options(
+                    &ranks,
+                    &pd.pathways,
+                    &cache,
+                    &options,
+                    args.n_perm_simple,
+                    Some(seed),
+                    min_size,
+                    max_size,
+                    args.eps,
+                    score_type,
+                    args.gsea_param,
+                    args.sample_size,
+                )?
+            }
         } else {
             fgsea_decor_simple_with_options(
                 &ranks,
@@ -715,6 +841,14 @@ mod tests {
             max_size: None,
             eps: 1e-50,
             sample_size: 101,
+            decor_tail_reliability: DecorTailReliabilityArg::Off,
+            decor_tail_pvalue_threshold: 1e-4,
+            decor_tail_log2err_threshold: 0.75,
+            decor_tail_first_sample_size: 401,
+            decor_tail_first_seeds: 3,
+            decor_tail_final_sample_size: 801,
+            decor_tail_final_seeds: 5,
+            decor_tail_max_log10_range: 0.25,
             score_type: ScoreTypeArg::Std,
             gsea_param: 1.0,
             mode: CliMode::Fgsea,
