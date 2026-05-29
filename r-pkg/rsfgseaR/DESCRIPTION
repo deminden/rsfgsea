@@ -13,7 +13,7 @@ Description: Provides an R interface to 'rsfgsea', a high-performance Rust
     shape.
 License: MIT + file LICENSE
 Encoding: UTF-8
-SystemRequirements: Cargo (Rust's package manager), rustc
+SystemRequirements: Cargo (Rust's package manager), rustc (>= 1.96.0)
 URL: https://github.com/deminden/rsfgsea
 BugReports: https://github.com/deminden/rsfgsea/issues
 Roxygen: list(markdown = TRUE)

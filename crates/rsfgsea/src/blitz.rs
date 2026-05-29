@@ -1,5 +1,6 @@
 use crate::core::{BlitzOptions, EnrichmentResult, Pathway, RankedList};
 use anyhow::{Result, bail};
+use core::range::Range;
 use rayon::prelude::*;
 use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
@@ -2505,9 +2506,13 @@ fn lowess(y: &[f64], x: &[f64], frac: f64) -> Vec<f64> {
                 right_end += 1;
             }
             let radius = (xval - x[left_end]).max(x[right_end - 1] - xval);
+            let window = Range {
+                start: left_end,
+                end: right_end,
+            };
 
             let mut nonzero_weights = 0usize;
-            for j in left_end..right_end {
+            for j in window {
                 let dist = ((x[j] - xval).abs() / radius).clamp(0.0, 1.0);
                 let dist3 = dist * dist * dist;
                 let tricube = 1.0 - dist3;
@@ -2517,24 +2522,24 @@ fn lowess(y: &[f64], x: &[f64], frac: f64) -> Vec<f64> {
                     nonzero_weights += 1;
                 }
             }
-            let sum_weights = numpy_pairwise_sum_f64(&weights[left_end..right_end]);
+            let sum_weights = numpy_pairwise_sum_f64(&weights[window]);
 
             if nonzero_weights < 2 || sum_weights <= 0.0 {
                 fitted[i] = y[i];
                 continue;
             }
 
-            for weight in &mut weights[left_end..right_end] {
+            for weight in &mut weights[window] {
                 *weight /= sum_weights;
             }
-            let sum_weighted_x = (left_end..right_end)
-                .map(|j| weights[j] * x[j])
-                .sum::<f64>();
-            let weighted_sqdev_x = (left_end..right_end)
+            let sum_weighted_x = window.into_iter().map(|j| weights[j] * x[j]).sum::<f64>();
+            let weighted_sqdev_x = window
+                .into_iter()
                 .map(|j| weights[j] * (x[j] - sum_weighted_x).powf(2.0))
                 .sum::<f64>()
                 .max(1e-12);
-            fitted[i] = (left_end..right_end)
+            fitted[i] = window
+                .into_iter()
                 .map(|j| {
                     let projection = weights[j]
                         * (1.0

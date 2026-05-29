@@ -3,7 +3,7 @@ name = 'rsfgsea_r'
 publish = false
 version = '0.3.4'
 edition = '2021'
-rust-version = '1.65'
+rust-version = '1.96'
 
 [lib]
 crate-type = [ 'staticlib' ]

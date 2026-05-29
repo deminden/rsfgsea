@@ -81,7 +81,30 @@ trap cleanup EXIT
 cargo vendor --locked --manifest-path "$rust_root/Cargo.toml" "$tmp_vendor_dir" >/dev/null
 
 rm -f "$vendor_tarball"
-tar -cJf "$vendor_tarball" -C "$tmp_vendor_dir" .
+"$python_bin" - "$tmp_vendor_dir" "$vendor_tarball" <<'PY'
+import os
+import sys
+import tarfile
+from pathlib import Path
+
+src = Path(sys.argv[1])
+out = Path(sys.argv[2])
+
+
+def reset_metadata(info: tarfile.TarInfo) -> tarfile.TarInfo:
+    info.uid = 0
+    info.gid = 0
+    info.uname = ""
+    info.gname = ""
+    info.mtime = 0
+    return info
+
+
+with tarfile.open(out, "w:xz") as tar:
+    for path in sorted(src.rglob("*")):
+        arcname = Path(".") / path.relative_to(src)
+        tar.add(path, arcname=os.fspath(arcname), recursive=False, filter=reset_metadata)
+PY
 
 # Keep the R package source tree free of unpacked Cargo vendor directories.
 rm -rf "$package_src_root/vendor" "$package_src_root/.cargo"

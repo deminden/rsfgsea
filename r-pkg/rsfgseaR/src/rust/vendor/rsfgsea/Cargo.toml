@@ -2,6 +2,7 @@
 name = "rsfgsea"
 version = "0.3.4"
 edition = "2024"
+rust-version = "1.96"
 authors = ["Denis Demin"]
 description = "High-performance fgsea-compatible preranked Gene Set Enrichment Analysis in Rust"
 license = "MIT"

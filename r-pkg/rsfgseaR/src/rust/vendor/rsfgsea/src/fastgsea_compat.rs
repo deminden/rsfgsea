@@ -4,6 +4,7 @@
 
 use crate::core::ScoreType;
 use crate::rng_compat::{Mt19937Compat, combination, uid_wrapper};
+use core::range::Range;
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 
@@ -588,7 +589,7 @@ fn empty_batch_counts(m: usize) -> BatchCounts {
 }
 
 #[inline]
-fn chunk_ranges(iterations: usize) -> Vec<(usize, usize, usize)> {
+fn chunk_ranges(iterations: usize) -> Vec<(usize, Range<usize>)> {
     if iterations == 0 {
         return Vec::new();
     }
@@ -601,7 +602,7 @@ fn chunk_ranges(iterations: usize) -> Vec<(usize, usize, usize)> {
     for ci in 0..chunks {
         let len = base + usize::from(ci < rem);
         let end = start + len;
-        ranges.push((ci, start, end));
+        ranges.push((ci, Range { start, end }));
         start = end;
     }
     ranges
@@ -694,15 +695,16 @@ pub fn calc_gsea_stat_cumulative_batch_parallel(
 
     chunk_ranges(iterations)
         .into_par_iter()
-        .map(|(chunk_idx, range_start, range_end)| {
+        .map(|(chunk_idx, iteration_range)| {
             let mut out = empty_batch_counts(m);
-            let chunk_seed = splitmix64(seed ^ ((chunk_idx as u64) << 1) ^ (range_start as u64));
+            let chunk_seed =
+                splitmix64(seed ^ ((chunk_idx as u64) << 1) ^ (iteration_range.start as u64));
             let mut rng = Mt19937Compat::new(chunk_seed as u32);
             let mut pool = pool_template.clone();
             let mut marks = vec![0u32; n];
             let mut stamp = 0u32;
             let mut selected = vec![0usize; k];
-            for _ in range_start..range_end {
+            for _ in iteration_range {
                 if k > n / 2 {
                     pool.copy_from_slice(&pool_template);
                     for i in (0..k).rev() {
@@ -922,15 +924,16 @@ pub fn calc_gsea_stat_cumulative_batch_f64_parallel(
 
     chunk_ranges(iterations)
         .into_par_iter()
-        .map(|(chunk_idx, range_start, range_end)| {
+        .map(|(chunk_idx, iteration_range)| {
             let mut out = empty_batch_counts(m);
-            let chunk_seed = splitmix64(seed ^ ((chunk_idx as u64) << 1) ^ (range_start as u64));
+            let chunk_seed =
+                splitmix64(seed ^ ((chunk_idx as u64) << 1) ^ (iteration_range.start as u64));
             let mut rng = Mt19937Compat::new(chunk_seed as u32);
             let mut pool = pool_template.clone();
             let mut marks = vec![0u32; n];
             let mut stamp = 0u32;
             let mut selected = vec![0usize; k];
-            for _ in range_start..range_end {
+            for _ in iteration_range {
                 if k > n / 2 {
                     pool.copy_from_slice(&pool_template);
                     for i in (0..k).rev() {
