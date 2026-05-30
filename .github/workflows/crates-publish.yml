@@ -21,7 +21,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.96.0
 
       - name: Verify crate can be published
         run: cargo publish -p rsfgsea --locked --dry-run
