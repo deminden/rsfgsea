@@ -41,6 +41,10 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.96.0
 
+      - name: Install Windows GNU Rust target
+        if: runner.os == 'Windows'
+        run: rustup target add x86_64-pc-windows-gnu
+
       - name: Install R dependencies
         uses: r-lib/actions/setup-r-dependencies@v2
         with:
@@ -60,4 +64,16 @@ jobs:
       - name: Check source package
         run: |
           cd r-pkg
-          R CMD check rsfgseaR_*.tar.gz --no-manual
+          R CMD check rsfgseaR_*.tar.gz --no-manual || {
+            if [ -f rsfgseaR.Rcheck/00install.out ]; then
+              echo "::group::rsfgseaR.Rcheck/00install.out"
+              cat rsfgseaR.Rcheck/00install.out
+              echo "::endgroup::"
+            fi
+            if [ -f rsfgseaR.Rcheck/00check.log ]; then
+              echo "::group::rsfgseaR.Rcheck/00check.log"
+              cat rsfgseaR.Rcheck/00check.log
+              echo "::endgroup::"
+            fi
+            exit 1
+          }
