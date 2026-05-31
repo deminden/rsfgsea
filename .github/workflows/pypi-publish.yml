@@ -31,6 +31,7 @@ jobs:
         with:
           command: build
           working-directory: crates/rsfgseapy
+          rust-toolchain: 1.96.0
           args: --release --out wheelhouse
           manylinux: auto
 
@@ -40,6 +41,7 @@ jobs:
         with:
           command: sdist
           working-directory: crates/rsfgseapy
+          rust-toolchain: 1.96.0
           args: --out sdist
 
       - name: Upload wheel distributions
