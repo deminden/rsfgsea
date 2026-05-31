@@ -80,7 +80,7 @@ that cache unless `--blitz-signature-cache` is passed. It rejects `gpu`, `method
 Add to `Cargo.toml`:
 ```toml
 [dependencies]
-rsfgsea = "0.3.4"
+rsfgsea = "0.4.0"
 ```
 
 Or use the repository directly:

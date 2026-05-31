@@ -4,7 +4,7 @@ build-backend = "maturin"
 
 [project]
 name = "rsfgseapy"
-version = "0.3.4"
+version = "0.4.0"
 description = "Fast Gene Set Enrichment Analysis in Rust (Python bindings)"
 authors = [{name = "Denis Demin"}]
 license = {text = "MIT"}

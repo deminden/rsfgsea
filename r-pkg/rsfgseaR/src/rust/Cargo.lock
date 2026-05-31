@@ -2118,7 +2118,7 @@ checksum = "47b34b781b31e5d73e9fbc8689c70551fd1ade9a19e3e28cfec8580a79290cc4"
 
 [[package]]
 name = "rsfgsea"
-version = "0.3.4"
+version = "0.4.0"
 dependencies = [
  "ab_glyph",
  "anyhow",
@@ -2151,7 +2151,7 @@ dependencies = [
 
 [[package]]
 name = "rsfgsea_r"
-version = "0.3.4"
+version = "0.4.0"
 dependencies = [
  "extendr-api",
  "rayon",
