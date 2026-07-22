@@ -758,7 +758,7 @@ fn write_results(path: &Path, results: &[EnrichmentResult]) -> Result<()> {
         let export = res.export();
         writeln!(
             out,
-            "{}\t{}\t{:.8}\t{}\t{:.8}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             export.pathway,
             export.size,
             export.es,
@@ -774,8 +774,24 @@ fn write_results(path: &Path, results: &[EnrichmentResult]) -> Result<()> {
 
 fn format_optional_float(value: Option<f64>) -> String {
     value
-        .map(|value| format!("{value:.8}"))
+        .map(|value| value.to_string())
         .unwrap_or_else(|| "NA".to_string())
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::format_optional_float;
+
+    #[test]
+    fn optional_float_format_is_round_trip_and_preserves_missingness() {
+        let values = [0.1, -0.0, f64::MIN_POSITIVE, f64::from_bits(1), f64::MAX];
+        for value in values {
+            let rendered = format_optional_float(Some(value));
+            let parsed = rendered.parse::<f64>().unwrap();
+            assert_eq!(parsed.to_bits(), value.to_bits(), "rendered={rendered}");
+        }
+        assert_eq!(format_optional_float(None), "NA");
+    }
 }
 
 #[cfg(feature = "gpu")]

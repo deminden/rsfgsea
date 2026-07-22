@@ -329,6 +329,10 @@ The CLI writes a TSV with these columns:
 
 `leading_edge` is written as a comma-separated gene list.
 
+Floating-point columns use Rust's shortest round-trip representation. Parsing a
+written value as an IEEE-754 double therefore recovers the value held by the
+CLI; output is not truncated to a fixed number of decimal places.
+
 For decor runs, `es`, `nes`, `pval`, `padj`, `log2err`, and `leading_edge`
 refer to the decor statistic.
 

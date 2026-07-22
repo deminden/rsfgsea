@@ -138,6 +138,8 @@ The implementation follows blitz preprocessing:
 
 Blitz mode is intentionally separate from decor and classic fgsea-compatible modes. Library callers reuse native null-model fits for repeated identical calls through an in-process signature cache; one-shot CLI runs leave that cache off unless explicitly requested. It rejects `gpu`, decor mode, fixed `nperm`, non-`std` score types, and `gseaParam` values other than `1.0`. Result columns keep the rsfgsea shape: `pval` is the blitz p-value, `padj` is BH/FDR, and `log2err` is missing.
 
+The deep-tail compatibility path reproduces the requested-precision cancellation behavior of the pinned `blitzgsea`/mpmath reference. This makes reported NES and p-values match Blitz at floating-point scale; it should be understood as reference parity, not as a claim that the requested-precision value is a more accurate mathematical gamma tail.
+
 ## Score Types
 
 `std`

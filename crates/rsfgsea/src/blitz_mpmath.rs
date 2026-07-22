@@ -12,7 +12,6 @@ pub(crate) struct GammaCdf {
     pub cdf: f64,
     pub survival: f64,
     lower: BigFloat,
-    upper: BigFloat,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -26,6 +25,7 @@ pub(crate) struct TailProbability {
 
 struct Hp {
     precision: usize,
+    exact_precision: bool,
     cc: Consts,
 }
 
@@ -34,16 +34,17 @@ impl Hp {
         let working_dps = dps
             .checked_mul(2)
             .ok_or_else(|| anyhow::anyhow!("blitz mpmath fallback dps is too large"))?;
-        Self::with_dps(working_dps)
+        Self::with_dps(working_dps, false)
     }
 
     fn final_context(dps: usize) -> Result<Self> {
-        Self::with_dps(dps)
+        Self::with_dps(dps, true)
     }
 
-    fn with_dps(dps: usize) -> Result<Self> {
+    fn with_dps(dps: usize, exact_precision: bool) -> Result<Self> {
         Ok(Self {
             precision: dps_to_prec(dps),
+            exact_precision,
             cc: Consts::new()?,
         })
     }
@@ -102,8 +103,9 @@ impl Hp {
         self.checked(result)
     }
 
-    fn pi(&mut self) -> BigFloat {
-        self.cc.pi(self.precision, RoundingMode::ToEven)
+    fn pi(&mut self) -> Result<BigFloat> {
+        let value = self.cc.pi(self.precision, RoundingMode::ToEven);
+        self.checked(value)
     }
 
     fn render_f64(&mut self, value: &BigFloat) -> Result<f64> {
@@ -111,11 +113,22 @@ impl Hp {
         Ok(rendered.parse::<f64>()?)
     }
 
-    fn checked(&self, value: BigFloat) -> Result<BigFloat> {
+    fn checked(&self, mut value: BigFloat) -> Result<BigFloat> {
         if value.is_nan() {
             bail!("blitz mpmath fallback produced NaN");
         }
+        if self.exact_precision {
+            // astro-float evaluates at a whole-word mantissa even when a
+            // smaller precision is requested. mpmath rounds after every
+            // final-context operation at the exact bit precision.
+            value.set_precision(self.precision, RoundingMode::ToEven)?;
+        }
         Ok(value)
+    }
+
+    fn round_to_context(&self, mut value: BigFloat) -> Result<BigFloat> {
+        value.set_precision(self.precision, RoundingMode::ToEven)?;
+        self.checked(value)
     }
 }
 
@@ -126,25 +139,24 @@ pub(crate) fn gammacdf(x: f64, alpha: f64, beta: f64, dps: usize) -> Result<Gamm
     if x < 0.0 {
         let hp = Hp::new(dps)?;
         let lower = hp.zero();
-        let upper = hp.one();
         return Ok(GammaCdf {
             cdf: 0.0,
             survival: 1.0,
             lower,
-            upper,
         });
     }
 
     let mut hp = Hp::new(dps)?;
-    let z = hp.bf_f64(x / beta);
+    // blitzgsea promotes both operands before dividing inside its extradps
+    // context. Dividing as f64 first can move extreme tails across a final
+    // context rounding boundary.
+    let z = hp.div(&hp.bf_f64(x), &hp.bf_f64(beta))?;
     if z.is_zero() {
         let lower = hp.zero();
-        let upper = hp.one();
         return Ok(GammaCdf {
             cdf: 0.0,
             survival: 1.0,
             lower,
-            upper,
         });
     }
     let a = hp.bf_f64(alpha);
@@ -160,13 +172,17 @@ pub(crate) fn gammacdf(x: f64, alpha: f64, beta: f64, dps: usize) -> Result<Gamm
         let lower = hp.sub(&one, &upper)?;
         (lower, upper)
     };
+    // The extradps result returned by mpmath retains exactly the 2*dps
+    // context. Keep guard-word arithmetic inside the gamma solver, then trim
+    // its two public results once before final-context tail arithmetic.
+    let lower = hp.round_to_context(lower)?;
+    let upper = hp.round_to_context(upper)?;
     let cdf = hp.render_f64(&lower)?;
     let survival = hp.render_f64(&upper)?;
     Ok(GammaCdf {
         cdf,
         survival,
         lower,
-        upper,
     })
 }
 
@@ -187,7 +203,8 @@ pub(crate) fn tail_probability(
     let combined = match branch {
         TailBranch::Positive => {
             let weighted = py_hp.mul(&gamma.lower, &ratio)?;
-            py_hp.add(&py_hp.sub(&one, &ratio)?, &weighted)?
+            // Preserve Python's left-associated `lower * ratio + 1 - ratio`.
+            py_hp.sub(&py_hp.add(&weighted, &one)?, &ratio)?
         }
         TailBranch::Negative => {
             let weighted = py_hp.mul(&gamma.lower, &ratio)?;
@@ -222,56 +239,12 @@ pub(crate) fn tail_probability(
             p_value: 0.0,
         });
     }
-
-    let mut hp = Hp::new(dps)?;
-    let ratio = hp.bf_f64(pos_ratio);
-    let one = hp.one();
-    let half = hp.half();
-    let raw_prob_two = match branch {
-        TailBranch::Positive => hp.mul(&ratio, &gamma.upper)?,
-        TailBranch::Negative => {
-            let neg_ratio = hp.sub(&one, &ratio)?;
-            hp.mul(&neg_ratio, &gamma.upper)?
-        }
-    };
-    let mut prob_two = if raw_prob_two < half {
-        raw_prob_two
-    } else {
-        half.clone()
-    };
-    if branch == TailBranch::Negative && prob_two == half {
-        prob_two = hp.sub(&prob_two, &gamma.lower)?;
-    }
-    let two = hp.bf_u64(2);
-    let mut p_value = hp.mul(&two, &prob_two)?;
-    if p_value > one {
-        p_value = one;
-    }
-    let rendered_p_value = hp.render_f64(&p_value)?;
-    if rendered_p_value > 0.0
-        && python_underflow_floor(dps).is_some_and(|floor| rendered_p_value < floor)
-    {
-        return Ok(TailProbability {
-            gamma_prob: gamma.cdf,
-            survival_prob: gamma.survival,
-            prob_two_tailed: 0.0,
-            p_value: 0.0,
-        });
-    }
     Ok(TailProbability {
         gamma_prob: gamma.cdf,
         survival_prob: gamma.survival,
-        prob_two_tailed: hp.render_f64(&prob_two)?,
-        p_value: rendered_p_value,
+        prob_two_tailed: py_hp.render_f64(&prob_two)?,
+        p_value: py_hp.render_f64(&p_value)?,
     })
-}
-
-fn python_underflow_floor(dps: usize) -> Option<f64> {
-    if dps <= 308 {
-        Some(10f64.powi(-(dps as i32)))
-    } else {
-        None
-    }
 }
 
 fn lower_gamma_series_regularized(
@@ -367,7 +340,7 @@ fn ln_gamma_positive(hp: &mut Hp, alpha: f64) -> Result<BigFloat> {
         let ln_four = hp.ln(&hp.bf_u64(4))?;
         let m_ln_four = hp.mul(&hp.bf_u64(m), &ln_four)?;
         let half = hp.half();
-        let pi = hp.pi();
+        let pi = hp.pi()?;
         let ln_pi = hp.ln(&pi)?;
         let half_ln_pi = hp.mul(&half, &ln_pi)?;
         return hp.add(
@@ -380,7 +353,7 @@ fn ln_gamma_positive(hp: &mut Hp, alpha: f64) -> Result<BigFloat> {
 
 fn spouge_ln_gamma(hp: &mut Hp, alpha: f64, a: u64) -> Result<BigFloat> {
     let z_minus_one = hp.sub(&hp.bf_f64(alpha), &hp.one())?;
-    let pi = hp.pi();
+    let pi = hp.pi()?;
     let two_pi = hp.mul(&hp.bf_u64(2), &pi)?;
     let c0 = two_pi.sqrt(hp.precision, RoundingMode::ToEven);
     let mut sum = hp.checked(c0)?;

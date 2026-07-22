@@ -617,6 +617,97 @@ def write_tail_fallback_trace() -> None:
             0.5370837511002126,
             50,
         ),
+        # Largest finite-NES discrepancy found by the full-precision
+        # lung-vs-muscle + GO BP reference audit. Keep this immediately below
+        # the underflow sentinels: unlike those cases, the expected p-value is
+        # finite (~1.78e-46), so a one-ulp model-parameter change is strongly
+        # amplified by the inverse-normal transform and remains observable.
+        (
+            "pos_upper_finite_real_protein_phosphorylation",
+            "pos",
+            "upper",
+            52.52932566292565,
+            0.45107342895087643 / 0.0019460788685309116,
+            0.0019460788685309116,
+            0.5370565616974113,
+            50,
+        ),
+        # Regression for final-context phase: rounding a corrected survival
+        # probability onto an assumed grid does not reproduce the upstream
+        # left-associated expression. This case became less accurate under
+        # that shortcut and therefore guards the exact operation sequence.
+        (
+            "pos_upper_finite_left_associative_phase",
+            "pos",
+            "upper",
+            20.005659850024802,
+            170.5841555456576,
+            1.0,
+            0.03729063216993426,
+            50,
+        ),
+        (
+            "pos_upper_finite_left_associative_phase_dps30",
+            "pos",
+            "upper",
+            12.261616710431698,
+            102.18207680635383,
+            1.0,
+            0.20340203445276617,
+            30,
+        ),
+        (
+            "neg_upper_finite_left_associative_phase_dps30",
+            "neg",
+            "upper",
+            38.14445988854177,
+            155.39475687066522,
+            1.0,
+            0.8842353972806609,
+            30,
+        ),
+        (
+            "neg_upper_finite_left_associative_phase_dps50",
+            "neg",
+            "upper",
+            27.968727675900716,
+            192.36267707923892,
+            1.0,
+            0.4686342824307507,
+            50,
+        ),
+        # A final-context quantum can legitimately remain nonzero below
+        # 10^-dps; upstream has no separate decimal underflow floor.
+        (
+            "neg_upper_finite_below_decimal_dps_floor",
+            "neg",
+            "upper",
+            2.653647523572099,
+            120.060370695909,
+            1.0,
+            0.9720648838728739,
+            50,
+        ),
+        (
+            "pos_upper_finite_left_associative_phase_dps80",
+            "pos",
+            "upper",
+            0.6704219474656133,
+            181.2673930878479,
+            1.0,
+            0.22814527840462578,
+            80,
+        ),
+        (
+            "neg_upper_finite_left_associative_phase_dps80",
+            "neg",
+            "upper",
+            1.2191536385236568,
+            185.14580545991333,
+            1.0,
+            0.5756017536517659,
+            80,
+        ),
     ]
     for case in manual_cases:
         add_case(*case)
@@ -769,6 +860,15 @@ def write_tail_fallback_trace() -> None:
                         prob_two_tailed -= gamma_prob
                     nes = -blitzgsea.invcdf(min(1, prob_two_tailed))
                 pval = min(mp.mpf(1), 2 * prob_two_tailed)
+
+            # gamma_prob/survival_prob above are high-precision diagnostics.
+            # Blitz itself forms its reported tail probability after
+            # gammacdf() restores the requested dps, without the extra guard
+            # digits used for that gamma diagnostic. Preserve the actual
+            # blitzgsea.gsea() arithmetic for compatibility references.
+            prob_two_tailed = python_prob_two_tailed
+            pval = python_pval
+            nes = python_nes
 
         rows.append(
             {

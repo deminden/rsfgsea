@@ -24,23 +24,27 @@ impl LinearInterp {
             return self.y[0];
         }
 
-        let idx = match self
+        // Match scipy.interpolate.interp1d's linear call path: search for the
+        // upper neighbor, clip it to [1, n - 1], compute the slope first, and
+        // then multiply by the query offset. The operation order matters by a
+        // few ulps and can be amplified substantially by the inverse-normal
+        // transform in extreme Blitz tails.
+        let upper = match self
             .x
             .binary_search_by(|probe| probe.partial_cmp(&xq).unwrap())
         {
-            Ok(i) => return self.y[i],
-            Err(0) => 0,
-            Err(i) if i >= n => n - 2,
-            Err(i) => i - 1,
+            Ok(i) | Err(i) => i.clamp(1, n - 1),
         };
-        let x0 = self.x[idx];
-        let x1 = self.x[idx + 1];
-        let y0 = self.y[idx];
-        let y1 = self.y[idx + 1];
+        let lower = upper - 1;
+        let x0 = self.x[lower];
+        let x1 = self.x[upper];
+        let y0 = self.y[lower];
+        let y1 = self.y[upper];
         if x1 == x0 {
             y0
         } else {
-            y0 + (xq - x0) * (y1 - y0) / (x1 - x0)
+            let slope = (y1 - y0) / (x1 - x0);
+            slope * (xq - x0) + y0
         }
     }
 }
@@ -145,4 +149,26 @@ pub(super) fn lowess(y: &[f64], x: &[f64], frac: f64) -> Vec<f64> {
         }
     }
     fitted
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LinearInterp;
+
+    #[test]
+    fn linear_interp_matches_scipy_operation_order_exact_bits() {
+        let interp = LinearInterp::new(vec![1.0, 3.0, 7.0], vec![0.1, 1.7, -0.2]);
+        let scipy_reference = [
+            (-2.0, 13_835_733_595_226_269_286),
+            (1.0, 4_591_870_180_066_957_722),
+            (2.0, 4_606_281_698_874_543_308),
+            (3.0, 4_610_334_938_539_176_755),
+            (5.0, 4_604_930_618_986_332_160),
+            (7.0, 13_819_745_816_549_104_024),
+            (9.0, 13_831_229_995_598_898_789),
+        ];
+        for (query, expected_bits) in scipy_reference {
+            assert_eq!(interp.at(query).to_bits(), expected_bits, "query={query}");
+        }
+    }
 }

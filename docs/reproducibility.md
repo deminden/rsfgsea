@@ -37,6 +37,20 @@ The main validation layers are:
 - quick manual R-side sanity check for one ranked list
 - useful when debugging overlap or pathway-loading issues
 
+[`scripts/generate_blitz_large_reference.py`](/home/den/bio/rsfgsea/scripts/generate_blitz_large_reference.py)
+
+- generates repeated full-precision `blitzgsea 1.3.54` results and optional fixed-schedule traces
+- validates the pinned Python package/thread environment and repeated output hashes
+
+[`scripts/compare_blitz_precision.py`](/home/den/bio/rsfgsea/scripts/compare_blitz_precision.py)
+
+- compares full-precision Blitz outputs by absolute error, ULP distance, finite class, ordering, size, and leading edge
+
+[`scripts/bench_blitz_ab.py`](/home/den/bio/rsfgsea/scripts/bench_blitz_ab.py)
+
+- runs a CPU-pinned, paired, alternating baseline/candidate Blitz benchmark
+- records raw timings, hashes, bootstrap intervals, and a strict acceptance gate
+
 ## Practical Workflow
 
 When you need to validate behavior against R:
@@ -99,6 +113,35 @@ use:
 scripts/bench_blitz_speed.py --reps 1 --json
 ```
 
+For a change-acceptance benchmark, preserve release binaries built with the
+same toolchain and flags, then use the paired harness. It pins the process to
+the requested CPUs, alternates `baseline/candidate` execution order, retains
+all raw timings and output hashes, and bootstraps paired ratios with a fixed
+seed:
+
+```bash
+scripts/bench_blitz_ab.py \
+  --baseline-bin target/release/rsfgsea-baseline \
+  --candidate-bin target/release/rsfgsea-candidate \
+  --reps 30 \
+  --warmups 1 \
+  --cpu-list 8,10,12,14 \
+  --bootstrap-resamples 100000 \
+  --equivalence-margin-pct 1 \
+  --output data/derived/blitz_precision/lung_vs_muscle_go_bp/speed_ab.json
+```
+
+The gate requires the candidate/baseline geometric-mean ratio to be at most
+`1.0` and the 95% upper confidence bound to be at most `1.01`, for both core
+compute time and end-to-end wall time. It also reports within-binary output
+determinism and exits nonzero if the combined acceptance gate fails. The
+current 30-pair full-cold result passed: compute ratio
+`0.98362` (change `-1.638%`, 95% CI `-2.997%` to `-0.263%`) and wall ratio
+`0.98384` (change `-1.616%`, 95% CI `-2.958%` to `-0.257%`). Every measured
+output hash was deterministic within its binary. The interval is entirely on
+the faster side for this workload, so the result establishes no speed loss and
+supports a small local speedup; it is not a general cross-machine speed claim.
+
 Latest local single-run snapshot on `lung_vs_muscle + GO BP`:
 
 | Metric | Value |
@@ -126,9 +169,47 @@ a two-run screen (`~9.10 s` native CPU build vs `~9.36-9.63 s` portable release
 builds, depending on the source baseline). Keep this out of portable release
 artifacts unless you intentionally want a binary specialized to the build host.
 
-The same run reported 5,324 matched pathways, no size mismatches, no
-leading-edge set mismatches, max finite rounded-output absolute diffs of ES
-`5.0e-9`, NES `2.25e-7`, p-value `5.0e-9`, and FDR `4.99e-9`.
+Generate the pinned full-precision Python reference and optional fixed-schedule
+trace with:
+
+```bash
+PYTHONHASHSEED=0 \
+OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 \
+MKL_NUM_THREADS=1 \
+scripts/generate_blitz_large_reference.py \
+  --reps 3 \
+  --fixed-schedule-trace
+```
+
+The generator refuses a dependency-version or thread-environment mismatch and
+requires all repeated result hashes to match. Compare a round-trip-precision
+CLI output with one generated reference using:
+
+```bash
+scripts/compare_blitz_precision.py \
+  --reference data/derived/blitz_precision/lung_vs_muscle_go_bp/python_blitzgsea_1_3_54.rep1.tsv \
+  --observed data/derived/blitz_precision/lung_vs_muscle_go_bp/rsfgsea_candidate.tsv \
+  --output data/derived/blitz_precision/lung_vs_muscle_go_bp/rsfgsea_candidate.comparison.json
+```
+
+Generated references and reports live under ignored `data/derived/`; commit the
+generators and focused regression fixtures, not the multi-megabyte local audit
+outputs. The audited input contained 63,904 ranks and 5,343 source GMT
+pathways, of which 5,324 were scored. Input SHA-256 values were
+`54d7e5b11c6ccdffc3dc289ed8f4cfc8e11594d093fe0050cf4e587400bb794f`
+for the ranks and
+`0fc02458765cfce6c9348dce9f7a9397c6caf7c09ba318f468135d7ac60342ee`
+for the GMT; all three standard Python runs produced
+`b49c76729684dfb15129678bce13b7394c583a4bf5ee16145012310625269907`.
+
+The current comparison reports 5,324 shared pathways, no size or leading-edge
+set mismatches, and finite maximum absolute differences of ES `4.441e-16`, NES
+`3.331e-15`, p-value `1.776e-15`, and FDR `2.665e-15`. The former maximum NES
+difference was `2.287e-7` (about 69 million times larger). This is specifically
+Blitz reference parity: extreme-tail context rounding follows the pinned
+upstream finite-precision result and is not presented as improved mathematical
+truth.
 
 ### R fgsea Comparison Benchmark
 
