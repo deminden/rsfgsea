@@ -33,7 +33,7 @@ jobs:
           command: build
           working-directory: crates/rsfgseapy
           rust-toolchain: 1.97.1
-          args: --release --out wheelhouse
+          args: --release --out wheelhouse ${{ matrix.os == 'ubuntu-latest' && '-i python3.14' || '' }}
           manylinux: auto
 
       - name: Build source distribution

@@ -38,6 +38,7 @@ jobs:
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: 1.97.1
+          components: clippy, rustfmt
 
       - name: Install maturin and test deps
         run: python -m pip install --upgrade pip maturin==1.14.1 pytest==9.1.1
@@ -74,7 +75,7 @@ jobs:
           command: build
           working-directory: crates/rsfgseapy
           rust-toolchain: 1.97.1
-          args: --release --out wheelhouse
+          args: --release --out wheelhouse ${{ matrix.os == 'ubuntu-latest' && '-i python3.14' || '' }}
           manylinux: auto
 
       - name: Build source distribution
