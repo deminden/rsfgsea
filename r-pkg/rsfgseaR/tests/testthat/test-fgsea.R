@@ -38,7 +38,7 @@ test_that("fgsea supports CLI-style file inputs and output", {
   }
 })
 
-test_that("TSV output preserves binary64 values exactly", {
+test_that("TSV output emits round-trip-safe binary64 text", {
   out_path <- tempfile(fileext = ".tsv")
   values <- c(0.1, pi, .Machine$double.eps, .Machine$double.xmin, .Machine$double.xmax)
   result <- data.frame(
@@ -53,10 +53,27 @@ test_that("TSV output preserves binary64 values exactly", {
   result$leadingEdge <- I(lapply(result$pathway, function(pathway) pathway))
 
   rsfgseaR:::.write_results_tsv(result, out_path)
-  written <- read.delim(out_path, sep = "\t", check.names = FALSE)
+  written_text <- read.delim(
+    out_path,
+    sep = "\t",
+    check.names = FALSE,
+    colClasses = "character"
+  )
 
   for (column in c("es", "nes", "pval", "padj", "log2err")) {
-    expect_identical(written[[column]], result[[column]])
+    expect_identical(written_text[[column]], sprintf("%.17g", result[[column]]))
+  }
+
+  # Base R's extreme decimal parser is platform-dependent at DBL_MIN and
+  # DBL_MAX. Verify numeric round trips separately on representative values;
+  # the string assertions above cover the two finite boundaries directly.
+  written <- read.delim(out_path, sep = "\t", check.names = FALSE)
+  representative <- seq_len(3L)
+  for (column in c("es", "nes", "pval", "padj", "log2err")) {
+    expect_identical(
+      written[[column]][representative],
+      result[[column]][representative]
+    )
   }
 })
 
