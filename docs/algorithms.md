@@ -126,7 +126,13 @@ This is the multilevel sampling parameter and should stay aligned across compari
 
 ## Blitz Mode
 
-Blitz mode is a native Rust implementation of the `blitzgsea.gsea()` preranked workflow. It has its own mode-aware defaults: `permutations=1000`, `anchors=40`, `min_size=5`, `max_size=4000`, `processes=4`, `symmetric=false`, `seed=0`, `center=true`, `accuracy=40`, and `deep_accuracy=50`.
+Blitz mode is a native Rust implementation of the `blitzgsea.gsea()` preranked
+workflow, targeting the exact stack in `reference/blitz/uv.lock`. It has its
+own mode-aware defaults: `permutations=1000`, `anchors=40`, `min_size=5`,
+`max_size=4000`, `processes=4`, `symmetric=false`, `seed=0`, `center=true`,
+`accuracy=40`, and `deep_accuracy=50`. `accuracy` is retained for upstream
+interface compatibility; the native normal-tail calculation does not currently
+vary with it. `deep_accuracy` controls the extreme-tail high-precision fallback.
 
 The implementation follows blitz preprocessing:
 

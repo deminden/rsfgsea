@@ -26,7 +26,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RANKS = REPO_ROOT / "data/deseq2_positive_ranks/lung_vs_muscle.rnk"
 DEFAULT_GMT = REPO_ROOT / "data/GO_Biological_Process_2025.gmt"
 DEFAULT_RUST_BIN = REPO_ROOT / "target/release/rsfgsea"
-DEFAULT_PYTHON = Path("/home/den/miniforge3/bin/python")
+DEFAULT_PYTHON = Path(sys.executable)
 
 
 PYTHON_BLITZ_CODE = r"""

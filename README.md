@@ -6,8 +6,8 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 
 - **rsfgsea-decor**: A redundancy-aware preranked GSEA method that downweights pathway genes with high expression-derived within-pathway correlation. Decor uses validated presets (`sensitive`, `balanced`, `specific`, `strict`), with `balanced` as the release default, plus an optional 0-100 stringency ladder for preset autoswitching.
 - **Classic fgsea Parity**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
-- **Native Blitz Mode**: Adds `mode=blitz` across Rust, CLI, Python, and R with native Rust execution against the local `blitzgsea 1.3.54` reference target. Current parity is exact parsed equality on committed synthetic, edgecase, and publication fixtures; on the 63,904-gene `lung vs muscle` DESeq2 + GO BP test case (5,324 pathways), max finite diffs are ES `4.4e-16`, NES `3.3e-15`, p-value `1.8e-15`, and FDR `2.7e-15`.
-- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on current large 1-worker comparison workloads, `rsfgsea` is about **3.0x faster** in simple mode and **4.1x faster** in multilevel mode than R `fgsea`.
+- **Native Blitz Mode**: Adds `mode=blitz` across Rust, CLI, Python, and R with native Rust execution against the locked `blitzgsea 1.3.54` reference. The current large audit reaches floating-point-scale maximum errors: ES `4.441e-16`, NES `3.331e-15`, p-value `1.776e-15`, and FDR `2.665e-15`.
+- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work. Benchmark claims and their exact protocols are kept in the [Reproducibility Guide](./docs/reproducibility.md).
 - **Built-In Plotting**: Writes single-pathway enrichment plots and multi-pathway GSEA table plots as PNG directly from Rust, CLI, Python, and R.
 - **Hybrid CPU/GPU Engine (Experimental)**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 
@@ -316,94 +316,15 @@ PATHWAY_A  description  GENE1  GENE2  GENE3
 PATHWAY_B  description  GENE4  GENE5
 ```
 
-## Performance Comparison
+## Performance and Evidence
 
-### Local Optimization Benchmark
+Benchmark numbers are intentionally owned by the
+[Reproducibility Guide](./docs/reproducibility.md), together with the workload,
+hardware, timing method, and acceptance gate. This keeps local optimization
+snapshots from drifting across the root, Python, and R READMEs.
 
-This is the fast benchmark used while optimizing the Rust core. It is synthetic,
-but shaped like real GSEA workloads: 10k ranked genes, 1k overlapping pathways,
-pathway sizes concentrated in the 15-500 range, smooth score tails, and a few
-seeded enriched regions. It is separate from the file-backed R-vs-Rust
-comparison benchmark below.
-
-Run it with:
-
-```bash
-cargo bench -p rsfgsea --bench gsea_bench
-```
-
-Latest local Criterion snapshot, **AMD Ryzen 7950X3D**, release bench mode,
-median of 10 samples:
-
-| Benchmark | Workload | Median |
-| :--- | :--- | ---: |
-| `calculate_es_10k_100` | ES kernel, 10k genes / 100 hits | `294 ns` |
-| `representative_simple` | 10k genes / 1k pathways / 10k permutations | `2.282 s` |
-| `representative_multilevel` | 10k genes / 1k pathways / `nPermSimple=1000` | `3.438 s` |
-
-For thread-scaling work, use the opt-in 5k-pathway matrix:
-
-```bash
-for t in 1 2 4 8 16; do
-  RAYON_NUM_THREADS=$t RSFGSEA_THREAD_MATRIX_BENCH=1 \
-    cargo bench -p rsfgsea --bench gsea_bench
-done
-```
-
-Use `RSFGSEA_PERM_HEAVY_BENCH=1` for the 100k-permutation simple-mode profile,
-and `RSFGSEA_HEAVY_BENCH=1` for the larger 20k-gene / 15k-pathway profile.
-
-For native blitz speed work, run the opt-in blitz Criterion groups:
-
-```bash
-RSFGSEA_BLITZ_BENCH=1 cargo bench -p rsfgsea --bench gsea_bench
-```
-
-For the local positive DESeq2 stress workload:
-
-```bash
-scripts/bench_blitz_speed.py --reps 1 --json
-```
-
-Optional local CPU-tuned blitz build, host-specific:
-
-```bash
-RUSTFLAGS="-C target-cpu=native" cargo build --release -p rsfgsea
-```
-
-Latest local `lung_vs_muscle + GO BP` snapshot: native Rust blitz cold compute
-improved from `~22.2 s` to `9.61 s`, and the in-process Rust warm-cache
-Criterion group measured about `4.03 s`; Python blitzgsea cold was `15.61 s`
-and warm-cache was `3.56 s`.
-
-### R fgsea Comparison Benchmark
-
-Benchmarked on **AMD Ryzen 7950X3D**. Times are **median of 5 runs** (after one warmup run).
-
-**Benchmark setup**:
-- Ranked list: `data/pearson_symbols.rnk` (356 genes)
-- Small pathways: `data/h.all.v2025.1.Hs.symbols.gmt` (50 total, 37 passing size filters)
-- Large pathways: `data/Human_GO_AllPathways_noPFOCR_with_GO_iea_March_01_2024_symbol_renamed.gmt` (29,705 total, 5,582 passing size filters)
-- Size filters: `minSize=1`, `maxSize=5000`
-- Rust timing source: CLI compute timer (`GSEA_COMP_TIME_MS`) in release mode
-- R timing source: `system.time(...)["elapsed"]` around `fgsea` calls
-- R multicore modes: `BiocParallel::MulticoreParam(workers=16|32)` passed as `BPPARAM`
-
-Headline results:
-
-| Workload | Rust | R fgsea | Result |
-| :--- | ---: | ---: | :--- |
-| Multilevel, small, 1 worker | 2 ms | 42 ms | Rust `21.0x` faster |
-| Multilevel, large, 16 workers | 105 ms | 977 ms | Rust `9.3x` faster |
-| Simple, small, 1 worker | 720 ms | 2597 ms | Rust `3.6x` faster |
-| Simple, large, 16 workers | 674 ms | 798 ms | Rust `1.18x` faster |
-
-- Large multilevel workloads show the strongest CPU scaling in the current parity-preserving path.
-- Small workloads are overhead-dominated and do not benefit much from more threads.
-- On the committed muscle-comparison real-data validation workload, Rust used
-  `81 MB` peak RSS versus R `fgseaMultilevel` at `329 MB` peak RSS, about
-  `4.1x` lower memory, while running `0.21 s` versus `2.56 s`.
-- Full benchmark matrices and thread-scaling tables are in [`docs/reproducibility.md`](./docs/reproducibility.md).
+The current machine-readable Blitz audit is
+[`docs/evidence/blitz-latest.json`](./docs/evidence/blitz-latest.json).
 
 ## Precision vs R
 
@@ -438,7 +359,16 @@ This section describes the CPU parity path. GPU parity is materially looser at p
 
 ### Blitz Reference
 
-The blitz compatibility target is `blitzgsea 1.3.54` in the pinned local reference stack: NumPy `2.4.0`, SciPy `1.16.3`, statsmodels `0.14.6`, pandas `2.3.3`, and mpmath `1.4.1`, with `PYTHONHASHSEED=0`. Committed synthetic, edgecase, and publication fixtures require exact parsed equality for ordering, ES, NES, p-value, FDR, size, and leading edge. On the larger `lung_vs_muscle` positive DESeq2 + GO BP stress case, full-precision finite max absolute diffs are ES `4.441e-16`, NES `3.331e-15`, p-value `1.776e-15`, and FDR `2.665e-15`; leading-edge sets match for all 5,324 pathways, with 36 order-only differences. The previous `2.287e-7` NES maximum was dominated by one deep-tail compatibility outlier; removing it made that maximum about 69 million times smaller. This is a compatibility result: the extreme-tail path deliberately matches the finite-precision arithmetic reported by that pinned blitzgsea/mpmath stack rather than claiming a more accurate mathematical tail.
+The compatibility target is `blitzgsea 1.3.54` under Python `3.12.9`, NumPy
+`2.5.1`, SciPy `1.18.0`, pandas `3.0.3`, statsmodels `0.14.6`, and mpmath
+`1.4.1`; `reference/blitz/uv.lock` fixes the complete environment. On the
+63,904-rank, 5,324-result `lung_vs_muscle + GO BP` audit, finite maximum
+absolute differences are ES `4.441e-16`, NES `3.331e-15`, p-value
+`1.776e-15`, and FDR `2.665e-15`. All pathway sizes and leading-edge sets
+match; 36 leading edges differ only in ordering. Retargeting SciPy 1.18's
+de Boor-weight interpolation reduced the pre-change NES maximum from
+`1.508e-8` by about 4.53 million×. These are reference-compatibility results,
+not claims of greater mathematical truth in extreme tails.
 
 ### GPU Accuracy vs R
 

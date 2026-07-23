@@ -47,18 +47,22 @@ fgsea(
 
 \item{stats}{Named numeric vector of preranked statistics, or a path to a ranked-list file.}
 
-\item{nPermSimple}{Integer permutation count for the simple screening stage.
-For CPU/GPU or R/GPU comparisons, prefer \code{100000L} as a practical baseline;
+\item{nPermSimple}{Integer permutation count for the simple screening stage;
+in Blitz mode, the number of null permutations per calibration anchor. For
+CPU/GPU or R/GPU comparisons, prefer \code{100000L} as a practical baseline;
 use \code{10000L} only as a smoke tier and \code{1000000L} for final tail/stress
 checks when runtime allows.}
 
-\item{seed}{Optional integer RNG seed. \code{NULL} uses a fresh random seed.}
+\item{seed}{Optional integer RNG seed. \code{NULL} uses a fresh seed outside Blitz
+mode and deterministic seed \code{0} in Blitz mode.}
 
-\item{nproc}{Number of worker threads. \code{0} keeps the default Rayon behavior.}
+\item{nproc}{Number of workers. \code{0} keeps the default Rayon behavior outside
+Blitz mode and uses four calibration workers in Blitz mode.}
 
-\item{minSize}{Minimum pathway size. Defaults to 1, or 5 in blitz mode.}
+\item{minSize}{Minimum pathway size. Defaults to \code{1}, or \code{5} in Blitz mode.}
 
-\item{maxSize}{Maximum pathway size. Defaults to \code{length(stats) - 1}.}
+\item{maxSize}{Maximum pathway size. Defaults to \code{length(stats) - 1}, or
+\code{4000} in Blitz mode.}
 
 \item{eps}{Multilevel epsilon parameter.}
 
@@ -66,9 +70,11 @@ checks when runtime allows.}
 
 \item{gseaParam}{Weighting exponent.}
 
-\item{mode}{One of \code{"fgsea"}, \code{"simple"}, \code{"multilevel"}, \code{"blitz"}.}
+\item{mode}{One of \code{"fgsea"}, \code{"simple"}, \code{"multilevel"}, \code{"blitz"}.
+Blitz mode targets compatibility with \verb{blitzgsea 1.3.54}.}
 
-\item{nperm}{Optional fixed-permutation override for wrapper mode.}
+\item{nperm}{Optional fixed-permutation override for classic wrapper mode;
+unsupported in Blitz mode.}
 
 \item{sampleSize}{Multilevel sample size.}
 
@@ -113,13 +119,13 @@ that use it.}
 \code{"abs_mean"}.}
 
 \item{output}{Optional TSV output path. When set, results are also written in
-the same column shape as the CLI.}
+the CLI column shape with round-trip-safe numeric text; decimal width is
+not fixed.}
 
 \item{gpu}{Logical flag mirroring the CLI \code{--gpu} switch. Uses the same
 hybrid GPU path as the Rust CLI and currently supports only \code{mode = "fgsea"}.
 On WSL2, if CUDA is visible but WebGPU selects \code{llvmpipe}, start R with
-\code{GALLIUM_DRIVER=d3d12} and
-\code{MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA}.}
+\code{GALLIUM_DRIVER=d3d12} and \code{MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA}.}
 
 \item{blitz.anchors}{Number of blitz calibration anchors.}
 
@@ -127,9 +133,13 @@ On WSL2, if CUDA is visible but WebGPU selects \code{llvmpipe}, start R with
 
 \item{blitz.center}{Center signature values before blitz scoring.}
 
-\item{blitz.accuracy}{Blitz normal-tail accuracy setting for parity metadata.}
+\item{blitz.accuracy}{Upstream-compatible normal-tail setting, currently
+retained for interface parity and not used to alter the native normal-tail
+calculation.}
 
-\item{blitz.deep.accuracy}{Blitz deep-tail accuracy setting for parity metadata.}
+\item{blitz.deep.accuracy}{Decimal precision used by the high-precision gamma
+fallback for extreme Blitz tails. Changing it can change extreme-tail
+p-values and NES.}
 
 \item{blitz.signature.cache}{Reuse blitz null-model fits for repeated calls
 with the same preprocessed signature and calibration settings in this R

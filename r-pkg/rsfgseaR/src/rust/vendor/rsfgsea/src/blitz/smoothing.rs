@@ -24,11 +24,12 @@ impl LinearInterp {
             return self.y[0];
         }
 
-        // Match scipy.interpolate.interp1d's linear call path: search for the
-        // upper neighbor, clip it to [1, n - 1], compute the slope first, and
-        // then multiply by the query offset. The operation order matters by a
-        // few ulps and can be amplified substantially by the inverse-normal
-        // transform in extreme Blitz tails.
+        // Match SciPy 1.18's interp1d linear call path: search for the upper
+        // neighbor, clip it to [1, n - 1], then evaluate the two de Boor
+        // weights independently. Keep the divisions and operand order as
+        // written: a reciprocal or slope rewrite changes a few ulps, which
+        // can be amplified substantially by the inverse-normal transform in
+        // extreme Blitz tails.
         let upper = match self
             .x
             .binary_search_by(|probe| probe.partial_cmp(&xq).unwrap())
@@ -43,8 +44,10 @@ impl LinearInterp {
         if x1 == x0 {
             y0
         } else {
-            let slope = (y1 - y0) / (x1 - x0);
-            slope * (xq - x0) + y0
+            let denominator = x1 - x0;
+            let upper_weight = (xq - x0) / denominator;
+            let lower_weight = (x1 - xq) / denominator;
+            upper_weight * y1 + lower_weight * y0
         }
     }
 }
@@ -161,11 +164,11 @@ mod tests {
         let scipy_reference = [
             (-2.0, 13_835_733_595_226_269_286),
             (1.0, 4_591_870_180_066_957_722),
-            (2.0, 4_606_281_698_874_543_308),
+            (2.0, 4_606_281_698_874_543_309),
             (3.0, 4_610_334_938_539_176_755),
             (5.0, 4_604_930_618_986_332_160),
-            (7.0, 13_819_745_816_549_104_024),
-            (9.0, 13_831_229_995_598_898_789),
+            (7.0, 13_819_745_816_549_104_026),
+            (9.0, 13_831_229_995_598_898_790),
         ];
         for (query, expected_bits) in scipy_reference {
             assert_eq!(interp.at(query).to_bits(), expected_bits, "query={query}");

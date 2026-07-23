@@ -33,6 +33,31 @@ test_that("fgsea supports CLI-style file inputs and output", {
   expect_true(file.exists(out_path))
   written <- read.delim(out_path, sep = "\t", check.names = FALSE)
   expect_true(all(c("pathway", "size", "es", "nes", "pval", "padj", "log2err", "leading_edge") %in% names(written)))
+  for (column in c("es", "nes", "pval", "padj")) {
+    expect_equal(written[[column]], res[[column]], tolerance = 0)
+  }
+})
+
+test_that("TSV output preserves binary64 values exactly", {
+  out_path <- tempfile(fileext = ".tsv")
+  values <- c(0.1, pi, .Machine$double.eps, .Machine$double.xmin, .Machine$double.xmax)
+  result <- data.frame(
+    pathway = paste0("PW_", seq_along(values)),
+    size = seq_along(values),
+    es = values,
+    nes = -values,
+    pval = values,
+    padj = values,
+    log2err = values
+  )
+  result$leadingEdge <- I(lapply(result$pathway, function(pathway) pathway))
+
+  rsfgseaR:::.write_results_tsv(result, out_path)
+  written <- read.delim(out_path, sep = "\t", check.names = FALSE)
+
+  for (column in c("es", "nes", "pval", "padj", "log2err")) {
+    expect_identical(written[[column]], result[[column]])
+  }
 })
 
 test_that("fgseaSimple and fgseaMultilevel run", {

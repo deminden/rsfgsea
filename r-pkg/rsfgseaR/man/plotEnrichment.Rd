@@ -11,7 +11,7 @@ plotEnrichment(
   pathwayName = "pathway",
   scoreType = "std",
   gseaParam = 1,
-  width_inches = 3.0,
+  width_inches = 3,
   height_inches = 2.2,
   dpi = 300L,
   transparent_background = FALSE,
@@ -45,5 +45,5 @@ plotEnrichment(
 Invisibly returns \code{output}.
 }
 \description{
-Write a single-pathway enrichment plot as PNG.
+Write a single-pathway enrichment plot as PNG
 }

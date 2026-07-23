@@ -12,41 +12,41 @@ The main validation layers are:
 
 ## Scripts Overview
 
-[`scripts/extract_mapping.R`](/home/den/bio/rsfgsea/scripts/extract_mapping.R)
+[`scripts/extract_mapping.R`](../scripts/extract_mapping.R)
 
 - exports gene mapping JSON files from an `.rda` source
 - use it when local data-prep scripts need mapping files regenerated
 
-[`scripts/prepare_data.py`](/home/den/bio/rsfgsea/scripts/prepare_data.py)
+[`scripts/prepare_data.py`](../scripts/prepare_data.py)
 
 - builds ranked lists from bladder correlation data
 - output goes to `crates/rsfgsea/tests/data/muscle_comparison`
 
-[`scripts/prepare_muscle_data.py`](/home/den/bio/rsfgsea/scripts/prepare_muscle_data.py)
+[`scripts/prepare_muscle_data.py`](../scripts/prepare_muscle_data.py)
 
 - computes per-gene Spearman correlations from muscle expression data
 - emits ranked lists into `crates/rsfgsea/tests/data/muscle_comparison`
 
-[`scripts/run_fgsea_comparison.R`](/home/den/bio/rsfgsea/scripts/run_fgsea_comparison.R)
+[`scripts/run_fgsea_comparison.R`](../scripts/run_fgsea_comparison.R)
 
 - runs R `fgsea` over the generated ranked lists
 - writes a combined R reference result table
 
-[`scripts/test_single_gene.R`](/home/den/bio/rsfgsea/scripts/test_single_gene.R)
+[`scripts/test_single_gene.R`](../scripts/test_single_gene.R)
 
 - quick manual R-side sanity check for one ranked list
 - useful when debugging overlap or pathway-loading issues
 
-[`scripts/generate_blitz_large_reference.py`](/home/den/bio/rsfgsea/scripts/generate_blitz_large_reference.py)
+[`scripts/generate_blitz_large_reference.py`](../scripts/generate_blitz_large_reference.py)
 
 - generates repeated full-precision `blitzgsea 1.3.54` results and optional fixed-schedule traces
 - validates the pinned Python package/thread environment and repeated output hashes
 
-[`scripts/compare_blitz_precision.py`](/home/den/bio/rsfgsea/scripts/compare_blitz_precision.py)
+[`scripts/compare_blitz_precision.py`](../scripts/compare_blitz_precision.py)
 
 - compares full-precision Blitz outputs by absolute error, ULP distance, finite class, ordering, size, and leading edge
 
-[`scripts/bench_blitz_ab.py`](/home/den/bio/rsfgsea/scripts/bench_blitz_ab.py)
+[`scripts/bench_blitz_ab.py`](../scripts/bench_blitz_ab.py)
 
 - runs a CPU-pinned, paired, alternating baseline/candidate Blitz benchmark
 - records raw timings, hashes, bootstrap intervals, and a strict acceptance gate
@@ -124,9 +124,9 @@ scripts/bench_blitz_ab.py \
   --baseline-bin target/release/rsfgsea-baseline \
   --candidate-bin target/release/rsfgsea-candidate \
   --reps 30 \
-  --warmups 1 \
+  --warmups 2 \
   --cpu-list 8,10,12,14 \
-  --bootstrap-resamples 100000 \
+  --bootstrap-resamples 200000 \
   --equivalence-margin-pct 1 \
   --output data/derived/blitz_precision/lung_vs_muscle_go_bp/speed_ab.json
 ```
@@ -135,23 +135,16 @@ The gate requires the candidate/baseline geometric-mean ratio to be at most
 `1.0` and the 95% upper confidence bound to be at most `1.01`, for both core
 compute time and end-to-end wall time. It also reports within-binary output
 determinism and exits nonzero if the combined acceptance gate fails. The
-current 30-pair full-cold result passed: compute ratio
-`0.98362` (change `-1.638%`, 95% CI `-2.997%` to `-0.263%`) and wall ratio
-`0.98384` (change `-1.616%`, 95% CI `-2.958%` to `-0.257%`). Every measured
-output hash was deterministic within its binary. The interval is entirely on
-the faster side for this workload, so the result establishes no speed loss and
-supports a small local speedup; it is not a general cross-machine speed claim.
+current 30-pair full-cold result against commit `3aeb6ba` passed: compute ratio
+`0.99324` (change `-0.676%`, 95% ratio CI `0.97925–1.00735`) and wall ratio
+`0.99949` (change `-0.051%`, 95% ratio CI `0.99408–1.00480`). Every measured
+output hash was deterministic within its binary. This establishes no speed
+loss under the declared 1% equivalence gate on this machine; it is not a
+general cross-machine speed claim.
 
-Latest local single-run snapshot on `lung_vs_muscle + GO BP`:
-
-| Metric | Value |
-| :--- | ---: |
-| Native Rust blitz compute before speed pass | `~22.2 s` |
-| Native Rust blitz compute after speed pass | `9.61 s` |
-| Native Rust blitz in-process warm cache | `~4.03 s` |
-| Python blitzgsea cold | `15.61 s` |
-| Python blitzgsea warm cache | `3.56 s` |
-| Rust speedup vs previous native cold compute | `2.31x` |
+The three canonical Python reference runs took `15.650 s`, `16.335 s`, and
+`15.469 s`. Those values document reference-generation cost only; the paired
+Rust gate above is the acceptance evidence for this implementation change.
 
 Native blitz also has an in-process null-model cache for repeated identical
 library calls. The CLI leaves it off by default because one-shot subprocess runs
@@ -164,20 +157,23 @@ For local workstation builds, `target-cpu=native` is worth testing:
 RUSTFLAGS="-C target-cpu=native" cargo build --release -p rsfgsea
 ```
 
-On the AMD Ryzen 7950X3D reference machine, this was a clear local blitz win in
-a two-run screen (`~9.10 s` native CPU build vs `~9.36-9.63 s` portable release
-builds, depending on the source baseline). Keep this out of portable release
-artifacts unless you intentionally want a binary specialized to the build host.
+Keep `target-cpu=native` builds out of portable release artifacts unless you
+intentionally want a binary specialized to the build host. Rebenchmark them
+with the paired gate rather than relying on an older single-run screen.
 
-Generate the pinned full-precision Python reference and optional fixed-schedule
-trace with:
+The canonical reference environment is locked by
+[`reference/blitz/uv.lock`](../reference/blitz/uv.lock): Python `3.12.9`,
+blitzgsea `1.3.54`, NumPy `2.5.1`, SciPy `1.18.0`, pandas `3.0.3`,
+statsmodels `0.14.6`, and mpmath `1.4.1`. Generate the full-precision reference
+and optional fixed-schedule trace with:
 
 ```bash
 PYTHONHASHSEED=0 \
 OMP_NUM_THREADS=1 \
 OPENBLAS_NUM_THREADS=1 \
 MKL_NUM_THREADS=1 \
-scripts/generate_blitz_large_reference.py \
+uv run --project reference/blitz --frozen \
+  python scripts/generate_blitz_large_reference.py \
   --reps 3 \
   --fixed-schedule-trace
 ```
@@ -200,16 +196,18 @@ pathways, of which 5,324 were scored. Input SHA-256 values were
 `54d7e5b11c6ccdffc3dc289ed8f4cfc8e11594d093fe0050cf4e587400bb794f`
 for the ranks and
 `0fc02458765cfce6c9348dce9f7a9397c6caf7c09ba318f468135d7ac60342ee`
-for the GMT; all three standard Python runs produced
-`b49c76729684dfb15129678bce13b7394c583a4bf5ee16145012310625269907`.
+for the GMT; all three canonical four-process Python runs produced
+`8216f5197730653e59dd98b4f3af29b4637e7b53ae560f58a2be06f8c541da69`.
 
 The current comparison reports 5,324 shared pathways, no size or leading-edge
 set mismatches, and finite maximum absolute differences of ES `4.441e-16`, NES
-`3.331e-15`, p-value `1.776e-15`, and FDR `2.665e-15`. The former maximum NES
-difference was `2.287e-7` (about 69 million times larger). This is specifically
-Blitz reference parity: extreme-tail context rounding follows the pinned
-upstream finite-precision result and is not presented as improved mathematical
-truth.
+`3.331e-15`, p-value `1.776e-15`, and FDR `2.665e-15`. Updating the interpolation
+operation order to SciPy 1.18's stable de Boor weights reduced the immediate
+pre-change NES maximum of `1.508e-8` by about 4.53 million× and the FDR maximum
+by about 3.19×. This is specifically Blitz reference parity: extreme-tail
+context rounding follows the locked upstream finite-precision result and is
+not presented as improved mathematical truth. The exact current audit is
+[`docs/evidence/blitz-latest.json`](./evidence/blitz-latest.json).
 
 ### R fgsea Comparison Benchmark
 

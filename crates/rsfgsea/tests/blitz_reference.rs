@@ -17,7 +17,7 @@ struct BlitzExpected {
 }
 
 #[test]
-fn blitz_reference_fixture_tracks_conda_stack() {
+fn blitz_reference_fixture_tracks_locked_stack() {
     assert_blitz_fixture(
         "synthetic",
         read_ranked_list("tests/data/blitz_reference/synthetic.rnk").unwrap(),
@@ -25,7 +25,7 @@ fn blitz_reference_fixture_tracks_conda_stack() {
 }
 
 #[test]
-fn blitz_edgecase_fixture_tracks_conda_stack() {
+fn blitz_edgecase_fixture_tracks_locked_stack() {
     assert_blitz_fixture(
         "edgecases",
         read_ranked_list_allowing_duplicates("tests/data/blitz_reference/edgecases.rnk"),
@@ -33,7 +33,7 @@ fn blitz_edgecase_fixture_tracks_conda_stack() {
 }
 
 #[test]
-fn blitz_publication_fixture_tracks_conda_stack() {
+fn blitz_publication_fixture_tracks_locked_stack() {
     assert_blitz_fixture(
         "publication_fgsea",
         read_ranked_list("tests/data/blitz_reference/publication_fgsea.rnk").unwrap(),

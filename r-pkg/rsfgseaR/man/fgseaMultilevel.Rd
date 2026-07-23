@@ -46,13 +46,13 @@ checks when runtime allows.}
 
 \item{sampleSize}{Multilevel sample size.}
 
-\item{output}{Optional TSV output path in CLI-style tabular format.}
+\item{output}{Optional TSV output path in CLI-style tabular format with
+round-trip-safe numeric text and no fixed decimal width.}
 
 \item{gpu}{Logical flag mirroring the CLI \code{--gpu} switch. GPU execution
 currently supports only \code{mode = "fgsea"}, so \code{fgseaMultilevel()} will reject it.
 On WSL2, if CUDA is visible but WebGPU selects \code{llvmpipe}, start R with
-\code{GALLIUM_DRIVER=d3d12} and
-\code{MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA}.}
+\code{GALLIUM_DRIVER=d3d12} and \code{MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA}.}
 }
 \value{
 A data frame with fgsea-style result columns.

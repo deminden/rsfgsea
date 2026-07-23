@@ -183,6 +183,15 @@ NULL
     character(1)
   )
   export$leadingEdge <- NULL
+
+  # Seventeen significant decimal digits are sufficient to recover every
+  # binary64 value exactly. Convert doubles before write.table(), whose default
+  # formatting otherwise follows the session's display precision.
+  double_columns <- vapply(export, is.double, logical(1))
+  export[double_columns] <- lapply(
+    export[double_columns],
+    function(values) sprintf("%.17g", values)
+  )
   utils::write.table(
     export,
     file = path,
@@ -477,19 +486,25 @@ plotGseaTable <- function(
 #'
 #' @param pathways Either a named list of character vectors or a path to a GMT file.
 #' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
-#' @param nPermSimple Integer permutation count for the simple screening stage.
-#'   For CPU/GPU or R/GPU comparisons, prefer `100000L` as a practical baseline;
+#' @param nPermSimple Integer permutation count for the simple screening stage;
+#'   in Blitz mode, the number of null permutations per calibration anchor. For
+#'   CPU/GPU or R/GPU comparisons, prefer `100000L` as a practical baseline;
 #'   use `10000L` only as a smoke tier and `1000000L` for final tail/stress
 #'   checks when runtime allows.
-#' @param seed Optional integer RNG seed. `NULL` uses a fresh random seed.
-#' @param nproc Number of worker threads. `0` keeps the default Rayon behavior.
-#' @param minSize Minimum pathway size.
-#' @param maxSize Maximum pathway size. Defaults to `length(stats) - 1`.
+#' @param seed Optional integer RNG seed. `NULL` uses a fresh seed outside Blitz
+#'   mode and deterministic seed `0` in Blitz mode.
+#' @param nproc Number of workers. `0` keeps the default Rayon behavior outside
+#'   Blitz mode and uses four calibration workers in Blitz mode.
+#' @param minSize Minimum pathway size. Defaults to `1`, or `5` in Blitz mode.
+#' @param maxSize Maximum pathway size. Defaults to `length(stats) - 1`, or
+#'   `4000` in Blitz mode.
 #' @param eps Multilevel epsilon parameter.
 #' @param scoreType One of `"std"`, `"pos"`, `"neg"`.
 #' @param gseaParam Weighting exponent.
 #' @param mode One of `"fgsea"`, `"simple"`, `"multilevel"`, `"blitz"`.
-#' @param nperm Optional fixed-permutation override for wrapper mode.
+#'   Blitz mode targets compatibility with `blitzgsea 1.3.54`.
+#' @param nperm Optional fixed-permutation override for classic wrapper mode;
+#'   unsupported in Blitz mode.
 #' @param sampleSize Multilevel sample size.
 #' @param method One of `"classic"` or `"decor"`. The default preserves the
 #'   fgsea-compatible classic method.
@@ -518,7 +533,8 @@ plotGseaTable <- function(
 #' @param decor.redundancy Redundancy score definition, `"positive_mean"` or
 #'   `"abs_mean"`.
 #' @param output Optional TSV output path. When set, results are also written in
-#'   the same column shape as the CLI.
+#'   the CLI column shape with round-trip-safe numeric text; decimal width is
+#'   not fixed.
 #' @param gpu Logical flag mirroring the CLI `--gpu` switch. Uses the same
 #'   hybrid GPU path as the Rust CLI and currently supports only `mode = "fgsea"`.
 #'   On WSL2, if CUDA is visible but WebGPU selects `llvmpipe`, start R with
@@ -526,8 +542,12 @@ plotGseaTable <- function(
 #' @param blitz.anchors Number of blitz calibration anchors.
 #' @param blitz.symmetric Use one symmetric positive/negative blitz null fit.
 #' @param blitz.center Center signature values before blitz scoring.
-#' @param blitz.accuracy Blitz normal-tail accuracy setting for parity metadata.
-#' @param blitz.deep.accuracy Blitz deep-tail accuracy setting for parity metadata.
+#' @param blitz.accuracy Upstream-compatible normal-tail setting, currently
+#'   retained for interface parity and not used to alter the native normal-tail
+#'   calculation.
+#' @param blitz.deep.accuracy Decimal precision used by the high-precision gamma
+#'   fallback for extreme Blitz tails. Changing it can change extreme-tail
+#'   p-values and NES.
 #' @param blitz.signature.cache Reuse blitz null-model fits for repeated calls
 #'   with the same preprocessed signature and calibration settings in this R
 #'   process.
@@ -753,7 +773,8 @@ fgsea <- function(
 #' @param scoreType One of `"std"`, `"pos"`, `"neg"`.
 #' @param gseaParam Weighting exponent.
 #' @param sampleSize Multilevel sample size, kept for interface parity.
-#' @param output Optional TSV output path in CLI-style tabular format.
+#' @param output Optional TSV output path in CLI-style tabular format with
+#'   round-trip-safe numeric text and no fixed decimal width.
 #' @param gpu Logical flag mirroring the CLI `--gpu` switch. GPU execution
 #'   currently supports only `mode = "fgsea"`, so `fgseaSimple()` will reject it.
 #'   On WSL2, if CUDA is visible but WebGPU selects `llvmpipe`, start R with
@@ -812,7 +833,8 @@ fgseaSimple <- function(
 #' @param scoreType One of `"std"`, `"pos"`, `"neg"`.
 #' @param gseaParam Weighting exponent.
 #' @param sampleSize Multilevel sample size.
-#' @param output Optional TSV output path in CLI-style tabular format.
+#' @param output Optional TSV output path in CLI-style tabular format with
+#'   round-trip-safe numeric text and no fixed decimal width.
 #' @param gpu Logical flag mirroring the CLI `--gpu` switch. GPU execution
 #'   currently supports only `mode = "fgsea"`, so `fgseaMultilevel()` will reject it.
 #'   On WSL2, if CUDA is visible but WebGPU selects `llvmpipe`, start R with

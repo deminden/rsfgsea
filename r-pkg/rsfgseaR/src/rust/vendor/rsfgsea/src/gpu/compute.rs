@@ -165,7 +165,7 @@ impl GpuEngine {
             .map_err(|e| anyhow::anyhow!("GPU poll failed: {e}"))?;
 
         pollster::block_on(receiver.receive()).unwrap().unwrap()?;
-        let data = slice.get_mapped_range();
+        let data = slice.get_mapped_range()?;
         let results: Vec<GpuResult> = cast_slice(&data).to_vec();
         drop(data);
         staging_buffer.unmap();

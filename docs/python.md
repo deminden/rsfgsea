@@ -175,8 +175,9 @@ This is the main point that confuses new users.
 
 `nPermSimple`
 
-- the normal simple-stage permutation count
+- the normal simple-stage permutation count outside Blitz mode
 - used by wrapper mode before any multilevel refinement
+- in Blitz mode, the null permutations per calibration anchor
 
 `nperm`
 

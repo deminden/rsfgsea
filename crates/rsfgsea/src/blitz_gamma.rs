@@ -1,4 +1,4 @@
-// SciPy 1.16.3/xsf compatibility for blitz gamma CDF.
+// SciPy/xsf compatibility for the Blitz gamma CDF.
 // Ported from scipy/xsf commit 33768a09623689efdf7bcaf0afa167341dda0758.
 
 #![allow(clippy::excessive_precision)]
@@ -890,7 +890,7 @@ const IGAM_ASYMP_COEFF_D: [[f64; IGAM_ASYMP_COEFF_N]; IGAM_ASYMP_COEFF_K] = [
     ],
 ];
 
-pub(crate) fn scipy_1_16_3_gammainc(a: f64, x: f64) -> f64 {
+pub(crate) fn scipy_gammainc(a: f64, x: f64) -> f64 {
     igam(a, x)
 }
 
@@ -1419,13 +1419,13 @@ mod tests {
             ("asymptotic_large", 250.0, 255.0, 0.6312601781833672),
         ];
         for (label, a, x, expected) in cases {
-            assert_bits(label, scipy_1_16_3_gammainc(a, x), expected);
+            assert_bits(label, scipy_gammainc(a, x), expected);
         }
-        assert!(scipy_1_16_3_gammainc(f64::NAN, 1.0).is_nan());
-        assert!(scipy_1_16_3_gammainc(1.0, f64::NAN).is_nan());
-        assert!(scipy_1_16_3_gammainc(f64::INFINITY, f64::INFINITY).is_nan());
-        assert_eq!(scipy_1_16_3_gammainc(f64::INFINITY, 5.0), 0.0);
-        assert_eq!(scipy_1_16_3_gammainc(5.0, f64::INFINITY), 1.0);
+        assert!(scipy_gammainc(f64::NAN, 1.0).is_nan());
+        assert!(scipy_gammainc(1.0, f64::NAN).is_nan());
+        assert!(scipy_gammainc(f64::INFINITY, f64::INFINITY).is_nan());
+        assert_eq!(scipy_gammainc(f64::INFINITY, 5.0), 0.0);
+        assert_eq!(scipy_gammainc(5.0, f64::INFINITY), 1.0);
     }
 
     #[test]
@@ -1453,7 +1453,7 @@ mod tests {
                 .unwrap_or_else(|err| panic!("failed to open {path}: {err}"));
             for row in reader.deserialize::<GammaTraceRow>() {
                 let row = row.unwrap();
-                let observed = scipy_1_16_3_gammainc(row.alpha, row.z);
+                let observed = scipy_gammainc(row.alpha, row.z);
                 assert_bits(
                     &format!("{prefix} {} raw_gamma_prob", row.pathway),
                     observed,

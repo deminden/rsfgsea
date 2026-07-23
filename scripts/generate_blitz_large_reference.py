@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
-import importlib.metadata as metadata
 import json
 import os
 import platform
@@ -23,20 +22,13 @@ import blitzgsea  # noqa: E402
 import pandas as pd  # noqa: E402
 
 import generate_blitz_reference as fixture  # noqa: E402
+from blitz_reference_env import validate_reference_environment  # noqa: E402
 
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_RANKS = ROOT / "data/deseq2_positive_ranks/lung_vs_muscle.rnk"
 DEFAULT_GMT = ROOT / "data/GO_Biological_Process_2025.gmt"
 DEFAULT_OUTPUT = ROOT / "data/derived/blitz_precision/lung_vs_muscle_go_bp"
-EXPECTED_VERSIONS = {
-    "blitzgsea": "1.3.54",
-    "numpy": "2.4.0",
-    "scipy": "1.16.3",
-    "statsmodels": "0.14.6",
-    "pandas": "2.3.3",
-    "mpmath": "1.4.1",
-}
 
 
 def parse_args() -> argparse.Namespace:
@@ -49,7 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--fixed-schedule-trace",
         action="store_true",
-        help="also generate deterministic anchor/model traces (about 45 seconds locally)",
+        help="also generate deterministic anchor/model traces",
     )
     return parser.parse_args()
 
@@ -62,28 +54,8 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def check_environment() -> dict[str, str]:
-    if os.environ.get("PYTHONHASHSEED") != "0":
-        raise SystemExit("Set PYTHONHASHSEED=0 before generating Blitz references")
-    thread_mismatches = {
-        variable: os.environ.get(variable)
-        for variable in ["OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"]
-        if os.environ.get(variable) != "1"
-    }
-    if thread_mismatches:
-        raise SystemExit(
-            "Set OMP_NUM_THREADS=OPENBLAS_NUM_THREADS=MKL_NUM_THREADS=1 "
-            f"before generating Blitz references; observed {thread_mismatches}"
-        )
-    observed = {package: metadata.version(package) for package in EXPECTED_VERSIONS}
-    mismatches = {
-        package: {"expected": EXPECTED_VERSIONS[package], "observed": version}
-        for package, version in observed.items()
-        if version != EXPECTED_VERSIONS[package]
-    }
-    if mismatches:
-        raise SystemExit(f"pinned reference environment mismatch: {mismatches}")
-    return observed
+def check_environment() -> dict[str, object]:
+    return validate_reference_environment(ROOT)
 
 
 def read_inputs(ranks_path: Path, gmt_path: Path) -> tuple[pd.DataFrame, dict[str, list[str]]]:
@@ -158,7 +130,7 @@ def main() -> None:
     for path in [args.ranks, args.gmt]:
         if not path.exists():
             raise SystemExit(f"input not found: {path}")
-    versions = check_environment()
+    reference_environment = check_environment()
     args.output_dir.mkdir(parents=True, exist_ok=True)
     signature, library = read_inputs(args.ranks, args.gmt)
 
@@ -201,7 +173,8 @@ def main() -> None:
             variable: os.environ.get(variable)
             for variable in ["OMP_NUM_THREADS", "OPENBLAS_NUM_THREADS", "MKL_NUM_THREADS"]
         },
-        "versions": versions,
+        "reference_environment": reference_environment,
+        "versions": reference_environment["packages"],
         "inputs": {
             "ranks": str(args.ranks.resolve()),
             "ranks_sha256": sha256(args.ranks),

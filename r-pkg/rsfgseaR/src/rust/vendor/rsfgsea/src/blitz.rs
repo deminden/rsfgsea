@@ -1665,7 +1665,7 @@ fn gamma_cdf(x: f64, alpha: f64, beta: f64) -> f64 {
     if !x.is_finite() || !alpha.is_finite() || !beta.is_finite() || alpha <= 0.0 || beta <= 0.0 {
         return f64::NAN;
     }
-    crate::blitz_gamma::scipy_1_16_3_gammainc(alpha, x / beta)
+    crate::blitz_gamma::scipy_gammainc(alpha, x / beta)
 }
 
 #[allow(clippy::manual_range_contains)]

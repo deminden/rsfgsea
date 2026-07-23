@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Generate small blitzgsea 1.3.54 reference fixtures.
+"""Generate small locked-stack blitzgsea 1.3.54 reference fixtures.
 
-Run with the pinned/local reference stack and PYTHONHASHSEED=0, for example:
+Run with the frozen reference project, for example:
 
-    PYTHONHASHSEED=0 /home/den/miniforge3/bin/python scripts/generate_blitz_reference.py
+    PYTHONHASHSEED=0 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
+    MKL_NUM_THREADS=1 uv run --project reference/blitz --frozen \
+    python scripts/generate_blitz_reference.py
 """
 
 from __future__ import annotations
 
-import importlib.metadata as metadata
 import json
-import os
 import random
 from pathlib import Path
 from typing import Iterable
@@ -22,42 +22,21 @@ import pandas as pd
 from scipy.stats import gamma
 from statsmodels.stats.multitest import multipletests
 
+from blitz_reference_env import validate_reference_environment
+
 
 def _estimate_anchor_trace_star(args):
     set_size = args[3]
     return set_size, blitzgsea.estimate_anchor(*args)
 
 
-EXPECTED = {
-    "blitzgsea": "1.3.54",
-    "numpy": "2.4.0",
-    "scipy": "1.16.3",
-    "statsmodels": "0.14.6",
-    "pandas": "2.3.3",
-    "mpmath": "1.4.1",
-}
-
-OUT = Path("crates/rsfgsea/tests/data/blitz_reference")
+ROOT = Path(__file__).resolve().parents[1]
+OUT = ROOT / "crates" / "rsfgsea" / "tests" / "data" / "blitz_reference"
 TAIL_TRACE = OUT / "tail_fallback.trace_gamma.tsv"
 
 
-def check_environment() -> dict[str, str]:
-    if os.environ.get("PYTHONHASHSEED") != "0":
-        raise SystemExit("Set PYTHONHASHSEED=0 before generating blitz fixtures.")
-
-    observed = {pkg: metadata.version(pkg) for pkg in EXPECTED}
-    mismatches = {
-        pkg: (EXPECTED[pkg], observed[pkg])
-        for pkg in EXPECTED
-        if observed[pkg] != EXPECTED[pkg]
-    }
-    if mismatches:
-        details = ", ".join(
-            f"{pkg}: expected {expected}, observed {actual}"
-            for pkg, (expected, actual) in mismatches.items()
-        )
-        raise SystemExit(f"Reference environment mismatch: {details}")
-    return observed
+def check_environment() -> dict[str, object]:
+    return validate_reference_environment(ROOT)
 
 
 def build_inputs() -> tuple[pd.DataFrame, dict[str, Iterable[str]], list[str], np.ndarray]:

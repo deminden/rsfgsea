@@ -445,9 +445,7 @@ pub fn write_enrichment_plot_png<P: AsRef<Path>>(
         RED,
     );
 
-    for window in plot.running_score.windows(2) {
-        let (x0, y0) = window[0];
-        let (x1, y1) = window[1];
+    for &[(x0, y0), (x1, y1)] in plot.running_score.array_windows::<2>() {
         draw_thick_line_segment(
             &mut img,
             (map_x(x0), map_y(y0)),

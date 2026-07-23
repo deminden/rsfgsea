@@ -18,10 +18,12 @@ jobs:
       url: https://crates.io/crates/rsfgsea
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Rust
-        uses: dtolnay/rust-toolchain@1.96.0
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.97.1
 
       - name: Verify crate can be published
         run: cargo publish -p rsfgsea --locked --dry-run

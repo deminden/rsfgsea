@@ -372,8 +372,14 @@ impl NumpyMt19937 {
         y
     }
 
+    #[cfg(test)]
     fn random_interval(&mut self, max: usize) -> usize {
         let mask = (max + 1).next_power_of_two() as u32 - 1;
+        self.random_interval_with_mask(max, mask)
+    }
+
+    #[inline(always)]
+    fn random_interval_with_mask(&mut self, max: usize, mask: u32) -> usize {
         loop {
             let value = self.next_u32() & mask;
             if value <= max as u32 {
@@ -400,8 +406,12 @@ impl NumpyMt19937 {
         values: &'a mut Vec<usize>,
     ) -> &'a [usize] {
         fill_usize_sequence(values, n);
+        let mut mask = n.next_power_of_two() as u32 - 1;
         for i in (1..n).rev() {
-            let j = self.random_interval(i);
+            if i == (mask >> 1) as usize {
+                mask = i as u32;
+            }
+            let j = self.random_interval_with_mask(i, mask);
             swap_indices(values, i, j);
         }
         values.truncate(k);
@@ -416,8 +426,12 @@ impl NumpyMt19937 {
     ) -> &'a [u32] {
         fill_u32_sequence(values, n);
         let n = values.len();
+        let mut mask = n.next_power_of_two() as u32 - 1;
         for i in (1..n).rev() {
-            let j = self.random_interval(i);
+            if i == (mask >> 1) as usize {
+                mask = i as u32;
+            }
+            let j = self.random_interval_with_mask(i, mask);
             swap_indices(values, i, j);
         }
         values.truncate(k);

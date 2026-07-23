@@ -19,7 +19,7 @@ struct Args {
     #[arg(short, long)]
     gmt: PathBuf,
 
-    /// Number of permutations in simple fgsea stage
+    /// Simple-stage permutations, or null permutations per Blitz calibration anchor
     #[arg(short = 'n', long = "nPermSimple", default_value_t = 1000)]
     n_perm_simple: usize,
 
@@ -27,7 +27,7 @@ struct Args {
     #[arg(long = "nperm")]
     nperm: Option<usize>,
 
-    /// Random seed. Omit to generate a fresh seed for each run.
+    /// Random seed. Omit for a fresh non-Blitz seed; Blitz defaults to deterministic seed 0.
     #[arg(short, long)]
     seed: Option<u64>,
 
@@ -39,7 +39,7 @@ struct Args {
     #[arg(long = "minSize", visible_alias = "min-size")]
     min_size: Option<usize>,
 
-    /// Maximal size of a gene set to test (defaults to ranks length - 1)
+    /// Maximal gene-set size (defaults to ranks length - 1, or 4000 in Blitz mode)
     #[arg(long = "maxSize")]
     max_size: Option<usize>,
 
@@ -130,7 +130,7 @@ struct Args {
     )]
     gsea_param: f64,
 
-    /// Execution mode: fgsea (wrapper semantics), multilevel, or simple
+    /// Execution mode: fgsea (wrapper semantics), multilevel, simple, or blitz
     #[arg(long, value_enum, default_value_t = CliMode::Fgsea)]
     mode: CliMode,
 
@@ -150,11 +150,11 @@ struct Args {
     #[arg(long = "blitz-signature-cache")]
     blitz_signature_cache: bool,
 
-    /// Blitz normal-tail accuracy setting, kept for parity metadata
+    /// Upstream-compatible Blitz normal-tail setting; currently interface-only
     #[arg(long = "blitz-accuracy", default_value_t = 40)]
     blitz_accuracy: usize,
 
-    /// Blitz deep-tail accuracy setting, kept for parity metadata
+    /// Decimal precision for the high-precision fallback used by extreme Blitz tails
     #[arg(long = "blitz-deep-accuracy", default_value_t = 50)]
     blitz_deep_accuracy: usize,
 
@@ -224,7 +224,7 @@ struct Args {
     #[arg(long = "decor-expression-has-header", default_value_t = true)]
     decor_expression_has_header: bool,
 
-    /// Number of workers (0 = default threadpool behavior)
+    /// Workers (0 = default Rayon behavior, or 4 Blitz calibration workers)
     #[arg(long, default_value_t = 0)]
     nproc: usize,
 

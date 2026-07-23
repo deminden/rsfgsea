@@ -4,9 +4,11 @@ Python bindings for `rsfgsea`, a Rust implementation of preranked gene set enric
 
 ## What It Exposes
 
-The package currently exposes one public entrypoint:
+The package exposes three public entrypoints:
 
 - `run_gsea_py(...)`
+- `write_enrichment_plot_png_py(...)`
+- `write_gsea_table_plot_png_py(...)`
 
 The API intentionally keeps fgsea-style parameter names while exposing decor first, classic fgsea-compatible modes second, and native blitz third:
 
@@ -54,19 +56,10 @@ maturin develop --release
 
 - path to a GMT file
 
-## Performance Snapshot
+## Performance and Precision
 
 The Python package calls the same Rust backend as the CLI and R wrapper.
-Current local benchmark snapshots from the main repository, measured on an AMD
-Ryzen 7950X3D:
-
-- representative Criterion benchmark, simple: `2.282 s` for 10k genes, 1k pathways, 10k permutations
-- representative Criterion benchmark, multilevel: `3.438 s` for 10k genes, 1k pathways, `nPermSimple=1000`
-- file-backed comparison, multilevel large workload, 16 workers: Rust `105 ms` vs R `977 ms` (`9.3x` faster)
-- file-backed comparison, simple large workload, 16 workers: Rust `674 ms` vs R `798 ms` (`1.18x` faster)
-- real muscle-comparison validation workload: Rust `81 MB` peak RSS vs R `329 MB` peak RSS (`4.1x` lower)
-
-Full benchmark setup, thread-scaling tables, and parity notes are in:
+Current benchmark protocols, results, and Blitz precision evidence are owned by:
 
 - https://github.com/deminden/rsfgsea/blob/main/docs/reproducibility.md
 
@@ -260,7 +253,7 @@ For older builds or adapter debugging, also try `WGPU_BACKEND=gl` and
 
 ## Supported Python Versions
 
-The package metadata currently targets Python 3.8 and newer.
+The package metadata targets Python 3.10 and newer.
 
 ## Project Links
 
