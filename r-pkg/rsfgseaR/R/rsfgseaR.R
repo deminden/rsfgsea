@@ -184,13 +184,14 @@ NULL
   )
   export$leadingEdge <- NULL
 
-  # Seventeen significant decimal digits are sufficient to recover every
-  # binary64 value exactly. Convert doubles before write.table(), whose default
-  # formatting otherwise follows the session's display precision.
+  # Convert doubles before write.table(), whose default formatting otherwise
+  # follows the session's display precision. Although 17 significant digits
+  # uniquely identify a binary64 value, extra guard digits avoid platform
+  # strtod edge cases at DBL_MIN and DBL_MAX (notably on macOS).
   double_columns <- vapply(export, is.double, logical(1))
   export[double_columns] <- lapply(
     export[double_columns],
-    function(values) sprintf("%.17g", values)
+    function(values) sprintf("%.21g", values)
   )
   utils::write.table(
     export,
