@@ -200,8 +200,8 @@ for the GMT; all three canonical four-process Python runs produced
 `8216f5197730653e59dd98b4f3af29b4637e7b53ae560f58a2be06f8c541da69`.
 
 The current comparison reports 5,324 shared pathways, no size or leading-edge
-set mismatches, and finite maximum absolute differences of ES `4.441e-16`, NES
-`3.331e-15`, p-value `1.776e-15`, and FDR `2.665e-15`. Updating the interpolation
+set mismatches, and finite maximum absolute differences of ES `4.4e-16`, NES
+`3.3e-15`, p-value `1.8e-15`, and FDR `2.7e-15`. Updating the interpolation
 operation order to SciPy 1.18's stable de Boor weights reduced the immediate
 pre-change NES maximum of `1.508e-8` by about 4.53 million× and the FDR maximum
 by about 3.19×. This is specifically Blitz reference parity: extreme-tail
@@ -264,23 +264,27 @@ Additional Rust-only sweep across `1/2/4/8/16/32` workers, median of 3 runs afte
 
 ### CPU Parity vs R
 
-Examples-folder snapshot: `data/Folder_with_examples`, seed `42`, matched pathways `n=746` across `22` files.
+Classic multilevel and Blitz are now reported on the same large input:
+`data/deseq2_positive_ranks/lung_vs_muscle.rnk` (63,904 ranks) and
+`data/GO_Biological_Process_2025.gmt` (5,343 source pathways; 5,324 scored).
+The classic reference used R `4.4.3`, fgsea `1.37.2`, seed `42`,
+`nPermSimple=1000`, `sampleSize=101`, `minSize=5`, `maxSize=4000`,
+`eps=1e-10`, `scoreType="std"`, and `gseaParam=1`.
+The shared input makes the audit scales comparable, but each mode still targets
+its own reference implementation; the error maxima do not compare statistical
+quality between classic fgsea and Blitz.
 
-| Mode | Metric | Mean | Median | P95 | Max |
-| :--- | :--- | ---: | ---: | ---: | ---: |
-| Multilevel | `abs(ES)` | `2.535e-09` | `2.583e-09` | `4.723e-09` | `4.988e-09` |
-| Multilevel | `abs(NES)` | `2.555e-09` | `2.619e-09` | `4.707e-09` | `4.983e-09` |
-| Multilevel | `abs(pval)` | `2.543e-09` | `2.602e-09` | `4.745e-09` | `4.975e-09` |
-| Multilevel | `abs(padj)` | `2.607e-09` | `2.183e-09` | `4.542e-09` | `4.965e-09` |
-| Simple | `abs(ES)` | `2.535e-09` | `2.583e-09` | `4.723e-09` | `4.988e-09` |
-| Simple | `abs(NES)` | `2.555e-09` | `2.619e-09` | `4.707e-09` | `4.983e-09` |
-| Simple | `abs(pval)` | `2.534e-09` | `2.577e-09` | `4.745e-09` | `4.975e-09` |
-| Simple | `abs(padj)` | `2.605e-09` | `2.183e-09` | `4.542e-09` | `4.965e-09` |
+| Mode | Metric | Exact | Mean | Median | P95 | Max |
+| :--- | :--- | ---: | ---: | ---: | ---: | ---: |
+| Multilevel | `abs(ES)` | `5,324` | `0` | `0` | `0` | `0` |
+| Multilevel | `abs(NES)` | `5,324` | `0` | `0` | `0` | `0` |
+| Multilevel | `abs(pval)` | `3,809` | `4.1e-18` | `0` | `3.1e-17` | `8.3e-17` |
+| Multilevel | `abs(padj)` | `2,316` | `3.8e-17` | `5.2e-18` | `1.2e-16` | `2.8e-16` |
 
-Notes:
-
-- p-value NaN mismatch count was `0` in both modes on this run
-- current CPU parity path is thread-count invariant for fixed settings
+There were no missing pathways, size mismatches, leading-edge mismatches, or
+finite-class mismatches. Release outputs from one and 16 workers were
+byte-identical. The exact audit metadata is
+[`docs/evidence/classic-latest.json`](./evidence/classic-latest.json).
 
 ### GPU Parity vs R
 

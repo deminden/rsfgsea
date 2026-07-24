@@ -31,10 +31,15 @@ test_that("fgsea supports CLI-style file inputs and output", {
 
   expect_equal(nrow(res), 2L)
   expect_true(file.exists(out_path))
-  written <- read.delim(out_path, sep = "\t", check.names = FALSE)
+  written <- read.delim(
+    out_path,
+    sep = "\t",
+    check.names = FALSE,
+    colClasses = "character"
+  )
   expect_true(all(c("pathway", "size", "es", "nes", "pval", "padj", "log2err", "leading_edge") %in% names(written)))
   for (column in c("es", "nes", "pval", "padj")) {
-    expect_equal(written[[column]], res[[column]], tolerance = 0)
+    expect_identical(written[[column]], sprintf("%.17g", res[[column]]))
   }
 })
 

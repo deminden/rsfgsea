@@ -1,0 +1,70 @@
+{
+  "audit_date": "2026-07-24",
+  "reference": {
+    "r": "4.4.3",
+    "fgsea": "1.37.2",
+    "processes": 1,
+    "result_sha256": "0c02c576cba12afdb7576c8b401e5f8ed7248bd07dd7cd6157c5424ff0781c80"
+  },
+  "rsfgsea": {
+    "version": "0.4.0",
+    "profile": "release"
+  },
+  "workload": {
+    "rank_rows": 63904,
+    "source_pathways": 5343,
+    "scored_pathways": 5324,
+    "ranks_sha256": "54d7e5b11c6ccdffc3dc289ed8f4cfc8e11594d093fe0050cf4e587400bb794f",
+    "gmt_sha256": "0fc02458765cfce6c9348dce9f7a9397c6caf7c09ba318f468135d7ac60342ee"
+  },
+  "options": {
+    "mode": "multilevel",
+    "seed": 42,
+    "nPermSimple": 1000,
+    "sampleSize": 101,
+    "minSize": 5,
+    "maxSize": 4000,
+    "eps": 1e-10,
+    "scoreType": "std",
+    "gseaParam": 1.0
+  },
+  "precision": {
+    "es": {
+      "exact": 5324,
+      "mean_absolute_error": 0.0,
+      "median_absolute_error": 0.0,
+      "p95_absolute_error": 0.0,
+      "max_absolute_error": 0.0
+    },
+    "nes": {
+      "exact": 5324,
+      "mean_absolute_error": 0.0,
+      "median_absolute_error": 0.0,
+      "p95_absolute_error": 0.0,
+      "max_absolute_error": 0.0
+    },
+    "pval": {
+      "exact": 3809,
+      "mean_absolute_error": 4.089454216126734e-18,
+      "median_absolute_error": 0.0,
+      "p95_absolute_error": 3.070460552478759e-17,
+      "max_absolute_error": 8.326672684688674e-17
+    },
+    "padj": {
+      "exact": 2316,
+      "mean_absolute_error": 3.844908511858725e-17,
+      "median_absolute_error": 5.204170427930421e-18,
+      "p95_absolute_error": 1.249000902703301e-16,
+      "max_absolute_error": 2.7755575615628914e-16
+    },
+    "missing_pathways": 0,
+    "size_mismatches": 0,
+    "leading_edge_order_mismatches": 0,
+    "leading_edge_set_mismatches": 0,
+    "finite_class_mismatches": 0
+  },
+  "determinism": {
+    "release_nproc_1_sha256": "ea60c3c3530d1255a4b87ee07ed8f808aeedd52a72a857878c89688c0e804237",
+    "release_nproc_16_sha256": "ea60c3c3530d1255a4b87ee07ed8f808aeedd52a72a857878c89688c0e804237"
+  }
+}
