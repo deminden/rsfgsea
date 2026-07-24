@@ -13,6 +13,8 @@ Supporting directories:
 - `tests/`: integration-level validation assets
 - `results/`: benchmark and parity outputs
 - `r-pkg/`: R package sources
+- `reference/blitz/`: exact Python/Blitz reference project and lockfile
+- `docs/evidence/`: small, reviewable machine-readable audit summaries
 
 R package maintenance:
 
@@ -39,10 +41,12 @@ From repo root:
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace --all-features
-R CMD check r-pkg/rsfgseaR --no-manual
+R CMD build r-pkg/rsfgseaR
+R CMD check rsfgseaR_<version>.tar.gz --no-manual
 ```
 
-Do not commit or push with any of these failing.
+Remove the built tarball and `rsfgseaR.Rcheck/` after validation. Do not commit
+or push with any of these failing.
 
 ## Branch Workflow
 
@@ -90,9 +94,13 @@ Good changes usually:
 - user-facing usage: `docs/cli.md` or `docs/python.md`
 - statistical behavior: `docs/algorithms.md`
 - reproducibility workflows and scripts: `docs/reproducibility.md`
+- current numeric audit records: `docs/evidence/`
 - contributor workflow and project structure: `docs/development.md`
 
-Avoid hiding project knowledge only in commit history or inline comments.
+The root and package READMEs should summarize and link; they should not copy
+large benchmark tables. Run `python3 scripts/check_docs.py` when changing the
+locked Blitz stack or its evidence. Avoid hiding project knowledge only in
+commit history or inline comments.
 
 ## Release Checklist
 

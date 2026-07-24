@@ -1,20 +1,87 @@
 # Algorithm Guide
 
-This project focuses on fgsea-compatible preranked enrichment.
+This project exposes three user-facing GSEA tracks: decor first, classic fgsea-compatible workflows second, and native blitz third.
 
 ## Supported Execution Paths
 
-There are three maintained paths:
+There are five maintained CPU paths:
 
-1. `fgsea` wrapper mode
-2. explicit simple mode
-3. explicit multilevel mode
+1. `rsfgsea-decor`
+2. classic `fgsea` wrapper mode
+3. classic explicit simple mode
+4. classic explicit multilevel mode
+5. native blitz mode
 
 There is also one hybrid acceleration path:
 
-4. hybrid GPU wrapper mode
+6. hybrid GPU wrapper mode
 
-## Wrapper Mode
+## rsfgsea-decor
+
+`rsfgsea-decor` is a decorrelation-inspired, redundancy-aware variant of preranked GSEA. It downweights pathway genes that are redundant with other genes in the same pathway, based on expression-derived correlations.
+
+Classic mode uses:
+
+```text
+w_i = |stat_i|^gseaParam
+```
+
+The sensitive decor preset uses the `raw-rational` formula:
+
+```text
+w_i_decor = |stat_i|^gseaParam / (1 + alpha * r_i)
+```
+
+The first cache implementation computes `r_i` from the genes in each pathway that are present in the expression matrix. For `positive_mean`:
+
+```text
+r_i = mean(max(corr(i, j), 0)) over pathway genes j != i
+```
+
+For `abs_mean`, the absolute correlation is averaged instead. Gene identifiers are matched verbatim between ranks, GMT, and expression rows.
+
+The decor cache stores derived redundancy scores, not the full pairwise correlation matrix. The transparent TSV cache includes metadata such as GMT SHA256, expression SHA256, correlation method, redundancy method, expression matrix assumptions, and row counts. `alpha` is not part of cache compatibility because it is applied at runtime.
+
+For each pathway, observed decor ES uses each hit gene's own redundancy score. Each simple-mode permutation draws a random gene set of the same size, sorts sampled hit positions by rank, and applies the same ordered redundancy profile from the observed pathway. This keeps the pathway's redundancy burden fixed while testing ranked-position enrichment. Decor multilevel mode reuses that fixed-profile simple screen, then adaptively refines only pathways where the simple tail estimate is noisier than the decor multilevel estimate.
+
+Decor multilevel is therefore pathway-specific in a way that classic fgsea multilevel is not. Classic multilevel groups pathways by size and samples an unweighted size-`k` null. Decor multilevel must sample random size-`k` hit profiles and score them with the pathway's fixed decor penalty vector. This is useful for preserving the decor null definition, but very broad, highly redundant GO terms can make lower-tail refinement slower and more variable than classic size-only refinement.
+
+For final low-tail decor analyses, inspect `log2err`. If exact ranking among very small p-values matters, use a targeted reliability rerun such as CLI `--decor-tail-reliability adaptive` or a larger `sampleSize`/`nPermSimple` on the relevant subset. Do not interpret decor multilevel as fully calibrated for every biological null; it remains an empirical/statistical tail estimate whose behavior should be checked for the data type and pathway collection.
+
+The base hit weight is always:
+
+```text
+b_i = |stat_i|^gseaParam
+```
+
+The selected preset converts raw redundancy `r_i` to a non-negative penalty:
+
+- `raw-rational`: `1 / (1 + alpha * r)`
+- `exp-scaled`: `exp(-alpha * r_scaled)` with median scaling
+- `threshold-rational`: `1 / (1 + alpha * max(0, r - tau))`
+
+The public presets are:
+
+- `sensitive`: `raw-rational`, `alpha=22`
+- `balanced`: `threshold-rational`, `tau=0.04`, `alpha=60`
+- `specific`: `threshold-rational`, `tau=0.05`, `alpha=65`
+- `strict`: `exp-scaled`, target median penalty `0.10`
+
+For users who want a single high-level knob, `decor-stringency` maps onto this same calibrated preset ladder: `0 <= x < 35` selects `sensitive`, `35 <= x < 65` selects `balanced`, `65 <= x < 85` selects `specific`, and `85 <= x <= 100` selects `strict`. It autoswitches formula families by preset rather than interpolating unvalidated formula parameters.
+
+Because GSEA hit increments are normalized by total hit weight, a uniform multiplicative penalty across all hits in one pathway cancels out in the observed ES walk. Presets mainly affect ES through relative differences among genes within a pathway. Pathway-wide redundancy burden is handled by the decor permutation calibration rather than by expecting uniform scaling to change observed ES.
+
+Current limitations:
+
+- decor is CPU-only; GPU decor is rejected
+- decor multilevel is a decor-specific adaptive tail estimator rather than an R `fgseaMultilevel` parity target
+- Pearson expression correlation is implemented; Spearman is reserved
+- decor does not perform covariance whitening and does not fully decorrelate expression
+- decor does not implement cameraPR or CorrSEA
+
+## Classic fgsea-Compatible Modes
+
+### Wrapper Mode
 
 Wrapper mode is the closest match to how users normally call R `fgsea`.
 
@@ -27,7 +94,7 @@ Behavior:
 
 If `nperm` is provided, wrapper mode becomes simple mode.
 
-## Simple Mode
+### Simple Mode
 
 Simple mode uses a fixed number of permutations for every tested pathway.
 
@@ -42,7 +109,7 @@ Tradeoff:
 - simple mode is easier to reason about
 - but it can be inefficient or low-resolution for very small p-values
 
-## Multilevel Mode
+### Multilevel Mode
 
 Multilevel mode uses adaptive estimation to resolve small p-values more efficiently than brute-force fixed permutations.
 
@@ -56,6 +123,28 @@ Key parameter:
 - `sampleSize`
 
 This is the multilevel sampling parameter and should stay aligned across comparisons if you care about parity.
+
+## Blitz Mode
+
+Blitz mode is a native Rust implementation of the `blitzgsea.gsea()` preranked
+workflow, targeting the exact stack in `reference/blitz/uv.lock`. It has its
+own mode-aware defaults: `permutations=1000`, `anchors=40`, `min_size=5`,
+`max_size=4000`, `processes=4`, `symmetric=false`, `seed=0`, `center=true`,
+`accuracy=40`, and `deep_accuracy=50`. `accuracy` is retained for upstream
+interface compatibility; the native normal-tail calculation does not currently
+vary with it. `deep_accuracy` controls the extreme-tail high-precision fallback.
+
+The implementation follows blitz preprocessing:
+
+- sort the signature by descending score
+- keep the first duplicate gene after sorting
+- optionally center signature scores
+- intersect pathway genes with the signature universe
+- score with blitz leading-edge semantics
+
+Blitz mode is intentionally separate from decor and classic fgsea-compatible modes. Library callers reuse native null-model fits for repeated identical calls through an in-process signature cache; one-shot CLI runs leave that cache off unless explicitly requested. It rejects `gpu`, decor mode, fixed `nperm`, non-`std` score types, and `gseaParam` values other than `1.0`. Result columns keep the rsfgsea shape: `pval` is the blitz p-value, `padj` is BH/FDR, and `log2err` is missing.
+
+The deep-tail compatibility path reproduces the requested-precision cancellation behavior of the pinned `blitzgsea`/mpmath reference. This makes reported NES and p-values match Blitz at floating-point scale; it should be understood as reference parity, not as a claim that the requested-precision value is a more accurate mathematical gamma tail.
 
 ## Score Types
 

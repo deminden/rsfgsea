@@ -3,6 +3,7 @@ pub enum InterfaceMode {
     Multilevel,
     Simple,
     Fgsea,
+    Blitz,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -20,8 +21,9 @@ pub fn parse_interface_mode(mode: &str) -> Result<InterfaceMode, String> {
         "multilevel" => Ok(InterfaceMode::Multilevel),
         "simple" => Ok(InterfaceMode::Simple),
         "fgsea" => Ok(InterfaceMode::Fgsea),
+        "blitz" => Ok(InterfaceMode::Blitz),
         other => Err(format!(
-            "Invalid mode '{}'. Expected one of: fgsea, multilevel, simple.",
+            "Invalid mode '{}'. Expected one of: fgsea, multilevel, simple, blitz.",
             other
         )),
     }
@@ -33,8 +35,16 @@ pub fn resolve_execution_plan(
     nperm: Option<usize>,
     n_perm_simple: usize,
 ) -> Result<ExecutionPlan, String> {
+    if mode == InterfaceMode::Blitz && nperm.is_some() {
+        return Err("nperm is not supported with mode='blitz'.".to_string());
+    }
+
     if !gpu {
         return Ok(ExecutionPlan::Cpu(mode));
+    }
+
+    if mode == InterfaceMode::Blitz {
+        return Err("gpu is not supported with mode='blitz'.".to_string());
     }
 
     if mode == InterfaceMode::Multilevel && nperm.is_some() {
@@ -45,6 +55,7 @@ pub fn resolve_execution_plan(
         InterfaceMode::Multilevel => (n_perm_simple, true),
         InterfaceMode::Simple => (nperm.unwrap_or(n_perm_simple), false),
         InterfaceMode::Fgsea => (nperm.unwrap_or(n_perm_simple), nperm.is_none()),
+        InterfaceMode::Blitz => unreachable!("blitz mode is CPU-only and handled above"),
     };
 
     Ok(ExecutionPlan::Gpu {
@@ -69,6 +80,7 @@ mod tests {
             parse_interface_mode("simple").unwrap(),
             InterfaceMode::Simple
         );
+        assert_eq!(parse_interface_mode("blitz").unwrap(), InterfaceMode::Blitz);
     }
 
     #[test]
@@ -84,6 +96,10 @@ mod tests {
         assert_eq!(
             resolve_execution_plan(InterfaceMode::Simple, false, Some(250), 1000).unwrap(),
             ExecutionPlan::Cpu(InterfaceMode::Simple)
+        );
+        assert_eq!(
+            resolve_execution_plan(InterfaceMode::Blitz, false, None, 1000).unwrap(),
+            ExecutionPlan::Cpu(InterfaceMode::Blitz)
         );
     }
 
@@ -130,6 +146,18 @@ mod tests {
         assert_eq!(
             err,
             "nperm is only valid with mode='fgsea' or mode='simple'."
+        );
+    }
+
+    #[test]
+    fn resolve_execution_plan_rejects_incompatible_blitz_args() {
+        assert_eq!(
+            resolve_execution_plan(InterfaceMode::Blitz, true, None, 1000).unwrap_err(),
+            "gpu is not supported with mode='blitz'."
+        );
+        assert_eq!(
+            resolve_execution_plan(InterfaceMode::Blitz, false, Some(100), 1000).unwrap_err(),
+            "nperm is not supported with mode='blitz'."
         );
     }
 }

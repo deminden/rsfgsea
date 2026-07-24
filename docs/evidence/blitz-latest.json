@@ -1,0 +1,77 @@
+{
+  "audit_date": "2026-07-23",
+  "reference": {
+    "python": "3.12.9",
+    "packages": {
+      "blitzgsea": "1.3.54",
+      "mpmath": "1.4.1",
+      "numpy": "2.5.1",
+      "pandas": "3.0.3",
+      "scipy": "1.18.0",
+      "statsmodels": "0.14.6"
+    },
+    "lock_sha256": "8c3eff20a17fe9e86ae4043c584d947b086c0abba5263a4c3b3fd3de053631ff",
+    "processes": 4,
+    "repetitions": 3,
+    "deterministic_result_sha256": "8216f5197730653e59dd98b4f3af29b4637e7b53ae560f58a2be06f8c541da69",
+    "elapsed_seconds": [
+      15.649829075991875,
+      16.335294766991865,
+      15.469361909999861
+    ]
+  },
+  "workload": {
+    "rank_rows": 63904,
+    "source_pathways": 5343,
+    "scored_pathways": 5324,
+    "ranks_sha256": "54d7e5b11c6ccdffc3dc289ed8f4cfc8e11594d093fe0050cf4e587400bb794f",
+    "gmt_sha256": "0fc02458765cfce6c9348dce9f7a9397c6caf7c09ba318f468135d7ac60342ee"
+  },
+  "precision": {
+    "max_absolute_error": {
+      "es": 4.440892098500626e-16,
+      "nes": 3.3306690738754696e-15,
+      "pval": 1.7763568394002505e-15,
+      "fdr": 2.6645352591003757e-15
+    },
+    "pre_change_max_absolute_error": {
+      "nes": 1.5078158277503917e-08,
+      "fdr": 8.504787593400476e-15
+    },
+    "improvement_factor": {
+      "nes": 4527065.866666666,
+      "fdr": 3.1918465197086334
+    },
+    "missing_pathways": 0,
+    "size_mismatches": 0,
+    "leading_edge_set_mismatches": 0,
+    "leading_edge_order_only_mismatches": 36
+  },
+  "speed_gate": {
+    "baseline_commit": "3aeb6ba",
+    "pairs": 30,
+    "warmup_pairs": 2,
+    "bootstrap_resamples": 200000,
+    "equivalence_margin_percent": 1.0,
+    "compute_candidate_over_baseline": {
+      "geometric_mean_ratio": 0.9932416524425355,
+      "change_percent": -0.6758347557464517,
+      "confidence_interval_95": [
+        0.9792497434001727,
+        1.0073504190236744
+      ]
+    },
+    "wall_candidate_over_baseline": {
+      "geometric_mean_ratio": 0.9994855639851706,
+      "change_percent": -0.051443601482936696,
+      "confidence_interval_95": [
+        0.9940808046826767,
+        1.00479614175546
+      ]
+    },
+    "baseline_output_sha256": "8152e02c91b5aae7bc1cce1e4eb32ba5b4307adf4f0e20613cf3a9d58396f3ba",
+    "candidate_output_sha256": "b6e7dcc6e275301b0530a4fd67c26526907b553ad080253ef8fd60b0f97d207e",
+    "deterministic": true,
+    "passed": true
+  }
+}

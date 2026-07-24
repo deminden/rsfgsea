@@ -1,10 +1,13 @@
 # Documentation
 
-This project has three user-facing entrypoints:
+This project documents three user-facing GSEA tracks: decor first, classic fgsea-compatible workflows second, and native blitz third.
+
+There are four user-facing entrypoints:
 
 - Rust library: use the `fgsea*` APIs from `rsfgsea`
 - CLI: run preranked enrichment from files
-- Python bindings: call the same fgsea-compatible workflows from Python
+- Python bindings: call the same decor, classic, and blitz workflows from Python
+- R package: use fgsea-shaped wrappers backed by the same Rust core
 
 Start here:
 

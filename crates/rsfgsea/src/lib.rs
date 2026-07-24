@@ -1,7 +1,11 @@
 pub mod algo;
 mod algo_support;
 pub mod bindings;
+pub mod blitz;
+mod blitz_gamma;
+mod blitz_mpmath;
 pub mod core;
+pub mod decor;
 mod esruler_compat;
 mod fastgsea_compat;
 #[cfg(feature = "gpu")]

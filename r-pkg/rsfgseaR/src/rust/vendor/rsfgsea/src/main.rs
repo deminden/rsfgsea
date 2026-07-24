@@ -19,7 +19,7 @@ struct Args {
     #[arg(short, long)]
     gmt: PathBuf,
 
-    /// Number of permutations in simple fgsea stage
+    /// Simple-stage permutations, or null permutations per Blitz calibration anchor
     #[arg(short = 'n', long = "nPermSimple", default_value_t = 1000)]
     n_perm_simple: usize,
 
@@ -27,7 +27,7 @@ struct Args {
     #[arg(long = "nperm")]
     nperm: Option<usize>,
 
-    /// Random seed. Omit to generate a fresh seed for each run.
+    /// Random seed. Omit for a fresh non-Blitz seed; Blitz defaults to deterministic seed 0.
     #[arg(short, long)]
     seed: Option<u64>,
 
@@ -35,11 +35,11 @@ struct Args {
     #[arg(short, long)]
     output: PathBuf,
 
-    /// Minimal size of a gene set to test
-    #[arg(long = "minSize", visible_alias = "min-size", default_value_t = 1)]
-    min_size: usize,
+    /// Minimal size of a gene set to test (defaults to 1, or 5 in blitz mode)
+    #[arg(long = "minSize", visible_alias = "min-size")]
+    min_size: Option<usize>,
 
-    /// Maximal size of a gene set to test (defaults to ranks length - 1)
+    /// Maximal gene-set size (defaults to ranks length - 1, or 4000 in Blitz mode)
     #[arg(long = "maxSize")]
     max_size: Option<usize>,
 
@@ -54,6 +54,64 @@ struct Args {
         default_value_t = 101
     )]
     sample_size: usize,
+
+    /// Decor lower-tail reliability mode for multilevel runs
+    #[arg(
+        long = "decor-tail-reliability",
+        value_enum,
+        default_value_t = DecorTailReliabilityArg::Off
+    )]
+    decor_tail_reliability: DecorTailReliabilityArg,
+
+    /// Adaptive decor tail trigger p-value threshold
+    #[arg(
+        long = "decor-tail-pvalue-threshold",
+        default_value_t = 1e-4,
+        hide = true
+    )]
+    decor_tail_pvalue_threshold: f64,
+
+    /// Adaptive decor tail trigger log2err threshold
+    #[arg(
+        long = "decor-tail-log2err-threshold",
+        default_value_t = 0.75,
+        hide = true
+    )]
+    decor_tail_log2err_threshold: f64,
+
+    /// First adaptive decor tail sample size
+    #[arg(
+        long = "decor-tail-first-sampleSize",
+        visible_alias = "decor-tail-first-sample-size",
+        default_value_t = 401,
+        hide = true
+    )]
+    decor_tail_first_sample_size: usize,
+
+    /// First adaptive decor tail seed count
+    #[arg(long = "decor-tail-first-seeds", default_value_t = 3, hide = true)]
+    decor_tail_first_seeds: usize,
+
+    /// Final adaptive decor tail sample size for unstable first-tier estimates
+    #[arg(
+        long = "decor-tail-final-sampleSize",
+        visible_alias = "decor-tail-final-sample-size",
+        default_value_t = 801,
+        hide = true
+    )]
+    decor_tail_final_sample_size: usize,
+
+    /// Final adaptive decor tail seed count for unstable first-tier estimates
+    #[arg(long = "decor-tail-final-seeds", default_value_t = 5, hide = true)]
+    decor_tail_final_seeds: usize,
+
+    /// Escalate adaptive decor tail estimates when first-tier -log10(p) range exceeds this value
+    #[arg(
+        long = "decor-tail-max-log10-range",
+        default_value_t = 0.25,
+        hide = true
+    )]
+    decor_tail_max_log10_range: f64,
 
     /// Score type (std, pos, neg)
     #[arg(
@@ -72,11 +130,101 @@ struct Args {
     )]
     gsea_param: f64,
 
-    /// Execution mode: fgsea (wrapper semantics), multilevel, or simple
+    /// Execution mode: fgsea (wrapper semantics), multilevel, simple, or blitz
     #[arg(long, value_enum, default_value_t = CliMode::Fgsea)]
     mode: CliMode,
 
-    /// Number of workers (0 = default threadpool behavior)
+    /// Number of blitz calibration anchors
+    #[arg(long = "blitz-anchors", default_value_t = 40)]
+    blitz_anchors: usize,
+
+    /// Force symmetric positive/negative blitz null fits
+    #[arg(long = "blitz-symmetric")]
+    blitz_symmetric: bool,
+
+    /// Disable blitz signature centering
+    #[arg(long = "blitz-no-center")]
+    blitz_no_center: bool,
+
+    /// Enable blitz in-process signature model cache for repeated embedded calls
+    #[arg(long = "blitz-signature-cache")]
+    blitz_signature_cache: bool,
+
+    /// Upstream-compatible Blitz normal-tail setting; currently interface-only
+    #[arg(long = "blitz-accuracy", default_value_t = 40)]
+    blitz_accuracy: usize,
+
+    /// Decimal precision for the high-precision fallback used by extreme Blitz tails
+    #[arg(long = "blitz-deep-accuracy", default_value_t = 50)]
+    blitz_deep_accuracy: usize,
+
+    /// Enrichment method: classic fgsea-compatible statistics or decor
+    #[arg(long, value_enum, default_value_t = MethodArg::Classic)]
+    method: MethodArg,
+
+    /// Path to the decor redundancy cache
+    #[arg(long = "decor-cache")]
+    decor_cache: Option<PathBuf>,
+
+    /// Path to a normalized expression matrix used to build the decor cache
+    #[arg(long = "decor-expression")]
+    decor_expression: Option<PathBuf>,
+
+    /// Decor preset: sensitive, balanced, specific, or strict. Defaults to balanced.
+    #[arg(long = "decor-preset", value_enum)]
+    decor_preset: Option<DecorPresetArg>,
+
+    /// Easy decor stringency control from 0 to 100; autoswitches calibrated presets.
+    #[arg(long = "decor-stringency")]
+    decor_stringency: Option<f64>,
+
+    /// Override decor redundancy penalty strength
+    #[arg(long = "decor-alpha", hide = true)]
+    decor_alpha: Option<f64>,
+
+    /// Decor cache handling mode
+    #[arg(long = "decor-cache-mode", value_enum, default_value_t = DecorCacheModeArg::Auto)]
+    decor_cache_mode: DecorCacheModeArg,
+
+    /// Decor expression correlation method
+    #[arg(
+        long = "decor-correlation",
+        value_enum,
+        default_value_t = DecorCorrelationArg::Pearson,
+        hide = true
+    )]
+    decor_correlation: DecorCorrelationArg,
+
+    /// Decor redundancy score definition
+    #[arg(
+        long = "decor-redundancy",
+        value_enum,
+        default_value_t = DecorRedundancyArg::PositiveMean,
+        hide = true
+    )]
+    decor_redundancy: DecorRedundancyArg,
+
+    /// Override decor hit-weight formula
+    #[arg(long = "decor-weight-formula", value_enum, hide = true)]
+    decor_weight_formula: Option<DecorWeightFormulaArg>,
+
+    /// Override threshold tau for threshold-rational decor weights
+    #[arg(long = "decor-threshold", hide = true)]
+    decor_threshold: Option<f64>,
+
+    /// Small positive epsilon for scaled decor formulas
+    #[arg(long = "decor-scale-epsilon", default_value_t = 1e-12, hide = true)]
+    decor_scale_epsilon: f64,
+
+    /// Decor expression matrix format
+    #[arg(long = "decor-expression-format", value_enum, default_value_t = DecorExpressionFormatArg::Auto)]
+    decor_expression_format: DecorExpressionFormatArg,
+
+    /// Whether the decor expression matrix has a header row
+    #[arg(long = "decor-expression-has-header", default_value_t = true)]
+    decor_expression_has_header: bool,
+
+    /// Workers (0 = default Rayon behavior, or 4 Blitz calibration workers)
     #[arg(long, default_value_t = 0)]
     nproc: usize,
 
@@ -90,6 +238,109 @@ enum CliMode {
     Fgsea,
     Multilevel,
     Simple,
+    Blitz,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum MethodArg {
+    Classic,
+    Decor,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorTailReliabilityArg {
+    Off,
+    Adaptive,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorCacheModeArg {
+    Auto,
+    Reuse,
+    Rebuild,
+}
+
+impl From<DecorCacheModeArg> for DecorCacheMode {
+    fn from(value: DecorCacheModeArg) -> Self {
+        match value {
+            DecorCacheModeArg::Auto => DecorCacheMode::Auto,
+            DecorCacheModeArg::Reuse => DecorCacheMode::Reuse,
+            DecorCacheModeArg::Rebuild => DecorCacheMode::Rebuild,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorCorrelationArg {
+    Pearson,
+    Spearman,
+}
+
+impl From<DecorCorrelationArg> for DecorCorrelation {
+    fn from(value: DecorCorrelationArg) -> Self {
+        match value {
+            DecorCorrelationArg::Pearson => DecorCorrelation::Pearson,
+            DecorCorrelationArg::Spearman => DecorCorrelation::Spearman,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorRedundancyArg {
+    PositiveMean,
+    AbsMean,
+}
+
+impl From<DecorRedundancyArg> for DecorRedundancy {
+    fn from(value: DecorRedundancyArg) -> Self {
+        match value {
+            DecorRedundancyArg::PositiveMean => DecorRedundancy::PositiveMean,
+            DecorRedundancyArg::AbsMean => DecorRedundancy::AbsMean,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorPresetArg {
+    Sensitive,
+    Balanced,
+    Specific,
+    Strict,
+}
+
+impl From<DecorPresetArg> for DecorPreset {
+    fn from(value: DecorPresetArg) -> Self {
+        match value {
+            DecorPresetArg::Sensitive => DecorPreset::Sensitive,
+            DecorPresetArg::Balanced => DecorPreset::Balanced,
+            DecorPresetArg::Specific => DecorPreset::Specific,
+            DecorPresetArg::Strict => DecorPreset::Strict,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorWeightFormulaArg {
+    RawRational,
+    ExpScaled,
+    ThresholdRational,
+}
+
+impl From<DecorWeightFormulaArg> for DecorWeightFormula {
+    fn from(value: DecorWeightFormulaArg) -> Self {
+        match value {
+            DecorWeightFormulaArg::RawRational => DecorWeightFormula::RawRational,
+            DecorWeightFormulaArg::ExpScaled => DecorWeightFormula::ExpScaled,
+            DecorWeightFormulaArg::ThresholdRational => DecorWeightFormula::ThresholdRational,
+        }
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum DecorExpressionFormatArg {
+    Auto,
+    Tsv,
+    Csv,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
@@ -134,12 +385,99 @@ fn validate_gpu_mode_args(args: &Args) -> Result<GpuModeConfig> {
 
 fn main() -> Result<()> {
     let args = Args::parse();
-    let seed = resolve_rng_seed(args.seed);
+    let seed = if args.mode == CliMode::Blitz {
+        args.seed.unwrap_or(0)
+    } else {
+        resolve_rng_seed(args.seed)
+    };
 
     if args.sample_size == 0 {
         bail!("--sampleSize must be greater than 0.");
     }
-
+    if args.decor_tail_reliability == DecorTailReliabilityArg::Adaptive {
+        if args.decor_tail_pvalue_threshold <= 0.0 || !args.decor_tail_pvalue_threshold.is_finite()
+        {
+            bail!("--decor-tail-pvalue-threshold must be finite and > 0.");
+        }
+        if args.decor_tail_log2err_threshold <= 0.0
+            || !args.decor_tail_log2err_threshold.is_finite()
+        {
+            bail!("--decor-tail-log2err-threshold must be finite and > 0.");
+        }
+        if args.decor_tail_first_sample_size == 0 || args.decor_tail_final_sample_size == 0 {
+            bail!("adaptive decor tail sample sizes must be greater than 0.");
+        }
+        if args.decor_tail_first_seeds == 0 || args.decor_tail_final_seeds == 0 {
+            bail!("adaptive decor tail seed counts must be greater than 0.");
+        }
+        if args.decor_tail_max_log10_range <= 0.0 || !args.decor_tail_max_log10_range.is_finite() {
+            bail!("--decor-tail-max-log10-range must be finite and > 0.");
+        }
+    }
+    if args.min_size.is_some_and(|min_size| min_size == 0) {
+        bail!("--minSize must be greater than 0.");
+    }
+    if args.blitz_anchors == 0 {
+        bail!("--blitz-anchors must be greater than 0.");
+    }
+    if args.blitz_accuracy == 0 || args.blitz_deep_accuracy == 0 {
+        bail!("--blitz-accuracy and --blitz-deep-accuracy must be greater than 0.");
+    }
+    if args
+        .decor_alpha
+        .is_some_and(|alpha| alpha < 0.0 || !alpha.is_finite())
+    {
+        bail!("decor alpha must be >= 0.");
+    }
+    if args
+        .decor_threshold
+        .is_some_and(|threshold| !(0.0..1.0).contains(&threshold) || !threshold.is_finite())
+    {
+        bail!("decor threshold must be >= 0 and < 1.");
+    }
+    if args
+        .decor_stringency
+        .is_some_and(|stringency| !stringency.is_finite() || !(0.0..=100.0).contains(&stringency))
+    {
+        bail!("decor stringency must be a finite value from 0 to 100.");
+    }
+    if args.decor_preset.is_some() && args.decor_stringency.is_some() {
+        bail!("use either --decor-preset or --decor-stringency, not both.");
+    }
+    if args.decor_scale_epsilon <= 0.0 || !args.decor_scale_epsilon.is_finite() {
+        bail!("decor scale epsilon must be > 0.");
+    }
+    if args.decor_expression_format == DecorExpressionFormatArg::Csv {
+        bail!("CSV decor expression format is not implemented yet; use tab-separated input.");
+    }
+    if args.mode == CliMode::Multilevel && args.nperm.is_some() {
+        bail!("--nperm is only valid with --mode fgsea or --mode simple.");
+    }
+    if args.method == MethodArg::Decor && args.gpu {
+        bail!("decor supports CPU execution only; --gpu is not supported with --method decor.");
+    }
+    if args.method != MethodArg::Decor
+        && args.decor_tail_reliability == DecorTailReliabilityArg::Adaptive
+    {
+        bail!("--decor-tail-reliability applies only to --method decor.");
+    }
+    if args.mode == CliMode::Blitz {
+        if args.gpu {
+            bail!("gpu is not supported with --mode blitz.");
+        }
+        if args.method != MethodArg::Classic {
+            bail!("--mode blitz supports only --method classic.");
+        }
+        if args.nperm.is_some() {
+            bail!("--nperm is not supported with --mode blitz.");
+        }
+        if args.score_type != ScoreTypeArg::Std {
+            bail!("--mode blitz supports only --scoreType std.");
+        }
+        if (args.gsea_param - 1.0).abs() > f64::EPSILON {
+            bail!("--mode blitz supports only --gseaParam 1.");
+        }
+    }
     if args.nproc > 0 {
         rayon::ThreadPoolBuilder::new()
             .num_threads(args.nproc)
@@ -155,11 +493,16 @@ fn main() -> Result<()> {
     println!("Loaded {} pathways.", pd.pathways.len());
 
     println!(
-        "Running mode={} (nPermSimple={}, nperm={:?})...",
+        "Running method={} mode={} (nPermSimple={}, nperm={:?})...",
+        match args.method {
+            MethodArg::Classic => "classic",
+            MethodArg::Decor => "decor",
+        },
         match args.mode {
             CliMode::Fgsea => "fgsea",
             CliMode::Multilevel => "multilevel",
             CliMode::Simple => "simple",
+            CliMode::Blitz => "blitz",
         },
         args.n_perm_simple,
         args.nperm
@@ -169,11 +512,189 @@ fn main() -> Result<()> {
     let score_type: ScoreType = args.score_type.into();
 
     let start = Instant::now();
-    let max_size = args
-        .max_size
-        .unwrap_or_else(|| ranks.len().saturating_sub(1));
-    let results = if args.gpu {
+    let min_size = args
+        .min_size
+        .unwrap_or(if args.mode == CliMode::Blitz { 5 } else { 1 });
+    let max_size = args.max_size.unwrap_or_else(|| {
+        if args.mode == CliMode::Blitz {
+            4000
+        } else {
+            ranks.len().saturating_sub(1)
+        }
+    });
+    let results = if args.method == MethodArg::Decor {
+        let mut options = DecorOptions::default();
+        let stringency_resolved = args
+            .decor_stringency
+            .map(|stringency| options.apply_stringency(stringency))
+            .transpose()
+            .map_err(anyhow::Error::msg)?;
+        let resolved = if let Some(stringency_resolved) = stringency_resolved {
+            stringency_resolved.preset_resolution
+        } else {
+            options.apply_preset(args.decor_preset.unwrap_or(DecorPresetArg::Balanced).into())
+        };
+        options.cache_path = args.decor_cache.clone();
+        options.expression_path = args.decor_expression.clone();
+        options.expression_has_header = args.decor_expression_has_header;
+        options.cache_mode = args.decor_cache_mode.into();
+        options.correlation = args.decor_correlation.into();
+        options.redundancy = args.decor_redundancy.into();
+        options.scale_epsilon = args.decor_scale_epsilon;
+        if let Some(formula) = args.decor_weight_formula {
+            options.weight_formula = formula.into();
+        }
+        if let Some(alpha) = args.decor_alpha {
+            options.alpha = alpha;
+        }
+        if let Some(threshold_tau) = args.decor_threshold {
+            options.threshold_tau = threshold_tau;
+        }
+        let cache_path = options
+            .cache_path
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("method decor requires --decor-cache"))?;
+        if cache_path.exists() {
+            println!("Checking decor cache: {}", cache_path.display());
+        } else {
+            println!("Decor cache not found: {}", cache_path.display());
+        }
+        if let Some(expression_path) = &options.expression_path {
+            println!("Decor expression: {}", expression_path.display());
+        }
+        let (cache, status) = ensure_decor_cache_for_paths(
+            &pd.pathways,
+            &args.gmt,
+            &options,
+            args.decor_expression_has_header,
+        )?;
+        match status {
+            DecorCacheStatus::Reused => {
+                println!("Reusing compatible decor cache: {}", cache_path.display());
+            }
+            DecorCacheStatus::Built => {
+                println!(
+                    "Decor cache built: {} pathways, {} pathway-gene scores",
+                    cache.metadata.n_pathways, cache.metadata.n_rows
+                );
+            }
+            DecorCacheStatus::Rebuilt => {
+                println!(
+                    "Decor cache rebuilt: {} pathways, {} pathway-gene scores",
+                    cache.metadata.n_pathways, cache.metadata.n_rows
+                );
+            }
+        }
+        if let Some(stringency_resolved) = stringency_resolved {
+            println!(
+                "Decor stringency={} resolved to preset={} ({})",
+                stringency_resolved.stringency,
+                stringency_resolved.preset_resolution.preset,
+                stringency_resolved.band
+            );
+        }
+        println!("Decor preset={}", resolved.preset);
+        println!(
+            "Decor resolved preset: weight_formula={}, alpha={}, threshold_tau={}",
+            resolved.weight_formula, resolved.alpha, resolved.threshold_tau
+        );
+        println!(
+            "Decor effective preset: weight_formula={}, alpha={}, threshold_tau={}",
+            options.weight_formula, options.alpha, options.threshold_tau
+        );
+        if let Some(target) = resolved.target_median_penalty {
+            println!("Decor target median penalty={target}");
+        }
+        let decor_multilevel = args.mode == CliMode::Multilevel
+            || (args.mode == CliMode::Fgsea && args.nperm.is_none());
+        if decor_multilevel {
+            if args.decor_tail_reliability == DecorTailReliabilityArg::Adaptive {
+                let tail_reliability = DecorTailReliabilityOptions {
+                    pvalue_threshold: args.decor_tail_pvalue_threshold,
+                    log2err_threshold: args.decor_tail_log2err_threshold,
+                    first_sample_size: args.decor_tail_first_sample_size,
+                    first_seeds: args.decor_tail_first_seeds,
+                    final_sample_size: args.decor_tail_final_sample_size,
+                    final_seeds: args.decor_tail_final_seeds,
+                    max_log10_range: args.decor_tail_max_log10_range,
+                };
+                println!(
+                    "Decor tail reliability=adaptive: p<={}, log2err>={}, first sampleSize={} seeds={}, final sampleSize={} seeds={}, max -log10(p) range={}",
+                    tail_reliability.pvalue_threshold,
+                    tail_reliability.log2err_threshold,
+                    tail_reliability.first_sample_size,
+                    tail_reliability.first_seeds,
+                    tail_reliability.final_sample_size,
+                    tail_reliability.final_seeds,
+                    tail_reliability.max_log10_range
+                );
+                fgsea_decor_multilevel_adaptive_with_options(
+                    &ranks,
+                    &pd.pathways,
+                    &cache,
+                    &options,
+                    args.n_perm_simple,
+                    Some(seed),
+                    min_size,
+                    max_size,
+                    args.eps,
+                    score_type,
+                    args.gsea_param,
+                    args.sample_size,
+                    tail_reliability,
+                )?
+            } else {
+                fgsea_decor_multilevel_with_options(
+                    &ranks,
+                    &pd.pathways,
+                    &cache,
+                    &options,
+                    args.n_perm_simple,
+                    Some(seed),
+                    min_size,
+                    max_size,
+                    args.eps,
+                    score_type,
+                    args.gsea_param,
+                    args.sample_size,
+                )?
+            }
+        } else {
+            fgsea_decor_simple_with_options(
+                &ranks,
+                &pd.pathways,
+                &cache,
+                &options,
+                args.nperm.unwrap_or(args.n_perm_simple),
+                Some(seed),
+                min_size,
+                max_size,
+                args.eps,
+                score_type,
+                args.gsea_param,
+                args.sample_size,
+            )?
+        }
+    } else if args.gpu {
         run_gpu_mode(&args, &ranks, &pd.pathways, score_type, max_size, seed)?
+    } else if args.mode == CliMode::Blitz {
+        fgsea_blitz_with_options(
+            &ranks,
+            &pd.pathways,
+            &BlitzOptions {
+                permutations: args.n_perm_simple,
+                anchors: args.blitz_anchors,
+                min_size,
+                max_size,
+                processes: if args.nproc > 0 { args.nproc } else { 4 },
+                symmetric: args.blitz_symmetric,
+                seed,
+                center: !args.blitz_no_center,
+                accuracy: args.blitz_accuracy,
+                deep_accuracy: args.blitz_deep_accuracy,
+                signature_cache: args.blitz_signature_cache,
+            },
+        )?
     } else {
         match args.mode {
             CliMode::Fgsea => fgsea_with_sample_size(
@@ -182,42 +703,38 @@ fn main() -> Result<()> {
                 args.nperm,
                 args.n_perm_simple,
                 Some(seed),
-                args.min_size,
+                min_size,
                 max_size,
                 args.eps,
                 score_type,
                 args.gsea_param,
                 args.sample_size,
             ),
-            CliMode::Multilevel => {
-                if args.nperm.is_some() {
-                    bail!("--nperm is only valid with --mode fgsea or --mode simple.");
-                }
-                fgsea_multilevel_with_sample_size(
-                    &ranks,
-                    &pd.pathways,
-                    args.n_perm_simple,
-                    Some(seed),
-                    args.min_size,
-                    max_size,
-                    args.eps,
-                    score_type,
-                    args.gsea_param,
-                    args.sample_size,
-                )
-            }
+            CliMode::Multilevel => fgsea_multilevel_with_sample_size(
+                &ranks,
+                &pd.pathways,
+                args.n_perm_simple,
+                Some(seed),
+                min_size,
+                max_size,
+                args.eps,
+                score_type,
+                args.gsea_param,
+                args.sample_size,
+            ),
             CliMode::Simple => fgsea_simple_with_sample_size(
                 &ranks,
                 &pd.pathways,
                 args.nperm.unwrap_or(args.n_perm_simple),
                 Some(seed),
-                args.min_size,
+                min_size,
                 max_size,
                 args.eps,
                 score_type,
                 args.gsea_param,
                 args.sample_size,
             ),
+            CliMode::Blitz => unreachable!("blitz mode handled before fgsea-compatible modes"),
         }
     };
     let duration = start.elapsed();
@@ -241,18 +758,40 @@ fn write_results(path: &Path, results: &[EnrichmentResult]) -> Result<()> {
         let export = res.export();
         writeln!(
             out,
-            "{}\t{}\t{:.8}\t{:.8}\t{:.8}\t{:.8}\t{:.8}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             export.pathway,
             export.size,
             export.es,
-            export.nes.unwrap_or(0.0),
+            format_optional_float(export.nes),
             export.pval,
-            export.padj.unwrap_or(1.0),
-            export.log2err.unwrap_or(0.0),
+            format_optional_float(export.padj),
+            format_optional_float(export.log2err),
             res.leading_edge_csv()
         )?;
     }
     Ok(())
+}
+
+fn format_optional_float(value: Option<f64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "NA".to_string())
+}
+
+#[cfg(test)]
+mod output_tests {
+    use super::format_optional_float;
+
+    #[test]
+    fn optional_float_format_is_round_trip_and_preserves_missingness() {
+        let values = [0.1, -0.0, f64::MIN_POSITIVE, f64::from_bits(1), f64::MAX];
+        for value in values {
+            let rendered = format_optional_float(Some(value));
+            let parsed = rendered.parse::<f64>().unwrap();
+            assert_eq!(parsed.to_bits(), value.to_bits(), "rendered={rendered}");
+        }
+        assert_eq!(format_optional_float(None), "NA");
+    }
 }
 
 #[cfg(feature = "gpu")]
@@ -280,7 +819,7 @@ fn run_gpu_mode(
         pathways,
         config.n_perm,
         Some(seed),
-        args.min_size,
+        args.min_size.unwrap_or(1),
         max_size,
         config.eps,
         score_type,
@@ -314,13 +853,41 @@ mod tests {
             nperm: None,
             seed: Some(42),
             output: PathBuf::from("out.tsv"),
-            min_size: 1,
+            min_size: Some(1),
             max_size: None,
             eps: 1e-50,
             sample_size: 101,
+            decor_tail_reliability: DecorTailReliabilityArg::Off,
+            decor_tail_pvalue_threshold: 1e-4,
+            decor_tail_log2err_threshold: 0.75,
+            decor_tail_first_sample_size: 401,
+            decor_tail_first_seeds: 3,
+            decor_tail_final_sample_size: 801,
+            decor_tail_final_seeds: 5,
+            decor_tail_max_log10_range: 0.25,
             score_type: ScoreTypeArg::Std,
             gsea_param: 1.0,
             mode: CliMode::Fgsea,
+            blitz_anchors: 40,
+            blitz_symmetric: false,
+            blitz_no_center: false,
+            blitz_signature_cache: false,
+            blitz_accuracy: 40,
+            blitz_deep_accuracy: 50,
+            method: MethodArg::Classic,
+            decor_cache: None,
+            decor_expression: None,
+            decor_preset: None,
+            decor_stringency: None,
+            decor_alpha: None,
+            decor_cache_mode: DecorCacheModeArg::Auto,
+            decor_correlation: DecorCorrelationArg::Pearson,
+            decor_redundancy: DecorRedundancyArg::PositiveMean,
+            decor_weight_formula: None,
+            decor_threshold: None,
+            decor_scale_epsilon: 1e-12,
+            decor_expression_format: DecorExpressionFormatArg::Auto,
+            decor_expression_has_header: true,
             nproc: 0,
             gpu: true,
         }

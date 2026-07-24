@@ -1,11 +1,13 @@
-# High-Performance GSEA Analysis
+# rsfgsea: Decor, Classic fgsea, and Native Blitz GSEA
 
-High-performance Rust implementation of preranked Gene Set Enrichment Analysis (GSEA). Designed as a drop-in, optimized alternative to the R `fgsea` package, implementing the same widely used statistical method with significantly improved speed.
+High-performance Rust implementation of preranked Gene Set Enrichment Analysis (GSEA) with three public tracks: `rsfgsea-decor` for redundancy-aware enrichment, classic fgsea-compatible simple and multilevel workflows, and native blitzGSEA-compatible execution.
 
 ## Features
 
-- **fgsea-Compatible Statistics**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
-- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work; on current large 1-worker comparison workloads, `rsfgsea` is about **3.0x faster** in simple mode and **4.1x faster** in multilevel mode than R `fgsea`.
+- **rsfgsea-decor**: A redundancy-aware preranked GSEA method that downweights pathway genes with high expression-derived within-pathway correlation. Decor uses validated presets (`sensitive`, `balanced`, `specific`, `strict`), with `balanced` as the release default, plus an optional 0-100 stringency ladder for preset autoswitching.
+- **Classic fgsea Parity**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
+- **Native Blitz Mode**: Adds `mode=blitz` across Rust, CLI, Python, and R with native Rust execution against the locked `blitzgsea 1.3.54` reference. The current large audit reaches floating-point-scale maximum errors: ES `4.441e-16`, NES `3.331e-15`, p-value `1.776e-15`, and FDR `2.665e-15`.
+- **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work. Benchmark claims and their exact protocols are kept in the [Reproducibility Guide](./docs/reproducibility.md).
 - **Built-In Plotting**: Writes single-pathway enrichment plots and multi-pathway GSEA table plots as PNG directly from Rust, CLI, Python, and R.
 - **Hybrid CPU/GPU Engine (Experimental)**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
 
@@ -17,30 +19,68 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 # Install from crates.io
 cargo install rsfgsea
 
-# Run the installed binary
-rsfgsea \
-    --ranks data/pearson_symbols.rnk \
-    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
-    --output results.tsv
-
 # Or build from a repository checkout
 git clone https://github.com/deminden/rsfgsea
 cd rsfgsea
 cargo build --workspace --release
+```
 
-# Run the locally built binary
-./target/release/rsfgsea \
+Decor is the first public track for redundancy-aware preranked GSEA. It runs as
+a CPU workflow: fixed-permutation simple when `--nperm` is set, and decor
+multilevel refinement when wrapper mode omits `--nperm` or `--mode multilevel`
+is requested. The minimal CLI keeps the validated default preset: `balanced`,
+implemented as threshold-rational decor with `tau=0.04` and `alpha=60`.
+
+```bash
+rsfgsea \
+    --method decor \
+    --mode simple \
+    --nperm 10000 \
+    --ranks data/pearson_symbols.rnk \
+    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
+    --output results.decor.tsv \
+    --decor-cache cache/hallmark.decor.tsv \
+    --decor-expression data/expression.tsv
+```
+
+Use `--decor-preset specific` when you want an explicit preset, or
+`--decor-stringency 75` when you want the preset ladder to choose for you.
+
+Classic fgsea-compatible mode remains available when you want simple or
+multilevel behavior aligned with R `fgsea`:
+
+```bash
+rsfgsea \
     --ranks data/pearson_symbols.rnk \
     --gmt data/h.all.v2025.1.Hs.symbols.gmt \
     --output results.tsv
 ```
+
+Blitz mode is the third public track. It is native Rust, not a Python delegation
+layer, and is available as `mode=blitz` in Rust, CLI, Python, and R.
+
+```bash
+rsfgsea \
+    --mode blitz \
+    --ranks data/pearson_symbols.rnk \
+    --gmt data/h.all.v2025.1.Hs.symbols.gmt \
+    --output results.blitz.tsv
+```
+
+Blitz mode uses `blitzgsea.gsea()` defaults where applicable:
+`permutations=1000`, `anchors=40`, `min_size=5`, `max_size=4000`,
+`processes=4`, `symmetric=false`, `seed=0`, `center=true`, `accuracy=40`, and
+`deep_accuracy=50`. Library callers keep an in-process blitz null-model cache
+enabled by default for repeated identical calls; the one-shot CLI does not enable
+that cache unless `--blitz-signature-cache` is passed. It rejects `gpu`, `method=decor`, `nperm`,
+`scoreType != "std"`, and `gseaParam != 1.0`.
 
 ### As a Crate
 
 Add to `Cargo.toml`:
 ```toml
 [dependencies]
-rsfgsea = "0.3.4"
+rsfgsea = "0.4.0"
 ```
 
 Or use the repository directly:
@@ -87,11 +127,11 @@ cd crates/rsfgseapy
 maturin develop --release
 ```
 
-Usage example:
+Classic usage example:
 ```python
 import rsfgseapy
 
-# Minimal wrapper-style run
+# Classic wrapper-style run
 results = rsfgseapy.run_gsea_py(
     ranks={"GENE_A": 2.0, "GENE_B": 1.0, "GENE_C": -1.0, "GENE_D": -2.0},
     gmt_path="pathways.gmt",
@@ -131,7 +171,7 @@ cd rsfgsea
 R CMD INSTALL r-pkg/rsfgseaR
 ```
 
-Minimal example:
+Classic minimal example:
 
 ```r
 library(rsfgseaR)
@@ -222,12 +262,26 @@ Current status:
 - `--gpu` still rejects `--mode simple` and `--mode multilevel`; those mode names are not wired separately yet.
 - `run_gsea_gpu(...)` requires a usable non-CPU WebGPU adapter. Software adapters such as `llvmpipe` are rejected.
 
+On WSL2, CUDA can be visible while Vulkan/WebGPU still selects Mesa
+`llvmpipe`. If `nvidia-smi` works but `--gpu` reports `llvmpipe`, force Mesa's
+D3D12 path before running the CLI:
+
+```bash
+GALLIUM_DRIVER=d3d12 \
+MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
+./target/release/rsfgsea --gpu --mode fgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --nPermSimple 100000 \
+  --output results.tsv
+```
+
 Use the hybrid GPU runner in Rust code:
 ```rust
 let results = rsfgsea::algo::run_gsea_gpu(
     &ranks, 
     &pathways, 
-    1000,           // initial simple permutations
+    100_000,        // simple permutations
     42,             // seed
     15, 500,        // size limits
     ScoreType::Std, 
@@ -262,71 +316,15 @@ PATHWAY_A  description  GENE1  GENE2  GENE3
 PATHWAY_B  description  GENE4  GENE5
 ```
 
-## Performance Comparison
+## Performance and Evidence
 
-### Local Optimization Benchmark
+Benchmark numbers are intentionally owned by the
+[Reproducibility Guide](./docs/reproducibility.md), together with the workload,
+hardware, timing method, and acceptance gate. This keeps local optimization
+snapshots from drifting across the root, Python, and R READMEs.
 
-This is the fast benchmark used while optimizing the Rust core. It is synthetic,
-but shaped like real GSEA workloads: 10k ranked genes, 1k overlapping pathways,
-pathway sizes concentrated in the 15-500 range, smooth score tails, and a few
-seeded enriched regions. It is separate from the file-backed R-vs-Rust
-comparison benchmark below.
-
-Run it with:
-
-```bash
-cargo bench -p rsfgsea --bench gsea_bench
-```
-
-Latest local Criterion snapshot, **AMD Ryzen 7950X3D**, release bench mode,
-median of 10 samples:
-
-| Benchmark | Workload | Median |
-| :--- | :--- | ---: |
-| `calculate_es_10k_100` | ES kernel, 10k genes / 100 hits | `294 ns` |
-| `representative_simple` | 10k genes / 1k pathways / 10k permutations | `2.282 s` |
-| `representative_multilevel` | 10k genes / 1k pathways / `nPermSimple=1000` | `3.438 s` |
-
-For thread-scaling work, use the opt-in 5k-pathway matrix:
-
-```bash
-for t in 1 2 4 8 16; do
-  RAYON_NUM_THREADS=$t RSFGSEA_THREAD_MATRIX_BENCH=1 \
-    cargo bench -p rsfgsea --bench gsea_bench
-done
-```
-
-Use `RSFGSEA_PERM_HEAVY_BENCH=1` for the 100k-permutation simple-mode profile,
-and `RSFGSEA_HEAVY_BENCH=1` for the larger 20k-gene / 15k-pathway profile.
-
-### R fgsea Comparison Benchmark
-
-Benchmarked on **AMD Ryzen 7950X3D**. Times are **median of 5 runs** (after one warmup run).
-
-**Benchmark setup**:
-- Ranked list: `data/pearson_symbols.rnk` (356 genes)
-- Small pathways: `data/h.all.v2025.1.Hs.symbols.gmt` (50 total, 37 passing size filters)
-- Large pathways: `data/Human_GO_AllPathways_noPFOCR_with_GO_iea_March_01_2024_symbol_renamed.gmt` (29,705 total, 5,582 passing size filters)
-- Size filters: `minSize=1`, `maxSize=5000`
-- Rust timing source: CLI compute timer (`GSEA_COMP_TIME_MS`) in release mode
-- R timing source: `system.time(...)["elapsed"]` around `fgsea` calls
-- R multicore modes: `BiocParallel::MulticoreParam(workers=16|32)` passed as `BPPARAM`
-
-Headline results:
-
-| Workload | Rust | R fgsea | Result |
-| :--- | ---: | ---: | :--- |
-| Multilevel, small, 1 worker | 2 ms | 42 ms | Rust `21.0x` faster |
-| Multilevel, large, 16 workers | 105 ms | 977 ms | Rust `9.3x` faster |
-| Simple, small, 1 worker | 720 ms | 2597 ms | Rust `3.6x` faster |
-| Simple, large, 16 workers | 674 ms | 798 ms | Rust `1.18x` faster |
-
-- Large multilevel workloads show the strongest CPU scaling in the current parity-preserving path.
-- Small workloads are overhead-dominated and do not benefit much from more threads.
-- On the committed muscle-comparison real-data validation workload, Rust used
-  `81 MB` peak RSS versus R `fgseaMultilevel` at `329 MB` peak RSS, about
-  `4.1x` lower memory, while running `0.21 s` versus `2.56 s`.
-- Full benchmark matrices and thread-scaling tables are in [`docs/reproducibility.md`](./docs/reproducibility.md).
+The current machine-readable Blitz audit is
+[`docs/evidence/blitz-latest.json`](./docs/evidence/blitz-latest.json).
 
 ## Precision vs R
 
@@ -357,28 +355,26 @@ Notes:
   removed once upstream `fgsea` fixes it
 - full parity distribution tables are in [`docs/reproducibility.md`](./docs/reproducibility.md)
 
-This section describes the CPU parity path. GPU parity is materially looser at present and is summarized separately in [GPU Accuracy vs R](#gpu-accuracy-vs-r).
+This section describes the CPU parity path. GPU parity is materially looser at present and is discussed separately in [GPU Accuracy vs R](#gpu-accuracy-vs-r).
+
+### Blitz Reference
+
+The compatibility target is `blitzgsea 1.3.54` under Python `3.12.9`, NumPy
+`2.5.1`, SciPy `1.18.0`, pandas `3.0.3`, statsmodels `0.14.6`, and mpmath
+`1.4.1`; `reference/blitz/uv.lock` fixes the complete environment. On the
+63,904-rank, 5,324-result `lung_vs_muscle + GO BP` audit, finite maximum
+absolute differences are ES `4.441e-16`, NES `3.331e-15`, p-value
+`1.776e-15`, and FDR `2.665e-15`. All pathway sizes and leading-edge sets
+match; 36 leading edges differ only in ordering. Retargeting SciPy 1.18's
+de Boor-weight interpolation reduced the pre-change NES maximum from
+`1.508e-8` by about 4.53 million×. These are reference-compatibility results,
+not claims of greater mathematical truth in extreme tails.
 
 ### GPU Accuracy vs R
 
 Unlike the CPU parity path above, the current hybrid GPU path does not match R at floating-point-noise scale. It uses GPU simple-stage screening/null generation plus CPU multilevel refinement, and its parity characteristics should be interpreted separately from the CPU results.
 
-GPU parity was evaluated against R `fgseaMultilevel` using seeds `[11, 23, 42]`, `nPermSimple=1000`, `sampleSize=101`, `eps=1e-50`.
-
-Compact GPU parity snapshot:
-
-| Metric | Mean | P95 | Max |
-| :--- | ---: | ---: | ---: |
-| `abs(ES)` | `2.535e-09` | `4.736e-09` | `4.998e-09` |
-| `abs(NES)` | `1.842e-02` | `5.827e-02` | `1.238e-01` |
-| `abs(pval)` | `1.548e-02` | `3.996e-02` | `5.007e-01` |
-
-Relative p-value difference:
-- mean: `4.15%`
-- p95: `13.36%`
-- `<10%`: `90.9%` of pathways
-
-- Full GPU parity tables are in [`docs/reproducibility.md`](./docs/reproducibility.md).
+Current GPU comparison guidance is in [`docs/reproducibility.md`](./docs/reproducibility.md).
 
 
 ## Contributing

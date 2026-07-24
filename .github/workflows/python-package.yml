@@ -28,14 +28,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: "3.14"
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.97.1
+          components: clippy, rustfmt
 
       - name: Install maturin and test deps
-        run: python -m pip install --upgrade pip maturin pytest
+        run: python -m pip install --upgrade pip maturin==1.14.1 pytest==9.1.1
 
       - name: Build wheel
         working-directory: crates/rsfgseapy
@@ -56,26 +62,30 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
-          python-version: "3.13"
+          python-version: "3.14"
 
       - name: Build wheels
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: 1.14.1
           command: build
           working-directory: crates/rsfgseapy
-          args: --release --out wheelhouse
+          rust-toolchain: 1.97.1
+          args: --release --out wheelhouse ${{ matrix.os == 'ubuntu-latest' && '-i python3.14' || '' }}
           manylinux: auto
 
       - name: Build source distribution
         if: matrix.os == 'ubuntu-latest'
-        uses: PyO3/maturin-action@v1
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b # v1.51.0
         with:
+          maturin-version: 1.14.1
           command: sdist
           working-directory: crates/rsfgseapy
+          rust-toolchain: 1.97.1
           args: --out sdist
 
       - name: Check built distributions
@@ -92,14 +102,14 @@ jobs:
           python -m twine check crates/rsfgseapy/sdist/*
 
       - name: Upload wheel distributions
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: python-dists-${{ matrix.os }}
           path: crates/rsfgseapy/wheelhouse/*
 
       - name: Upload source distribution
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: python-dists-${{ matrix.os }}-sdist
           path: crates/rsfgseapy/sdist/*

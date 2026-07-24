@@ -1,12 +1,70 @@
 cff-version: 1.2.0
 message: "If you use this software, please cite it as below."
+type: software
 authors:
 - family-names: "Demin"
   given-names: "Denis"
-title: "rsfgsea: Fast Gene Set Enrichment Analysis in Rust"
-version: 0.1.0
-date-released: 2025-12-22
+title: "rsfgsea: Decor, Classic fgsea, and Native Blitz GSEA"
+version: "0.4.0"
+abstract: >-
+  A high-performance Rust implementation of preranked Gene Set Enrichment
+  Analysis with redundancy-aware decor, fgsea-compatible, and native
+  blitzGSEA-compatible workflows. Blitz mode targets blitzgsea 1.3.54.
 url: "https://github.com/deminden/rsfgsea"
-# Note: Reimplementing ideas from fgsea:
-# Korotkevich, G., Sukhov, V., Budin, N., Shpak, B., Artyomov, M. N., & Sergushichev, A. (2021). 
-# Fast gene set enrichment analysis. bioRxiv.
+repository-code: "https://github.com/deminden/rsfgsea"
+license: MIT
+keywords:
+- "gene set enrichment analysis"
+- "GSEA"
+- "fgsea"
+- "blitzGSEA"
+- "Rust"
+references:
+- type: article
+  authors:
+  - family-names: "Lachmann"
+    given-names: "Alexander"
+  - family-names: "Xie"
+    given-names: "Zhuorui"
+  - family-names: "Ma'ayan"
+    given-names: "Avi"
+  title: >-
+    blitzGSEA: efficient computation of gene set enrichment analysis through
+    gamma distribution approximation
+  journal: "Bioinformatics"
+  year: 2022
+  volume: 38
+  issue: 8
+  start: 2356
+  end: 2357
+  doi: "10.1093/bioinformatics/btac076"
+  url: "https://doi.org/10.1093/bioinformatics/btac076"
+- type: software
+  authors:
+  - family-names: "Lachmann"
+    given-names: "Alexander"
+  title: "blitzGSEA"
+  version: "1.3.54"
+  date-released: 2025-05-16
+  repository-code: "https://github.com/MaayanLab/blitzgsea"
+  url: "https://pypi.org/project/blitzgsea/1.3.54/"
+  license: Apache-2.0
+- type: article
+  authors:
+  - family-names: "Korotkevich"
+    given-names: "Gennady"
+  - family-names: "Sukhov"
+    given-names: "Vladimir"
+  - family-names: "Budin"
+    given-names: "Nikolay"
+  - family-names: "Shpak"
+    given-names: "Boris"
+  - family-names: "Artyomov"
+    given-names: "Maxim N."
+  - family-names: "Sergushichev"
+    given-names: "Alexey"
+  title: "Fast gene set enrichment analysis"
+  journal: "bioRxiv"
+  year: 2021
+  doi: "10.1101/060012"
+  url: "https://doi.org/10.1101/060012"

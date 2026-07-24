@@ -25,7 +25,8 @@ fgseaSimple(
 
 \item{stats}{Named numeric vector of preranked statistics, or a path to a ranked-list file.}
 
-\item{nperm}{Number of permutations.}
+\item{nperm}{Number of permutations. For CPU/GPU or R/GPU comparisons,
+prefer \code{100000L} as a practical baseline; use \code{10000L} only as a smoke tier.}
 
 \item{seed}{Optional integer RNG seed. \code{NULL} uses a fresh random seed.}
 
@@ -43,10 +44,13 @@ fgseaSimple(
 
 \item{sampleSize}{Multilevel sample size, kept for interface parity.}
 
-\item{output}{Optional TSV output path in CLI-style tabular format.}
+\item{output}{Optional TSV output path in CLI-style tabular format with
+round-trip-safe numeric text and no fixed decimal width.}
 
 \item{gpu}{Logical flag mirroring the CLI \code{--gpu} switch. GPU execution
-currently supports only \code{mode = "fgsea"}, so \code{fgseaSimple()} will reject it.}
+currently supports only \code{mode = "fgsea"}, so \code{fgseaSimple()} will reject it.
+On WSL2, if CUDA is visible but WebGPU selects \code{llvmpipe}, start R with
+\code{GALLIUM_DRIVER=d3d12} and \code{MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA}.}
 }
 \value{
 A data frame with fgsea-style result columns.

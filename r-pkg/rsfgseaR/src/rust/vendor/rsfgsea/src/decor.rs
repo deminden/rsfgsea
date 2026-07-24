@@ -1,0 +1,2131 @@
+use crate::algo::{IntoSeed, resolve_rng_seed};
+use crate::algo_support::{
+    apply_bh_adjustment, build_gene_index, compute_nes, leading_edge, mode_fraction_count,
+    multilevel_error, selected_tail_count, should_refine_multilevel, simple_log2err,
+    warn_prepare_stats,
+};
+use crate::core::{
+    DecorCacheMode, DecorCorrelation, DecorOptions, DecorRedundancy, DecorWeightFormula,
+    EnrichmentResult, Pathway, RankedList, ScoreType,
+};
+use crate::esruler_compat::beta_mean_log;
+use crate::rng_compat::{
+    Mt19937Compat, RLecuyerCmrgSeedCompat, RSampleKind, combination, uid_wrapper,
+};
+use anyhow::{Context, Result, bail};
+use flate2::Compression;
+use flate2::read::GzDecoder;
+use flate2::write::GzEncoder;
+use rayon::prelude::*;
+use sha2::{Digest, Sha256};
+use std::collections::{BTreeMap, HashMap, HashSet};
+use std::fmt;
+use std::fs::{self, File};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
+use std::path::{Path, PathBuf};
+
+const CACHE_FORMAT: &str = "rsfgsea-decor-cache";
+const CACHE_VERSION: &str = "1";
+const GENE_ID_MODE: &str = "verbatim";
+const DECOR_BATCH_MIN_GROUP_PATHWAYS: usize = 16;
+const DECOR_MULTILEVEL_MAX_LEVELS: usize = 256;
+const DECOR_MULTILEVEL_MIX_SCALE: usize = 2;
+
+#[derive(Debug, Clone)]
+pub struct DecorFormulaContext {
+    pub weight_formula: DecorWeightFormula,
+    pub alpha: f64,
+    pub gamma: f64,
+    pub threshold_tau: f64,
+    pub penalty_floor: f64,
+    pub scale_epsilon: f64,
+    pub global_median_redundancy: Option<f64>,
+    pub global_q75_redundancy: Option<f64>,
+    sorted_redundancy: Vec<f64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DecorCacheStatus {
+    Reused,
+    Built,
+    Rebuilt,
+}
+
+impl fmt::Display for DecorCacheStatus {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DecorCacheStatus::Reused => write!(f, "reused"),
+            DecorCacheStatus::Built => write!(f, "built"),
+            DecorCacheStatus::Rebuilt => write!(f, "rebuilt"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DecorCacheMetadata {
+    pub format: String,
+    pub version: String,
+    pub created_by: String,
+    pub gmt_sha256: String,
+    pub expression_sha256: String,
+    pub correlation: DecorCorrelation,
+    pub redundancy: DecorRedundancy,
+    pub expression_gene_axis: String,
+    pub expression_has_header: bool,
+    pub gene_id_mode: String,
+    pub n_pathways: usize,
+    pub n_rows: usize,
+}
+
+#[derive(Debug, Clone)]
+pub struct DecorPathwayScores {
+    pub genes: Vec<String>,
+    pub redundancy: Vec<f32>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DecorCache {
+    pub metadata: DecorCacheMetadata,
+    pub pathways: BTreeMap<String, DecorPathwayScores>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DecorCacheExpectedMetadata {
+    pub gmt_sha256: String,
+    pub expression_sha256: Option<String>,
+    pub correlation: DecorCorrelation,
+    pub redundancy: DecorRedundancy,
+    pub expression_gene_axis: String,
+    pub expression_has_header: bool,
+    pub gene_id_mode: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct DecorCacheCompatibility {
+    pub reasons: Vec<String>,
+}
+
+impl DecorCacheCompatibility {
+    pub fn is_compatible(&self) -> bool {
+        self.reasons.is_empty()
+    }
+}
+
+impl fmt::Display for DecorCorrelation {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DecorCorrelation::Pearson => write!(f, "pearson"),
+            DecorCorrelation::Spearman => write!(f, "spearman"),
+        }
+    }
+}
+
+impl fmt::Display for DecorRedundancy {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DecorRedundancy::PositiveMean => write!(f, "positive_mean"),
+            DecorRedundancy::AbsMean => write!(f, "abs_mean"),
+        }
+    }
+}
+
+impl fmt::Display for DecorCacheMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DecorCacheMode::Auto => write!(f, "auto"),
+            DecorCacheMode::Reuse => write!(f, "reuse"),
+            DecorCacheMode::Rebuild => write!(f, "rebuild"),
+        }
+    }
+}
+
+fn parse_correlation(value: &str) -> Result<DecorCorrelation> {
+    match value {
+        "pearson" => Ok(DecorCorrelation::Pearson),
+        "spearman" => Ok(DecorCorrelation::Spearman),
+        other => bail!("unsupported decor correlation in cache metadata: {other}"),
+    }
+}
+
+fn parse_redundancy(value: &str) -> Result<DecorRedundancy> {
+    match value {
+        "positive_mean" => Ok(DecorRedundancy::PositiveMean),
+        "abs_mean" => Ok(DecorRedundancy::AbsMean),
+        other => bail!("unsupported decor redundancy in cache metadata: {other}"),
+    }
+}
+
+fn finite_cache_redundancy(cache: &DecorCache) -> Vec<f64> {
+    let mut values = cache
+        .pathways
+        .values()
+        .flat_map(|scores| scores.redundancy.iter().copied())
+        .map(f64::from)
+        .filter(|value| value.is_finite())
+        .collect::<Vec<_>>();
+    values.sort_by(|a, b| a.total_cmp(b));
+    values
+}
+
+fn percentile_sorted(sorted: &[f64], p: f64) -> Option<f64> {
+    if sorted.is_empty() {
+        return None;
+    }
+    if sorted.len() == 1 {
+        return Some(sorted[0]);
+    }
+    let pos = p.clamp(0.0, 1.0) * (sorted.len() - 1) as f64;
+    let lo = pos.floor() as usize;
+    let hi = pos.ceil() as usize;
+    if lo == hi {
+        Some(sorted[lo])
+    } else {
+        let frac = pos - lo as f64;
+        Some(sorted[lo] * (1.0 - frac) + sorted[hi] * frac)
+    }
+}
+
+// Keep option validation close to the formula engine so every wrapper gets the
+// same numerical guardrails before ES and null generation start.
+fn validate_decor_options(options: &DecorOptions) -> Result<()> {
+    if options.alpha < 0.0 || !options.alpha.is_finite() {
+        bail!("decor alpha must be a finite value >= 0");
+    }
+    if options.gamma < 0.0 || !options.gamma.is_finite() {
+        bail!("decor gamma must be a finite value >= 0");
+    }
+    if !(0.0..1.0).contains(&options.threshold_tau) || !options.threshold_tau.is_finite() {
+        bail!("decor threshold must be a finite value >= 0 and < 1");
+    }
+    if !(0.0..1.0).contains(&options.penalty_floor) || !options.penalty_floor.is_finite() {
+        bail!("decor penalty floor must be a finite value >= 0 and < 1");
+    }
+    if options.scale_epsilon <= 0.0 || !options.scale_epsilon.is_finite() {
+        bail!("decor scale epsilon must be a finite value > 0");
+    }
+    Ok(())
+}
+
+impl DecorFormulaContext {
+    pub fn from_cache(cache: &DecorCache, options: &DecorOptions) -> Result<Self> {
+        validate_decor_options(options)?;
+        // Formula scaling is derived from the cache once per run, not per
+        // pathway, so all pathways share one transparent penalty reference.
+        let sorted_redundancy = finite_cache_redundancy(cache);
+        let requires_distribution = matches!(
+            options.weight_formula,
+            DecorWeightFormula::ScaledRational
+                | DecorWeightFormula::Q75ScaledRational
+                | DecorWeightFormula::ExpScaled
+                | DecorWeightFormula::QuantileRational
+                | DecorWeightFormula::FloorScaledRational
+        );
+        if requires_distribution && sorted_redundancy.is_empty() {
+            bail!(
+                "selected formula {} could not compute redundancy scale because the decor cache has no finite redundancy scores",
+                options.weight_formula
+            );
+        }
+        Ok(Self {
+            weight_formula: options.weight_formula,
+            alpha: options.alpha,
+            gamma: options.gamma,
+            threshold_tau: options.threshold_tau,
+            penalty_floor: options.penalty_floor,
+            scale_epsilon: options.scale_epsilon,
+            global_median_redundancy: percentile_sorted(&sorted_redundancy, 0.5),
+            global_q75_redundancy: percentile_sorted(&sorted_redundancy, 0.75),
+            sorted_redundancy,
+        })
+    }
+
+    fn median_scale(&self) -> Result<f64> {
+        self.global_median_redundancy.with_context(|| {
+            format!(
+                "selected formula {} requires finite redundancy scores in the decor cache",
+                self.weight_formula
+            )
+        })
+    }
+
+    fn q75_scale(&self) -> Result<f64> {
+        self.global_q75_redundancy.with_context(|| {
+            format!(
+                "selected formula {} requires finite redundancy scores in the decor cache",
+                self.weight_formula
+            )
+        })
+    }
+
+    fn redundancy_quantile(&self, r: f64) -> Result<f64> {
+        if self.sorted_redundancy.is_empty() {
+            bail!(
+                "selected formula quantile-rational requires finite redundancy scores in the decor cache"
+            );
+        }
+        if self.sorted_redundancy.len() == 1 {
+            return Ok(1.0);
+        }
+        let lower = self.sorted_redundancy.partition_point(|value| *value < r);
+        let upper = self.sorted_redundancy.partition_point(|value| *value <= r);
+        let avg_rank = (lower + upper.saturating_sub(1)) as f64 / 2.0;
+        Ok((avg_rank / (self.sorted_redundancy.len() - 1) as f64).clamp(0.0, 1.0))
+    }
+
+    pub fn penalty(&self, r: f64) -> Result<f64> {
+        if !r.is_finite() {
+            bail!("decor redundancy score must be finite");
+        }
+        let penalty = match self.weight_formula {
+            DecorWeightFormula::RawRational => 1.0 / (1.0 + self.alpha * r),
+            DecorWeightFormula::ScaledRational => {
+                let r_scaled = r / (self.median_scale()? + self.scale_epsilon);
+                1.0 / (1.0 + self.alpha * r_scaled)
+            }
+            DecorWeightFormula::Q75ScaledRational => {
+                let r_scaled = r / (self.q75_scale()? + self.scale_epsilon);
+                1.0 / (1.0 + self.alpha * r_scaled)
+            }
+            DecorWeightFormula::ExpScaled => {
+                let r_scaled = r / (self.median_scale()? + self.scale_epsilon);
+                (-self.alpha * r_scaled).exp()
+            }
+            DecorWeightFormula::OddsRational => {
+                let r = r.clamp(0.0, 1.0 - self.scale_epsilon);
+                let odds = r / (1.0 - r + self.scale_epsilon);
+                1.0 / (1.0 + self.alpha * odds)
+            }
+            DecorWeightFormula::ThresholdRational => {
+                let r_star = (r - self.threshold_tau).max(0.0);
+                1.0 / (1.0 + self.alpha * r_star)
+            }
+            DecorWeightFormula::QuantileRational => {
+                let q = self.redundancy_quantile(r)?;
+                1.0 / (1.0 + self.alpha * q)
+            }
+            DecorWeightFormula::FloorScaledRational => {
+                let r_scaled = r / (self.median_scale()? + self.scale_epsilon);
+                let base = 1.0 / (1.0 + self.alpha * r_scaled);
+                self.penalty_floor + (1.0 - self.penalty_floor) * base
+            }
+            DecorWeightFormula::PowerRetention => (1.0 - r.clamp(0.0, 1.0)).powf(self.gamma),
+        };
+        if penalty.is_finite() && penalty >= 0.0 {
+            Ok(penalty)
+        } else {
+            bail!(
+                "selected formula {} produced an invalid penalty from redundancy {}",
+                self.weight_formula,
+                r
+            )
+        }
+    }
+
+    fn penalties_for(&self, redundancy: &[f64]) -> Result<Vec<f64>> {
+        redundancy.iter().map(|&r| self.penalty(r)).collect()
+    }
+}
+
+#[inline]
+pub fn calculate_es_decor(
+    stats: &[f64],
+    hits: &[usize],
+    penalty: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+) -> Result<(f64, usize)> {
+    if hits.len() != penalty.len() {
+        bail!(
+            "decor redundancy length mismatch: got {} redundancy values for {} hits",
+            penalty.len(),
+            hits.len()
+        );
+    }
+    if hits.is_empty() {
+        return Ok((0.0, 0));
+    }
+
+    let m = hits.len();
+    if m == n_total {
+        return Ok((0.0, hits[0]));
+    }
+
+    Ok(calculate_es_decor_prechecked(
+        stats, hits, penalty, n_total, score_type,
+    ))
+}
+
+#[inline]
+fn calculate_es_decor_prechecked(
+    stats: &[f64],
+    hits: &[usize],
+    penalty: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+) -> (f64, usize) {
+    debug_assert_eq!(hits.len(), penalty.len());
+    if hits.is_empty() {
+        return (0.0, 0);
+    }
+
+    let m = hits.len();
+    if m == n_total {
+        return (0.0, hits[0]);
+    }
+
+    let mut nr = 0.0_f64;
+    for i in 0..m {
+        nr += stats[hits[i]].abs() * penalty[i];
+    }
+
+    let mut max_p = f64::NEG_INFINITY;
+    let mut min_p = f64::INFINITY;
+    let mut max_i = 0usize;
+    let mut min_i = 0usize;
+    let mut csum = 0.0;
+    let denom = (n_total - m) as f64;
+    let inv_m = 1.0 / m as f64;
+    let nr_is_zero = nr == 0.0;
+
+    for i in 0..m {
+        let adj_i = stats[hits[i]].abs() * penalty[i];
+        csum += adj_i;
+        let r_cum = if nr_is_zero {
+            (i + 1) as f64 * inv_m
+        } else {
+            csum / nr
+        };
+        let miss = (hits[i] - i) as f64 / denom;
+        let top = r_cum - miss;
+        let bottom = if nr_is_zero {
+            top - inv_m
+        } else {
+            top - adj_i / nr
+        };
+        if top > max_p {
+            max_p = top;
+            max_i = i;
+        }
+        if bottom < min_p {
+            min_p = bottom;
+            min_i = i;
+        }
+    }
+
+    match score_type {
+        ScoreType::Std => {
+            if max_p == -min_p {
+                (0.0, hits[0])
+            } else if max_p > -min_p {
+                (max_p, hits[max_i])
+            } else {
+                (min_p, hits[min_i])
+            }
+        }
+        ScoreType::Pos => (max_p, hits[max_i]),
+        ScoreType::Neg => (min_p, hits[min_i]),
+    }
+}
+
+#[inline]
+fn decor_pathway_seed(seed: u64, pathway_idx: usize) -> u32 {
+    let mut x = seed ^ ((pathway_idx as u64).wrapping_add(0x9e37_79b9_7f4a_7c15));
+    x ^= x >> 30;
+    x = x.wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x ^= x >> 27;
+    x = x.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    let mixed = (x as u32) ^ ((x >> 32) as u32);
+    if mixed == 0 { 1 } else { mixed }
+}
+
+fn sanitize_positive_threshold(value: f64, fallback: f64) -> f64 {
+    if value.is_finite() && value > 0.0 {
+        value
+    } else {
+        fallback
+    }
+}
+
+fn median_f64(values: &mut [f64]) -> Option<f64> {
+    if values.is_empty() {
+        return None;
+    }
+    values.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+    let mid = values.len() / 2;
+    if values.len().is_multiple_of(2) {
+        Some((values[mid - 1] + values[mid]) / 2.0)
+    } else {
+        Some(values[mid])
+    }
+}
+
+fn sample_sd(values: &[f64]) -> Option<f64> {
+    if values.len() < 2 {
+        return None;
+    }
+    let mean = values.iter().sum::<f64>() / values.len() as f64;
+    let var = values
+        .iter()
+        .map(|value| {
+            let delta = value - mean;
+            delta * delta
+        })
+        .sum::<f64>()
+        / (values.len() - 1) as f64;
+    Some(var.sqrt())
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct DecorNullCounts {
+    n_le_es: usize,
+    n_ge_es: usize,
+    n_le_zero: usize,
+    n_ge_zero: usize,
+    le_zero_sum: f64,
+    ge_zero_sum: f64,
+}
+
+#[derive(Default)]
+struct DecorBatchScratch {
+    nr: Vec<f64>,
+    csum: Vec<f64>,
+    max_p: Vec<f64>,
+    min_p: Vec<f64>,
+}
+
+struct DecorWorking {
+    pathway_name: String,
+    size: usize,
+    hits: Vec<usize>,
+    penalty: Vec<f64>,
+    es: f64,
+    peak_idx: usize,
+    n_le_es: usize,
+    n_ge_es: usize,
+    n_le_zero: usize,
+    n_ge_zero: usize,
+    le_zero_sum: f64,
+    ge_zero_sum: f64,
+    nes: Option<f64>,
+    p_value: f64,
+    padj: Option<f64>,
+    log2err: Option<f64>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DecorTailReliabilityOptions {
+    pub pvalue_threshold: f64,
+    pub log2err_threshold: f64,
+    pub first_sample_size: usize,
+    pub first_seeds: usize,
+    pub final_sample_size: usize,
+    pub final_seeds: usize,
+    pub max_log10_range: f64,
+}
+
+impl DecorTailReliabilityOptions {
+    pub fn adaptive_default() -> Self {
+        Self {
+            pvalue_threshold: 1e-4,
+            log2err_threshold: 0.75,
+            first_sample_size: 401,
+            first_seeds: 3,
+            final_sample_size: 801,
+            final_seeds: 5,
+            max_log10_range: 0.25,
+        }
+    }
+
+    fn normalized(self, base_sample_size: usize) -> Self {
+        let base_sample_size = base_sample_size.max(3);
+        let first_sample_size = self.first_sample_size.max(base_sample_size).max(3);
+        let final_sample_size = self.final_sample_size.max(first_sample_size).max(3);
+        Self {
+            pvalue_threshold: sanitize_positive_threshold(self.pvalue_threshold, 1e-4),
+            log2err_threshold: sanitize_positive_threshold(self.log2err_threshold, 0.75),
+            first_sample_size,
+            first_seeds: self.first_seeds.max(1),
+            final_sample_size,
+            final_seeds: self.final_seeds.max(self.first_seeds).max(1),
+            max_log10_range: sanitize_positive_threshold(self.max_log10_range, 0.25),
+        }
+    }
+}
+
+struct DecorRuntimeSizeGroup {
+    size: usize,
+    work_indices: Vec<usize>,
+    observed_es: Vec<f64>,
+    penalties_rank_major: Vec<f64>,
+    use_batched: bool,
+}
+
+impl DecorRuntimeSizeGroup {
+    fn from_indices(size: usize, work_indices: Vec<usize>, work: &[DecorWorking]) -> Self {
+        let use_batched = work_indices.len() >= DECOR_BATCH_MIN_GROUP_PATHWAYS;
+        let observed_es = if use_batched {
+            work_indices
+                .iter()
+                .map(|&idx| work[idx].es)
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let mut penalties_rank_major = if use_batched {
+            Vec::with_capacity(size * work_indices.len())
+        } else {
+            Vec::new()
+        };
+        if use_batched {
+            for rank_idx in 0..size {
+                for &work_idx in &work_indices {
+                    penalties_rank_major.push(work[work_idx].penalty[rank_idx]);
+                }
+            }
+        }
+        Self {
+            size,
+            work_indices,
+            observed_es,
+            penalties_rank_major,
+            use_batched,
+        }
+    }
+}
+
+impl DecorBatchScratch {
+    fn reset(&mut self, n_pathways: usize) {
+        self.nr.clear();
+        self.nr.resize(n_pathways, 0.0);
+        self.csum.clear();
+        self.csum.resize(n_pathways, 0.0);
+        self.max_p.clear();
+        self.max_p.resize(n_pathways, f64::NEG_INFINITY);
+        self.min_p.clear();
+        self.min_p.resize(n_pathways, f64::INFINITY);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_decor_batched_counts(
+    stats_abs: &[f64],
+    selected: &[usize],
+    penalties_rank_major: &[f64],
+    observed_es: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+    counts: &mut [DecorNullCounts],
+    scratch: &mut DecorBatchScratch,
+) {
+    let m = selected.len();
+    let n_pathways = observed_es.len();
+    debug_assert_eq!(counts.len(), n_pathways);
+    debug_assert_eq!(penalties_rank_major.len(), m * n_pathways);
+    if m == 0 || n_pathways == 0 {
+        return;
+    }
+
+    scratch.reset(n_pathways);
+    for (rank_idx, &hit_idx) in selected.iter().enumerate() {
+        let base = stats_abs[hit_idx];
+        let row = &penalties_rank_major[rank_idx * n_pathways..(rank_idx + 1) * n_pathways];
+        for (nr, &penalty) in scratch.nr.iter_mut().zip(row) {
+            *nr += base * penalty;
+        }
+    }
+
+    let denom = (n_total - m) as f64;
+    let inv_m = 1.0 / m as f64;
+    for (rank_idx, &hit_idx) in selected.iter().enumerate() {
+        let base = stats_abs[hit_idx];
+        let miss = (hit_idx - rank_idx) as f64 / denom;
+        let row = &penalties_rank_major[rank_idx * n_pathways..(rank_idx + 1) * n_pathways];
+
+        for (pathway_idx, &penalty) in row.iter().enumerate() {
+            let adj = base * penalty;
+            scratch.csum[pathway_idx] += adj;
+            let nr = scratch.nr[pathway_idx];
+            let top = if nr == 0.0 {
+                (rank_idx + 1) as f64 * inv_m - miss
+            } else {
+                scratch.csum[pathway_idx] / nr - miss
+            };
+            let bottom = if nr == 0.0 {
+                top - inv_m
+            } else {
+                top - adj / nr
+            };
+            if top > scratch.max_p[pathway_idx] {
+                scratch.max_p[pathway_idx] = top;
+            }
+            if bottom < scratch.min_p[pathway_idx] {
+                scratch.min_p[pathway_idx] = bottom;
+            }
+        }
+    }
+
+    match score_type {
+        ScoreType::Std => {
+            for pathway_idx in 0..n_pathways {
+                let rand_es = if scratch.max_p[pathway_idx] == -scratch.min_p[pathway_idx] {
+                    0.0
+                } else if scratch.max_p[pathway_idx] > -scratch.min_p[pathway_idx] {
+                    scratch.max_p[pathway_idx]
+                } else {
+                    scratch.min_p[pathway_idx]
+                };
+                update_decor_null_count(
+                    &mut counts[pathway_idx],
+                    rand_es,
+                    observed_es[pathway_idx],
+                );
+            }
+        }
+        ScoreType::Pos => {
+            for pathway_idx in 0..n_pathways {
+                update_decor_null_count(
+                    &mut counts[pathway_idx],
+                    scratch.max_p[pathway_idx],
+                    observed_es[pathway_idx],
+                );
+            }
+        }
+        ScoreType::Neg => {
+            for pathway_idx in 0..n_pathways {
+                update_decor_null_count(
+                    &mut counts[pathway_idx],
+                    scratch.min_p[pathway_idx],
+                    observed_es[pathway_idx],
+                );
+            }
+        }
+    }
+}
+
+#[inline]
+fn update_decor_null_count(count: &mut DecorNullCounts, rand_es: f64, observed_es: f64) {
+    if rand_es <= observed_es {
+        count.n_le_es += 1;
+    }
+    if rand_es >= observed_es {
+        count.n_ge_es += 1;
+    }
+    if rand_es <= 0.0 {
+        count.n_le_zero += 1;
+        count.le_zero_sum += rand_es;
+    }
+    if rand_es >= 0.0 {
+        count.n_ge_zero += 1;
+        count.ge_zero_sum += rand_es;
+    }
+}
+
+#[derive(Clone, Debug)]
+struct DecorTailSample {
+    hits: Vec<usize>,
+    score: f64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DecorMultilevelTail {
+    p_tail: f64,
+}
+
+#[derive(Clone, Debug)]
+struct DecorAdaptiveTailResult {
+    p_value: f64,
+    log2err: Option<f64>,
+}
+
+#[inline]
+fn decor_tail_score(
+    stats_abs: &[f64],
+    hits: &[usize],
+    penalty: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+    positive_tail: bool,
+) -> f64 {
+    let (es, _) = calculate_es_decor_prechecked(stats_abs, hits, penalty, n_total, score_type);
+    if positive_tail { es } else { -es }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decor_random_tail_sample(
+    stats_abs: &[f64],
+    penalty: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+    positive_tail: bool,
+    rng: &mut Mt19937Compat,
+) -> DecorTailSample {
+    let mut hits = combination(0, n_total - 1, penalty.len(), rng);
+    hits.sort_unstable();
+    let score = decor_tail_score(
+        stats_abs,
+        &hits,
+        penalty,
+        n_total,
+        score_type,
+        positive_tail,
+    );
+    DecorTailSample { hits, score }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decor_mix_tail_sample(
+    sample: &mut DecorTailSample,
+    bound: f64,
+    stats_abs: &[f64],
+    penalty: &[f64],
+    n_total: usize,
+    score_type: ScoreType,
+    positive_tail: bool,
+    rng: &mut Mt19937Compat,
+) {
+    let k = sample.hits.len();
+    if k == 0 || k >= n_total {
+        return;
+    }
+
+    let target_accepts = (k / DECOR_MULTILEVEL_MIX_SCALE).max(1);
+    let max_attempts = target_accepts.saturating_mul(k.max(8)).saturating_mul(16);
+    let mut accepts = 0usize;
+    let mut attempts = 0usize;
+    while accepts < target_accepts && attempts < max_attempts {
+        attempts += 1;
+        let old_slot = uid_wrapper(0, k - 1, rng);
+        let old_value = sample.hits[old_slot];
+        let new_value = uid_wrapper(0, n_total - 1, rng);
+        if new_value != old_value && sample.hits.binary_search(&new_value).is_ok() {
+            continue;
+        }
+
+        let mut candidate = sample.hits.clone();
+        candidate[old_slot] = new_value;
+        candidate.sort_unstable();
+        let score = decor_tail_score(
+            stats_abs,
+            &candidate,
+            penalty,
+            n_total,
+            score_type,
+            positive_tail,
+        );
+        if score >= bound {
+            sample.hits = candidate;
+            sample.score = score;
+            accepts += 1;
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_decor_multilevel_tail(
+    stats_abs: &[f64],
+    penalty: &[f64],
+    n_total: usize,
+    observed_es: f64,
+    score_type: ScoreType,
+    sample_size: usize,
+    seed: u64,
+    eps: f64,
+) -> Option<DecorMultilevelTail> {
+    let k = penalty.len();
+    if k == 0 || n_total == 0 {
+        return Some(DecorMultilevelTail { p_tail: 1.0 });
+    }
+    if k >= n_total {
+        return Some(DecorMultilevelTail { p_tail: 1.0 });
+    }
+
+    let target = observed_es.abs();
+    if target <= 0.0 || !target.is_finite() {
+        return Some(DecorMultilevelTail { p_tail: 1.0 });
+    }
+
+    let sample_size = sample_size.max(3);
+    let positive_tail = observed_es >= 0.0;
+    let eps_ln = (eps > 0.0).then(|| eps.ln());
+    let mut rng = Mt19937Compat::new(seed as u32);
+    let mut samples = (0..sample_size)
+        .map(|_| {
+            decor_random_tail_sample(
+                stats_abs,
+                penalty,
+                n_total,
+                score_type,
+                positive_tail,
+                &mut rng,
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let mut adj_log_pval = 0.0_f64;
+    let mut last_bound = f64::NEG_INFINITY;
+    for _ in 0..DECOR_MULTILEVEL_MAX_LEVELS {
+        samples.sort_by(|a, b| {
+            a.score
+                .partial_cmp(&b.score)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        let central_score = samples[sample_size / 2].score;
+        if !central_score.is_finite() {
+            return None;
+        }
+
+        if central_score >= target {
+            let numerator = samples
+                .iter()
+                .filter(|sample| sample.score >= target)
+                .count();
+            if numerator == 0 {
+                return None;
+            }
+            adj_log_pval += beta_mean_log(numerator, sample_size);
+            return Some(DecorMultilevelTail {
+                p_tail: adj_log_pval.exp().clamp(0.0, 1.0),
+            });
+        }
+
+        let mut start_from = samples.partition_point(|sample| sample.score < central_score);
+        if start_from == 0 {
+            while start_from < sample_size && samples[start_from].score == samples[0].score {
+                start_from += 1;
+            }
+        }
+        if start_from == 0 || start_from == sample_size {
+            return None;
+        }
+
+        let bound = samples[start_from - 1].score;
+        if bound <= last_bound {
+            return None;
+        }
+        last_bound = bound;
+
+        let high_count = sample_size - start_from;
+        adj_log_pval += beta_mean_log(high_count + 1, sample_size);
+        if let Some(eps_ln) = eps_ln
+            && adj_log_pval < eps_ln
+        {
+            return Some(DecorMultilevelTail {
+                p_tail: adj_log_pval.exp().clamp(0.0, 1.0),
+            });
+        }
+
+        let high_samples = samples[start_from..].to_vec();
+        let high_last = high_samples.len() - 1;
+        samples.clear();
+        samples.reserve(sample_size);
+        for _ in 0..sample_size {
+            let source = uid_wrapper(0, high_last, &mut rng);
+            let mut sample = high_samples[source].clone();
+            decor_mix_tail_sample(
+                &mut sample,
+                bound,
+                stats_abs,
+                penalty,
+                n_total,
+                score_type,
+                positive_tail,
+                &mut rng,
+            );
+            samples.push(sample);
+        }
+    }
+
+    None
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decor_tail_replicates(
+    stats_abs: &[f64],
+    penalty: &[f64],
+    n_total: usize,
+    observed_es: f64,
+    score_type: ScoreType,
+    sample_size: usize,
+    base_seed: u64,
+    work_idx: usize,
+    tier_salt: usize,
+    n_seeds: usize,
+    denom_prob: f64,
+    eps_tail: f64,
+) -> Vec<f64> {
+    (0..n_seeds)
+        .filter_map(|rep| {
+            let seed = decor_pathway_seed(
+                base_seed,
+                work_idx
+                    .wrapping_add(tier_salt)
+                    .wrapping_add(rep.wrapping_mul(131_071)),
+            ) as u64;
+            let estimate = run_decor_multilevel_tail(
+                stats_abs,
+                penalty,
+                n_total,
+                observed_es,
+                score_type,
+                sample_size,
+                seed,
+                eps_tail,
+            )?;
+            if denom_prob <= 0.0 || !estimate.p_tail.is_finite() {
+                return None;
+            }
+            let refined = (estimate.p_tail / denom_prob).min(1.0);
+            (refined.is_finite() && refined > 0.0).then_some(refined)
+        })
+        .collect()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn summarize_adaptive_tail_values(
+    mut values: Vec<f64>,
+    sample_size: usize,
+    eps: f64,
+) -> Option<(DecorAdaptiveTailResult, f64)> {
+    values.retain(|value| value.is_finite() && *value > 0.0);
+    let mut median_values = values.clone();
+    let median = median_f64(&mut median_values)?;
+    let p_value = median.max(eps).min(1.0);
+    let neglog_values = values
+        .iter()
+        .map(|value| -value.log10())
+        .collect::<Vec<_>>();
+    let range_log10 = neglog_values
+        .iter()
+        .copied()
+        .fold(f64::NEG_INFINITY, f64::max)
+        - neglog_values.iter().copied().fold(f64::INFINITY, f64::min);
+    let log2_values = values.iter().map(|value| value.log2()).collect::<Vec<_>>();
+    let empirical_log2err = sample_sd(&log2_values);
+    let model_log2err = (p_value > eps).then_some(multilevel_error(p_value, sample_size));
+    let log2err = match (model_log2err, empirical_log2err) {
+        (Some(model), Some(empirical)) => Some(model.max(empirical)),
+        (Some(model), None) => Some(model),
+        (None, Some(empirical)) => Some(empirical),
+        (None, None) => None,
+    };
+    Some((DecorAdaptiveTailResult { p_value, log2err }, range_log10))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_decor_adaptive_tail(
+    stats_abs: &[f64],
+    work: &DecorWorking,
+    n_total: usize,
+    score_type: ScoreType,
+    base_seed: u64,
+    work_idx: usize,
+    denom_prob: f64,
+    eps: f64,
+    options: DecorTailReliabilityOptions,
+) -> Option<DecorAdaptiveTailResult> {
+    if denom_prob <= 0.0 || !work.p_value.is_finite() {
+        return None;
+    }
+    let eps_tail = eps * denom_prob;
+    let first_values = decor_tail_replicates(
+        stats_abs,
+        &work.penalty,
+        n_total,
+        work.es,
+        score_type,
+        options.first_sample_size,
+        base_seed,
+        work_idx,
+        2_000_003,
+        options.first_seeds,
+        denom_prob,
+        eps_tail,
+    );
+    let (first_result, first_range) =
+        summarize_adaptive_tail_values(first_values, options.first_sample_size, eps)?;
+    if first_range <= options.max_log10_range
+        || options.final_sample_size == options.first_sample_size
+    {
+        return Some(first_result);
+    }
+
+    let final_values = decor_tail_replicates(
+        stats_abs,
+        &work.penalty,
+        n_total,
+        work.es,
+        score_type,
+        options.final_sample_size,
+        base_seed,
+        work_idx,
+        3_000_003,
+        options.final_seeds,
+        denom_prob,
+        eps_tail,
+    );
+    summarize_adaptive_tail_values(final_values, options.final_sample_size, eps)
+        .map(|(result, _range)| result)
+        .or(Some(first_result))
+}
+
+pub fn file_sha256(path: &Path) -> Result<String> {
+    let mut file =
+        File::open(path).with_context(|| format!("Failed to open '{}'", path.display()))?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0u8; 64 * 1024];
+    loop {
+        let n = file
+            .read(&mut buf)
+            .with_context(|| format!("Failed to read '{}'", path.display()))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&buf[..n]);
+    }
+    let digest = hasher.finalize();
+    let mut hex = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        use std::fmt::Write as _;
+        write!(&mut hex, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    Ok(hex)
+}
+
+pub fn validate_decor_cache(
+    cache_metadata: &DecorCacheMetadata,
+    expected: &DecorCacheExpectedMetadata,
+) -> DecorCacheCompatibility {
+    let mut reasons = Vec::new();
+    if cache_metadata.format != CACHE_FORMAT {
+        reasons.push(format!(
+            "cache format differs: cache={}",
+            cache_metadata.format
+        ));
+    }
+    if cache_metadata.version != CACHE_VERSION {
+        reasons.push(format!(
+            "cache format version is unsupported: cache={}",
+            cache_metadata.version
+        ));
+    }
+    if cache_metadata.gmt_sha256 != expected.gmt_sha256 {
+        reasons.push("GMT SHA256 differs".to_string());
+    }
+    if let Some(expression_sha256) = &expected.expression_sha256
+        && cache_metadata.expression_sha256 != *expression_sha256
+    {
+        reasons.push("expression SHA256 differs".to_string());
+    }
+    if cache_metadata.correlation != expected.correlation {
+        reasons.push(format!(
+            "correlation method differs: cache={}, requested={}",
+            cache_metadata.correlation, expected.correlation
+        ));
+    }
+    if cache_metadata.redundancy != expected.redundancy {
+        reasons.push(format!(
+            "redundancy mode differs: cache={}, requested={}",
+            cache_metadata.redundancy, expected.redundancy
+        ));
+    }
+    if cache_metadata.expression_gene_axis != expected.expression_gene_axis {
+        reasons.push(format!(
+            "expression gene axis differs: cache={}, requested={}",
+            cache_metadata.expression_gene_axis, expected.expression_gene_axis
+        ));
+    }
+    if cache_metadata.expression_has_header != expected.expression_has_header {
+        reasons.push(format!(
+            "expression header setting differs: cache={}, requested={}",
+            cache_metadata.expression_has_header, expected.expression_has_header
+        ));
+    }
+    if cache_metadata.gene_id_mode != expected.gene_id_mode {
+        reasons.push(format!(
+            "gene ID mode differs: cache={}, requested={}",
+            cache_metadata.gene_id_mode, expected.gene_id_mode
+        ));
+    }
+    DecorCacheCompatibility { reasons }
+}
+
+pub fn ensure_decor_cache_for_paths(
+    pathways: &[Pathway],
+    gmt_path: &Path,
+    options: &DecorOptions,
+    expression_has_header: bool,
+) -> Result<(DecorCache, DecorCacheStatus)> {
+    validate_decor_options(options)?;
+    if options.correlation == DecorCorrelation::Spearman {
+        bail!("spearman decor correlation is not implemented yet");
+    }
+
+    let cache_path = options
+        .cache_path
+        .as_deref()
+        .context("method decor requires --decor-cache")?;
+    let gmt_sha256 = file_sha256(gmt_path)?;
+    let expression_sha256 = options
+        .expression_path
+        .as_deref()
+        .map(file_sha256)
+        .transpose()?;
+    let expected = DecorCacheExpectedMetadata {
+        gmt_sha256,
+        expression_sha256: expression_sha256.clone(),
+        correlation: options.correlation,
+        redundancy: options.redundancy,
+        expression_gene_axis: "rows".to_string(),
+        expression_has_header,
+        gene_id_mode: GENE_ID_MODE.to_string(),
+    };
+
+    // Cache identity is content-based: GMT, expression matrix, correlation, and
+    // redundancy mode must match, while formula presets can change freely.
+    let cache_exists = cache_path.exists();
+    if cache_exists && options.cache_mode != DecorCacheMode::Rebuild {
+        match read_decor_cache(cache_path) {
+            Ok(cache) => {
+                let compatibility = validate_decor_cache(&cache.metadata, &expected);
+                if compatibility.is_compatible() {
+                    return Ok((cache, DecorCacheStatus::Reused));
+                }
+                if options.cache_mode == DecorCacheMode::Reuse {
+                    bail!("{}", incompatible_message(&compatibility, true));
+                }
+                if options.expression_path.is_none() {
+                    bail!("{}", incompatible_message(&compatibility, false));
+                }
+            }
+            Err(err) => {
+                if options.cache_mode == DecorCacheMode::Reuse {
+                    bail!("Decor cache could not be read: {err}");
+                }
+                if options.expression_path.is_none() {
+                    bail!(
+                        "Decor cache could not be read and --decor-expression was not provided: {err}"
+                    );
+                }
+            }
+        }
+    } else if !cache_exists && options.cache_mode == DecorCacheMode::Reuse {
+        bail!("decor cache does not exist: {}", cache_path.display());
+    }
+
+    let expression_path = options.expression_path.as_deref().context(
+        "decor cache does not exist or is incompatible and --decor-expression was not provided",
+    )?;
+    let expression_sha256 = expression_sha256.context("internal error: missing expression hash")?;
+    let cache = build_decor_cache_from_expression(
+        pathways,
+        expression_path,
+        DecorCacheExpectedMetadata {
+            expression_sha256: Some(expression_sha256),
+            ..expected
+        },
+    )?;
+    write_decor_cache_atomic(cache_path, &cache)?;
+    let status = if cache_exists {
+        DecorCacheStatus::Rebuilt
+    } else {
+        DecorCacheStatus::Built
+    };
+    Ok((cache, status))
+}
+
+fn incompatible_message(compatibility: &DecorCacheCompatibility, suggest_rebuild: bool) -> String {
+    let mut msg = String::from("Decor cache is incompatible:");
+    for reason in &compatibility.reasons {
+        msg.push_str("\n  - ");
+        msg.push_str(reason);
+    }
+    if suggest_rebuild {
+        msg.push_str("\nUse --decor-cache-mode rebuild with --decor-expression to rebuild it.");
+    } else {
+        msg.push_str(
+            "\nProvide --decor-expression or use --decor-cache-mode rebuild to rebuild it.",
+        );
+    }
+    msg
+}
+
+#[derive(Debug)]
+struct ExpressionMatrix {
+    genes: Vec<String>,
+    values: Vec<Vec<f64>>,
+}
+
+fn read_expression_matrix(path: &Path, has_header: bool) -> Result<ExpressionMatrix> {
+    let file = File::open(path).with_context(|| format!("Failed to open '{}'", path.display()))?;
+    let reader: Box<dyn BufRead> = if path.extension().is_some_and(|ext| ext == "gz") {
+        Box::new(BufReader::new(GzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::new(file))
+    };
+
+    let mut genes = Vec::new();
+    let mut values = Vec::new();
+    let mut seen = HashSet::new();
+    let mut expected_cols = None;
+
+    for (line_idx, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if has_header && line_idx == 0 {
+            let cols = line.split('\t').count();
+            if cols < 3 {
+                bail!("expression matrix header must contain gene and at least two sample columns");
+            }
+            expected_cols = Some(cols - 1);
+            continue;
+        }
+
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() < 3 {
+            bail!(
+                "Malformed expression matrix line {}: expected gene and at least two sample columns",
+                line_idx + 1
+            );
+        }
+        if let Some(cols) = expected_cols {
+            if fields.len() - 1 != cols {
+                bail!(
+                    "Malformed expression matrix line {}: expected {} sample columns, found {}",
+                    line_idx + 1,
+                    cols,
+                    fields.len() - 1
+                );
+            }
+        } else {
+            expected_cols = Some(fields.len() - 1);
+        }
+
+        let gene = fields[0].to_string();
+        if gene.is_empty() {
+            bail!(
+                "expression matrix line {} has an empty gene identifier",
+                line_idx + 1
+            );
+        }
+        if !seen.insert(gene.clone()) {
+            bail!("expression matrix has duplicate gene identifier: {gene}");
+        }
+        let row: Vec<f64> = fields[1..]
+            .iter()
+            .map(|value| {
+                value.parse::<f64>().with_context(|| {
+                    format!(
+                        "Failed to parse expression value '{}' on line {}",
+                        value,
+                        line_idx + 1
+                    )
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if row.iter().any(|value| !value.is_finite()) {
+            bail!(
+                "expression matrix line {} contains a non-finite value",
+                line_idx + 1
+            );
+        }
+        genes.push(gene);
+        values.push(row);
+    }
+
+    if values.is_empty() {
+        bail!("expression matrix contains no gene rows");
+    }
+    if expected_cols.unwrap_or(0) < 2 {
+        bail!("expression matrix must contain at least two sample columns");
+    }
+    Ok(ExpressionMatrix { genes, values })
+}
+
+fn standardized_rows(matrix: ExpressionMatrix) -> HashMap<String, Vec<f64>> {
+    matrix
+        .genes
+        .into_iter()
+        .zip(matrix.values)
+        .map(|(gene, values)| {
+            let n = values.len() as f64;
+            let mean = values.iter().sum::<f64>() / n;
+            let centered: Vec<f64> = values.iter().map(|value| value - mean).collect();
+            let ss = centered.iter().map(|value| value * value).sum::<f64>();
+            if ss <= 0.0 {
+                (gene, vec![0.0; centered.len()])
+            } else {
+                let scale = ss.sqrt();
+                (
+                    gene,
+                    centered.into_iter().map(|value| value / scale).collect(),
+                )
+            }
+        })
+        .collect()
+}
+
+pub fn build_decor_cache_from_expression(
+    pathways: &[Pathway],
+    expression_path: &Path,
+    expected: DecorCacheExpectedMetadata,
+) -> Result<DecorCache> {
+    if expected.correlation == DecorCorrelation::Spearman {
+        bail!("spearman decor correlation is not implemented yet");
+    }
+    let expression = read_expression_matrix(expression_path, expected.expression_has_header)?;
+    let standardized = standardized_rows(expression);
+
+    // Store per-gene redundancy in pathway order so later runs only need ranks
+    // and the cache; expression is not re-read when the cache is compatible.
+    let mut rows: Vec<(String, DecorPathwayScores)> = pathways
+        .par_iter()
+        .map(|pathway| {
+            let mut genes = Vec::new();
+            let mut vectors = Vec::new();
+            let mut seen = HashSet::new();
+            for gene in &pathway.genes {
+                if !seen.insert(gene) {
+                    continue;
+                }
+                if let Some(vector) = standardized.get(gene) {
+                    genes.push(gene.clone());
+                    vectors.push(vector.as_slice());
+                }
+            }
+            let redundancy = compute_redundancy(&vectors, expected.redundancy);
+            (
+                pathway.name.clone(),
+                DecorPathwayScores { genes, redundancy },
+            )
+        })
+        .collect();
+    rows.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let n_rows = rows.iter().map(|(_, row)| row.genes.len()).sum();
+    let metadata = DecorCacheMetadata {
+        format: CACHE_FORMAT.to_string(),
+        version: CACHE_VERSION.to_string(),
+        created_by: "rsfgsea".to_string(),
+        gmt_sha256: expected.gmt_sha256,
+        expression_sha256: expected
+            .expression_sha256
+            .unwrap_or_else(|| "unknown".to_string()),
+        correlation: expected.correlation,
+        redundancy: expected.redundancy,
+        expression_gene_axis: expected.expression_gene_axis,
+        expression_has_header: expected.expression_has_header,
+        gene_id_mode: expected.gene_id_mode,
+        n_pathways: rows.len(),
+        n_rows,
+    };
+    Ok(DecorCache {
+        metadata,
+        pathways: rows.into_iter().collect(),
+    })
+}
+
+fn compute_redundancy(vectors: &[&[f64]], mode: DecorRedundancy) -> Vec<f32> {
+    let m = vectors.len();
+    if m < 2 {
+        return vec![0.0; m];
+    }
+    let mut sums = vec![0.0_f64; m];
+    for i in 0..m {
+        for j in i + 1..m {
+            let corr = vectors[i]
+                .iter()
+                .zip(vectors[j].iter())
+                .map(|(a, b)| a * b)
+                .sum::<f64>()
+                .clamp(-1.0, 1.0);
+            let value = match mode {
+                DecorRedundancy::PositiveMean => corr.max(0.0),
+                DecorRedundancy::AbsMean => corr.abs(),
+            };
+            sums[i] += value;
+            sums[j] += value;
+        }
+    }
+    let denom = (m - 1) as f64;
+    sums.into_iter()
+        .map(|sum| (sum / denom).clamp(0.0, 1.0) as f32)
+        .collect()
+}
+
+pub fn read_decor_cache(path: &Path) -> Result<DecorCache> {
+    let file = File::open(path).with_context(|| format!("Failed to open '{}'", path.display()))?;
+    let reader: Box<dyn BufRead> = if path.extension().is_some_and(|ext| ext == "gz") {
+        Box::new(BufReader::new(GzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::new(file))
+    };
+
+    let mut metadata_map = BTreeMap::new();
+    let mut pathways: BTreeMap<String, DecorPathwayScores> = BTreeMap::new();
+    let mut saw_header = false;
+    let mut row_count = 0usize;
+
+    for (line_idx, line) in reader.lines().enumerate() {
+        let line = line?;
+        if line.trim().is_empty() {
+            continue;
+        }
+        if let Some(comment) = line.strip_prefix('#') {
+            let Some((key, value)) = comment.trim().split_once('=') else {
+                continue;
+            };
+            metadata_map.insert(key.trim().to_string(), value.trim().to_string());
+            continue;
+        }
+        if !saw_header {
+            if line != "pathway\tgene\tredundancy" {
+                bail!("decor cache is missing required pathway/gene/redundancy header");
+            }
+            saw_header = true;
+            continue;
+        }
+        let fields: Vec<&str> = line.split('\t').collect();
+        if fields.len() != 3 {
+            bail!(
+                "Malformed decor cache line {}: expected pathway, gene, redundancy",
+                line_idx + 1
+            );
+        }
+        let redundancy: f32 = fields[2].parse().with_context(|| {
+            format!(
+                "Failed to parse redundancy '{}' on cache line {}",
+                fields[2],
+                line_idx + 1
+            )
+        })?;
+        if !redundancy.is_finite() {
+            bail!(
+                "decor cache line {} has non-finite redundancy",
+                line_idx + 1
+            );
+        }
+        let entry = pathways
+            .entry(fields[0].to_string())
+            .or_insert_with(|| DecorPathwayScores {
+                genes: Vec::new(),
+                redundancy: Vec::new(),
+            });
+        entry.genes.push(fields[1].to_string());
+        entry.redundancy.push(redundancy.clamp(0.0, 1.0));
+        row_count += 1;
+    }
+
+    if !saw_header {
+        bail!("decor cache is missing tabular header");
+    }
+    let metadata = parse_cache_metadata(&metadata_map)?;
+    if metadata.n_rows != row_count {
+        bail!(
+            "decor cache row count metadata mismatch: metadata={}, observed={}",
+            metadata.n_rows,
+            row_count
+        );
+    }
+    Ok(DecorCache { metadata, pathways })
+}
+
+fn required_meta<'a>(map: &'a BTreeMap<String, String>, key: &str) -> Result<&'a str> {
+    map.get(key)
+        .map(String::as_str)
+        .with_context(|| format!("decor cache is missing metadata key: {key}"))
+}
+
+fn parse_cache_metadata(map: &BTreeMap<String, String>) -> Result<DecorCacheMetadata> {
+    Ok(DecorCacheMetadata {
+        format: required_meta(map, "rsfgsea_decor_cache_format")?.to_string(),
+        version: required_meta(map, "rsfgsea_decor_cache_version")?.to_string(),
+        created_by: required_meta(map, "created_by")?.to_string(),
+        gmt_sha256: required_meta(map, "gmt_sha256")?.to_string(),
+        expression_sha256: required_meta(map, "expression_sha256")?.to_string(),
+        correlation: parse_correlation(required_meta(map, "correlation")?)?,
+        redundancy: parse_redundancy(required_meta(map, "redundancy")?)?,
+        expression_gene_axis: required_meta(map, "expression_gene_axis")?.to_string(),
+        expression_has_header: required_meta(map, "expression_has_header")?.parse()?,
+        gene_id_mode: required_meta(map, "gene_id_mode")?.to_string(),
+        n_pathways: required_meta(map, "n_pathways")?.parse()?,
+        n_rows: required_meta(map, "n_rows")?.parse()?,
+    })
+}
+
+pub fn write_decor_cache_atomic(path: &Path, cache: &DecorCache) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create cache directory '{}'", parent.display()))?;
+    }
+    let pid = std::process::id();
+    let tmp_path = tmp_cache_path(path, pid);
+    let result = (|| -> Result<()> {
+        let file = File::create(&tmp_path)
+            .with_context(|| format!("Failed to create '{}'", tmp_path.display()))?;
+        if path.extension().is_some_and(|ext| ext == "gz") {
+            let mut writer = GzEncoder::new(file, Compression::default());
+            write_cache_contents(&mut writer, cache)?;
+            writer.finish()?.sync_all()?;
+        } else {
+            let mut writer = BufWriter::new(file);
+            write_cache_contents(&mut writer, cache)?;
+            writer.flush()?;
+            writer.get_ref().sync_all()?;
+        }
+        fs::rename(&tmp_path, path).with_context(|| {
+            format!(
+                "Failed to rename temporary cache '{}' to '{}'",
+                tmp_path.display(),
+                path.display()
+            )
+        })?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&tmp_path);
+    }
+    result
+}
+
+fn tmp_cache_path(path: &Path, pid: u32) -> PathBuf {
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("decor-cache");
+    path.with_file_name(format!("{file_name}.tmp.{pid}"))
+}
+
+fn write_cache_contents<W: Write>(writer: &mut W, cache: &DecorCache) -> Result<()> {
+    let md = &cache.metadata;
+    writeln!(writer, "# rsfgsea_decor_cache_format={}", md.format)?;
+    writeln!(writer, "# rsfgsea_decor_cache_version={}", md.version)?;
+    writeln!(writer, "# created_by={}", md.created_by)?;
+    writeln!(writer, "# gmt_sha256={}", md.gmt_sha256)?;
+    writeln!(writer, "# expression_sha256={}", md.expression_sha256)?;
+    writeln!(writer, "# correlation={}", md.correlation)?;
+    writeln!(writer, "# redundancy={}", md.redundancy)?;
+    writeln!(writer, "# expression_gene_axis={}", md.expression_gene_axis)?;
+    writeln!(
+        writer,
+        "# expression_has_header={}",
+        md.expression_has_header
+    )?;
+    writeln!(writer, "# gene_id_mode={}", md.gene_id_mode)?;
+    writeln!(writer, "# n_pathways={}", md.n_pathways)?;
+    writeln!(writer, "# n_rows={}", md.n_rows)?;
+    writeln!(writer, "pathway\tgene\tredundancy")?;
+    for (pathway, scores) in &cache.pathways {
+        for (gene, redundancy) in scores.genes.iter().zip(scores.redundancy.iter()) {
+            writeln!(writer, "{pathway}\t{gene}\t{redundancy:.8}")?;
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_decor_simple_with_sample_size<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    cache: &DecorCache,
+    alpha: f64,
+    n_perm: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    _sample_size: usize,
+) -> Result<Vec<EnrichmentResult>> {
+    let options = DecorOptions {
+        alpha,
+        ..DecorOptions::default()
+    };
+    fgsea_decor_simple_with_options(
+        ranks,
+        pathways,
+        cache,
+        &options,
+        n_perm,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        _sample_size,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_decor_simple_with_options<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    cache: &DecorCache,
+    options: &DecorOptions,
+    n_perm: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    _sample_size: usize,
+) -> Result<Vec<EnrichmentResult>> {
+    let seed = resolve_rng_seed(seed.into_seed());
+    run_decor_internal(
+        ranks,
+        pathways,
+        cache,
+        options,
+        n_perm,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        false,
+        _sample_size,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_decor_multilevel_with_sample_size<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    cache: &DecorCache,
+    alpha: f64,
+    n_perm_simple: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+) -> Result<Vec<EnrichmentResult>> {
+    let options = DecorOptions {
+        alpha,
+        ..DecorOptions::default()
+    };
+    fgsea_decor_multilevel_with_options(
+        ranks,
+        pathways,
+        cache,
+        &options,
+        n_perm_simple,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        sample_size,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_decor_multilevel_with_options<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    cache: &DecorCache,
+    options: &DecorOptions,
+    n_perm_simple: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+) -> Result<Vec<EnrichmentResult>> {
+    let seed = resolve_rng_seed(seed.into_seed());
+    run_decor_internal(
+        ranks,
+        pathways,
+        cache,
+        options,
+        n_perm_simple,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        true,
+        sample_size,
+        None,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn fgsea_decor_multilevel_adaptive_with_options<S: IntoSeed>(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    cache: &DecorCache,
+    options: &DecorOptions,
+    n_perm_simple: usize,
+    seed: S,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    sample_size: usize,
+    tail_reliability: DecorTailReliabilityOptions,
+) -> Result<Vec<EnrichmentResult>> {
+    let seed = resolve_rng_seed(seed.into_seed());
+    run_decor_internal(
+        ranks,
+        pathways,
+        cache,
+        options,
+        n_perm_simple,
+        seed,
+        min_size,
+        max_size,
+        eps,
+        score_type,
+        gsea_param,
+        true,
+        sample_size,
+        Some(tail_reliability),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_decor_internal(
+    ranks: &RankedList,
+    pathways: &[Pathway],
+    cache: &DecorCache,
+    options: &DecorOptions,
+    n_perm: usize,
+    seed: u64,
+    min_size: usize,
+    max_size: usize,
+    eps: f64,
+    score_type: ScoreType,
+    gsea_param: f64,
+    allow_multilevel: bool,
+    sample_size: usize,
+    tail_reliability: Option<DecorTailReliabilityOptions>,
+) -> Result<Vec<EnrichmentResult>> {
+    let formula_context = DecorFormulaContext::from_cache(cache, options)?;
+    let gene_to_idx = build_gene_index(ranks);
+    let n_total = ranks.len();
+    warn_prepare_stats(ranks, score_type);
+    let min_size = min_size.max(1);
+    let max_size = max_size.min(n_total.saturating_sub(1));
+    let eps = eps.clamp(0.0, 1.0);
+    let sample_size = sample_size.max(3);
+    let (_abs_weights, scaled_scores, _ns_total) = ranks.prepare(gsea_param);
+    let simple_stats: Vec<f64> = scaled_scores.iter().map(|&v| v as f64).collect();
+    let simple_stats_abs: Vec<f64> = simple_stats.iter().map(|v| v.abs()).collect();
+
+    // Observed pathways keep their pathway-specific decor penalties; the
+    // permutation calibration below preserves pathway size while drawing rank
+    // positions from the same score profile.
+    let mut work: Vec<DecorWorking> = pathways
+        .par_iter()
+        .map(|pw| {
+            let (hits, redundancy) = extract_decor_hits(pw, &gene_to_idx, cache);
+            if hits.len() < min_size || hits.len() > max_size {
+                return Ok(None);
+            }
+            let penalty = formula_context.penalties_for(&redundancy)?;
+            let (es, peak_idx) =
+                calculate_es_decor_prechecked(&simple_stats, &hits, &penalty, n_total, score_type);
+            Ok(Some(DecorWorking {
+                pathway_name: pw.name.clone(),
+                size: hits.len(),
+                hits,
+                penalty,
+                es,
+                peak_idx,
+                n_le_es: 0,
+                n_ge_es: 0,
+                n_le_zero: 0,
+                n_ge_zero: 0,
+                le_zero_sum: 0.0,
+                ge_zero_sum: 0.0,
+                nes: None,
+                p_value: f64::NAN,
+                padj: None,
+                log2err: None,
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    if n_perm > 0 && !work.is_empty() {
+        let mut size_groups: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+        for (idx, w) in work.iter().enumerate() {
+            size_groups.entry(w.size).or_default().push(idx);
+        }
+        let runtime_groups = size_groups
+            .into_iter()
+            .map(|(size, indices)| DecorRuntimeSizeGroup::from_indices(size, indices, &work))
+            .collect::<Vec<_>>();
+
+        // Size groups reuse sampled hit-position profiles across pathways with
+        // identical cardinality, while batched groups avoid repeated ES scans.
+        let grouped_counts = runtime_groups
+            .par_iter()
+            .enumerate()
+            .map(|(group_idx, group)| {
+                let n_pathways = group.work_indices.len();
+                let mut counts = vec![DecorNullCounts::default(); n_pathways];
+                let mut rng =
+                    RLecuyerCmrgSeedCompat::from_r_set_seed(decor_pathway_seed(seed, group.size));
+                let mut scratch = DecorBatchScratch::default();
+                for _ in 0..n_perm {
+                    let mut selected = rng.sample_int_no_replace_with_kind(
+                        n_total,
+                        group.size,
+                        RSampleKind::Rejection,
+                    );
+                    for idx in &mut selected {
+                        *idx -= 1;
+                    }
+                    selected.sort_unstable();
+                    if group.use_batched {
+                        update_decor_batched_counts(
+                            &simple_stats_abs,
+                            &selected,
+                            &group.penalties_rank_major,
+                            &group.observed_es,
+                            n_total,
+                            score_type,
+                            &mut counts,
+                            &mut scratch,
+                        );
+                    } else {
+                        for (count, work_idx) in counts.iter_mut().zip(group.work_indices.iter()) {
+                            let w = &work[*work_idx];
+                            let (rand_es, _) = calculate_es_decor_prechecked(
+                                &simple_stats,
+                                &selected,
+                                &w.penalty,
+                                n_total,
+                                score_type,
+                            );
+                            update_decor_null_count(count, rand_es, w.es);
+                        }
+                    }
+                }
+                (group_idx, counts)
+            })
+            .collect::<Vec<_>>();
+
+        for (group_idx, counts) in grouped_counts {
+            let group = &runtime_groups[group_idx];
+            for (&work_idx, counts) in group.work_indices.iter().zip(counts) {
+                let w = &mut work[work_idx];
+                w.n_le_es = counts.n_le_es;
+                w.n_ge_es = counts.n_ge_es;
+                w.n_le_zero = counts.n_le_zero;
+                w.n_ge_zero = counts.n_ge_zero;
+                w.le_zero_sum = counts.le_zero_sum;
+                w.ge_zero_sum = counts.ge_zero_sum;
+            }
+        }
+    }
+
+    let mut n_more_extreme_vec = vec![0u64; work.len()];
+    let mut mode_fraction_vec = vec![0u64; work.len()];
+
+    for (idx, w) in work.iter_mut().enumerate() {
+        let le_zero_mean = if w.n_le_zero > 0 {
+            w.le_zero_sum / w.n_le_zero as f64
+        } else {
+            0.0
+        };
+        let ge_zero_mean = if w.n_ge_zero > 0 {
+            w.ge_zero_sum / w.n_ge_zero as f64
+        } else {
+            0.0
+        };
+        w.nes = compute_nes(w.es, score_type, le_zero_mean, ge_zero_mean);
+        if w.nes.is_some() {
+            let p_le = (w.n_le_es + 1) as f64 / (w.n_le_zero + 1) as f64;
+            let p_ge = (w.n_ge_es + 1) as f64 / (w.n_ge_zero + 1) as f64;
+            w.p_value = p_le.min(p_ge).max(eps);
+        }
+        let n_more_extreme =
+            selected_tail_count(score_type, w.es, w.n_le_es as u64, w.n_ge_es as u64);
+        let mode_fraction =
+            mode_fraction_count(score_type, w.es, w.n_le_zero as u64, w.n_ge_zero as u64);
+        n_more_extreme_vec[idx] = n_more_extreme;
+        mode_fraction_vec[idx] = mode_fraction;
+        w.log2err = if w.p_value.is_finite() && mode_fraction > 0 {
+            simple_log2err(n_more_extreme, n_perm)
+        } else {
+            None
+        };
+        if allow_multilevel && mode_fraction < 10 {
+            w.p_value = f64::NAN;
+            w.nes = None;
+            w.log2err = None;
+        }
+    }
+
+    if allow_multilevel && n_perm > 0 && !work.is_empty() {
+        // Simple permutations estimate the mode denominator; multilevel then
+        // estimates the conditional tail and rescales back to the full p-value.
+        let refine_indices = work
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, w)| {
+                (w.p_value.is_finite()
+                    && should_refine_multilevel(
+                        n_more_extreme_vec[idx],
+                        mode_fraction_vec[idx],
+                        n_perm,
+                        sample_size,
+                        w.p_value,
+                    ))
+                .then_some(idx)
+            })
+            .collect::<Vec<_>>();
+
+        let multilevel_results = refine_indices
+            .par_iter()
+            .map(|&idx| {
+                let denom_prob = (mode_fraction_vec[idx] + 1) as f64 / (n_perm + 1) as f64;
+                let eps_tail = eps * denom_prob;
+                let seed = decor_pathway_seed(seed, idx.wrapping_add(1_000_003)) as u64;
+                let estimate = run_decor_multilevel_tail(
+                    &simple_stats_abs,
+                    &work[idx].penalty,
+                    n_total,
+                    work[idx].es,
+                    score_type,
+                    sample_size,
+                    seed,
+                    eps_tail,
+                );
+                (idx, denom_prob, estimate)
+            })
+            .collect::<Vec<_>>();
+
+        for (idx, denom_prob, estimate) in multilevel_results {
+            let Some(estimate) = estimate else {
+                continue;
+            };
+            if denom_prob <= 0.0 || !estimate.p_tail.is_finite() {
+                continue;
+            }
+            let refined = (estimate.p_tail / denom_prob).min(1.0);
+            if refined < eps {
+                work[idx].p_value = eps;
+                work[idx].log2err = None;
+            } else {
+                work[idx].p_value = refined;
+                work[idx].log2err = Some(multilevel_error(refined, sample_size));
+            }
+        }
+
+        if let Some(options) = tail_reliability {
+            // The optional reliability pass reruns fragile extreme tails across
+            // independent seeds and keeps an empirical error estimate.
+            let options = options.normalized(sample_size);
+            let error_trigger_pvalue_window = (options.pvalue_threshold * 10.0).clamp(1e-3, 1.0);
+            let adaptive_indices = work
+                .iter()
+                .enumerate()
+                .filter_map(|(idx, w)| {
+                    let triggered_by_p = w.p_value.is_finite()
+                        && w.p_value > 0.0
+                        && w.p_value <= options.pvalue_threshold;
+                    let triggered_by_err = w.p_value.is_finite()
+                        && w.p_value > 0.0
+                        && w.p_value <= error_trigger_pvalue_window
+                        && w.log2err
+                            .is_some_and(|log2err| log2err >= options.log2err_threshold);
+                    (mode_fraction_vec[idx] >= 10 && (triggered_by_p || triggered_by_err))
+                        .then_some(idx)
+                })
+                .collect::<Vec<_>>();
+
+            let adaptive_results = adaptive_indices
+                .par_iter()
+                .filter_map(|&idx| {
+                    let denom_prob = (mode_fraction_vec[idx] + 1) as f64 / (n_perm + 1) as f64;
+                    run_decor_adaptive_tail(
+                        &simple_stats_abs,
+                        &work[idx],
+                        n_total,
+                        score_type,
+                        seed,
+                        idx,
+                        denom_prob,
+                        eps,
+                        options,
+                    )
+                    .map(|result| (idx, result))
+                })
+                .collect::<Vec<_>>();
+
+            for (idx, result) in adaptive_results {
+                work[idx].p_value = result.p_value;
+                work[idx].log2err = result.log2err;
+            }
+        }
+    }
+
+    let mut final_results: Vec<EnrichmentResult> = work
+        .into_iter()
+        .map(|w| EnrichmentResult {
+            pathway_name: w.pathway_name,
+            size: w.size,
+            es: w.es,
+            nes: w.nes,
+            p_value: w.p_value,
+            padj: w.padj,
+            log2err: w.log2err,
+            leading_edge: leading_edge(&w.hits, w.peak_idx, w.es, score_type, ranks),
+        })
+        .collect();
+    apply_bh_adjustment(&mut final_results);
+    final_results.sort_by(|a, b| a.pathway_name.cmp(&b.pathway_name));
+    Ok(final_results)
+}
+
+fn extract_decor_hits(
+    pathway: &Pathway,
+    gene_to_idx: &HashMap<String, usize>,
+    cache: &DecorCache,
+) -> (Vec<usize>, Vec<f64>) {
+    let Some(scores) = cache.pathways.get(&pathway.name) else {
+        return (Vec::new(), Vec::new());
+    };
+    let redundancy_by_gene: HashMap<&str, f64> = scores
+        .genes
+        .iter()
+        .zip(scores.redundancy.iter())
+        .map(|(gene, redundancy)| (gene.as_str(), *redundancy as f64))
+        .collect();
+    let mut hit_pairs: Vec<(usize, f64)> = pathway
+        .genes
+        .iter()
+        .filter_map(|gene| {
+            let idx = gene_to_idx.get(gene)?;
+            let redundancy = redundancy_by_gene.get(gene.as_str())?;
+            Some((*idx, *redundancy))
+        })
+        .collect();
+    hit_pairs.sort_by_key(|(idx, _)| *idx);
+    hit_pairs.dedup_by_key(|(idx, _)| *idx);
+    hit_pairs.into_iter().unzip()
+}
+
+#[cfg(test)]
+mod tests;

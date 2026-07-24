@@ -39,5 +39,5 @@ plotGseaTable(
 Invisibly returns \code{output}.
 }
 \description{
-Write a multi-pathway GSEA table plot as PNG.
+Write a multi-pathway GSEA table plot as PNG
 }

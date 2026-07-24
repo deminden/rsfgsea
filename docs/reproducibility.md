@@ -12,30 +12,44 @@ The main validation layers are:
 
 ## Scripts Overview
 
-[`scripts/extract_mapping.R`](/home/den/bio/rsfgsea/scripts/extract_mapping.R)
+[`scripts/extract_mapping.R`](../scripts/extract_mapping.R)
 
 - exports gene mapping JSON files from an `.rda` source
 - use it when local data-prep scripts need mapping files regenerated
 
-[`scripts/prepare_data.py`](/home/den/bio/rsfgsea/scripts/prepare_data.py)
+[`scripts/prepare_data.py`](../scripts/prepare_data.py)
 
 - builds ranked lists from bladder correlation data
 - output goes to `crates/rsfgsea/tests/data/muscle_comparison`
 
-[`scripts/prepare_muscle_data.py`](/home/den/bio/rsfgsea/scripts/prepare_muscle_data.py)
+[`scripts/prepare_muscle_data.py`](../scripts/prepare_muscle_data.py)
 
 - computes per-gene Spearman correlations from muscle expression data
 - emits ranked lists into `crates/rsfgsea/tests/data/muscle_comparison`
 
-[`scripts/run_fgsea_comparison.R`](/home/den/bio/rsfgsea/scripts/run_fgsea_comparison.R)
+[`scripts/run_fgsea_comparison.R`](../scripts/run_fgsea_comparison.R)
 
 - runs R `fgsea` over the generated ranked lists
 - writes a combined R reference result table
 
-[`scripts/test_single_gene.R`](/home/den/bio/rsfgsea/scripts/test_single_gene.R)
+[`scripts/test_single_gene.R`](../scripts/test_single_gene.R)
 
 - quick manual R-side sanity check for one ranked list
 - useful when debugging overlap or pathway-loading issues
+
+[`scripts/generate_blitz_large_reference.py`](../scripts/generate_blitz_large_reference.py)
+
+- generates repeated full-precision `blitzgsea 1.3.54` results and optional fixed-schedule traces
+- validates the pinned Python package/thread environment and repeated output hashes
+
+[`scripts/compare_blitz_precision.py`](../scripts/compare_blitz_precision.py)
+
+- compares full-precision Blitz outputs by absolute error, ULP distance, finite class, ordering, size, and leading edge
+
+[`scripts/bench_blitz_ab.py`](../scripts/bench_blitz_ab.py)
+
+- runs a CPU-pinned, paired, alternating baseline/candidate Blitz benchmark
+- records raw timings, hashes, bootstrap intervals, and a strict acceptance gate
 
 ## Practical Workflow
 
@@ -82,6 +96,118 @@ done
 
 Use `RSFGSEA_PERM_HEAVY_BENCH=1` for the 100k-permutation simple-mode profile,
 and `RSFGSEA_HEAVY_BENCH=1` for the larger 20k-gene / 15k-pathway profile.
+
+### Native Blitz Optimization Benchmark
+
+Blitz-specific Criterion groups are opt-in because default blitz calibration is
+slow enough to distort routine benchmark runs:
+
+```bash
+RSFGSEA_BLITZ_BENCH=1 cargo bench -p rsfgsea --bench gsea_bench
+```
+
+For file-backed Python/Rust comparison on the positive DESeq2 stress workload,
+use:
+
+```bash
+scripts/bench_blitz_speed.py --reps 1 --json
+```
+
+For a change-acceptance benchmark, preserve release binaries built with the
+same toolchain and flags, then use the paired harness. It pins the process to
+the requested CPUs, alternates `baseline/candidate` execution order, retains
+all raw timings and output hashes, and bootstraps paired ratios with a fixed
+seed:
+
+```bash
+scripts/bench_blitz_ab.py \
+  --baseline-bin target/release/rsfgsea-baseline \
+  --candidate-bin target/release/rsfgsea-candidate \
+  --reps 30 \
+  --warmups 2 \
+  --cpu-list 8,10,12,14 \
+  --bootstrap-resamples 200000 \
+  --equivalence-margin-pct 1 \
+  --output data/derived/blitz_precision/lung_vs_muscle_go_bp/speed_ab.json
+```
+
+The gate requires the candidate/baseline geometric-mean ratio to be at most
+`1.0` and the 95% upper confidence bound to be at most `1.01`, for both core
+compute time and end-to-end wall time. It also reports within-binary output
+determinism and exits nonzero if the combined acceptance gate fails. The
+current 30-pair full-cold result against commit `3aeb6ba` passed: compute ratio
+`0.99324` (change `-0.676%`, 95% ratio CI `0.97925–1.00735`) and wall ratio
+`0.99949` (change `-0.051%`, 95% ratio CI `0.99408–1.00480`). Every measured
+output hash was deterministic within its binary. This establishes no speed
+loss under the declared 1% equivalence gate on this machine; it is not a
+general cross-machine speed claim.
+
+The three canonical Python reference runs took `15.650 s`, `16.335 s`, and
+`15.469 s`. Those values document reference-generation cost only; the paired
+Rust gate above is the acceptance evidence for this implementation change.
+
+Native blitz also has an in-process null-model cache for repeated identical
+library calls. The CLI leaves it off by default because one-shot subprocess runs
+cannot reuse process memory; Criterion reports that path as
+`blitz_full_memory_cache`.
+
+For local workstation builds, `target-cpu=native` is worth testing:
+
+```bash
+RUSTFLAGS="-C target-cpu=native" cargo build --release -p rsfgsea
+```
+
+Keep `target-cpu=native` builds out of portable release artifacts unless you
+intentionally want a binary specialized to the build host. Rebenchmark them
+with the paired gate rather than relying on an older single-run screen.
+
+The canonical reference environment is locked by
+[`reference/blitz/uv.lock`](../reference/blitz/uv.lock): Python `3.12.9`,
+blitzgsea `1.3.54`, NumPy `2.5.1`, SciPy `1.18.0`, pandas `3.0.3`,
+statsmodels `0.14.6`, and mpmath `1.4.1`. Generate the full-precision reference
+and optional fixed-schedule trace with:
+
+```bash
+PYTHONHASHSEED=0 \
+OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 \
+MKL_NUM_THREADS=1 \
+uv run --project reference/blitz --frozen \
+  python scripts/generate_blitz_large_reference.py \
+  --reps 3 \
+  --fixed-schedule-trace
+```
+
+The generator refuses a dependency-version or thread-environment mismatch and
+requires all repeated result hashes to match. Compare a round-trip-precision
+CLI output with one generated reference using:
+
+```bash
+scripts/compare_blitz_precision.py \
+  --reference data/derived/blitz_precision/lung_vs_muscle_go_bp/python_blitzgsea_1_3_54.rep1.tsv \
+  --observed data/derived/blitz_precision/lung_vs_muscle_go_bp/rsfgsea_candidate.tsv \
+  --output data/derived/blitz_precision/lung_vs_muscle_go_bp/rsfgsea_candidate.comparison.json
+```
+
+Generated references and reports live under ignored `data/derived/`; commit the
+generators and focused regression fixtures, not the multi-megabyte local audit
+outputs. The audited input contained 63,904 ranks and 5,343 source GMT
+pathways, of which 5,324 were scored. Input SHA-256 values were
+`54d7e5b11c6ccdffc3dc289ed8f4cfc8e11594d093fe0050cf4e587400bb794f`
+for the ranks and
+`0fc02458765cfce6c9348dce9f7a9397c6caf7c09ba318f468135d7ac60342ee`
+for the GMT; all three canonical four-process Python runs produced
+`8216f5197730653e59dd98b4f3af29b4637e7b53ae560f58a2be06f8c541da69`.
+
+The current comparison reports 5,324 shared pathways, no size or leading-edge
+set mismatches, and finite maximum absolute differences of ES `4.441e-16`, NES
+`3.331e-15`, p-value `1.776e-15`, and FDR `2.665e-15`. Updating the interpolation
+operation order to SciPy 1.18's stable de Boor weights reduced the immediate
+pre-change NES maximum of `1.508e-8` by about 4.53 million× and the FDR maximum
+by about 3.19×. This is specifically Blitz reference parity: extreme-tail
+context rounding follows the locked upstream finite-precision result and is
+not presented as improved mathematical truth. The exact current audit is
+[`docs/evidence/blitz-latest.json`](./evidence/blitz-latest.json).
 
 ### R fgsea Comparison Benchmark
 
@@ -158,23 +284,23 @@ Notes:
 
 ### GPU Parity vs R
 
-GPU parity was evaluated against R `fgseaMultilevel` using seeds `[11, 23, 42]`, `nPermSimple=1000`, `sampleSize=101`, `eps=1e-50`.
+There is no current committed GPU parity table. The old `nPermSimple=1000`
+table was removed because it mostly captured Monte Carlo noise in p-values and
+FDR rather than useful GPU-vs-R behavior.
 
-| Metric | Mean | Median | P95 | Max |
-| :--- | ---: | ---: | ---: | ---: |
-| `abs(ES)` | `2.535e-09` | `2.531e-09` | `4.736e-09` | `4.998e-09` |
-| `abs(NES)` | `1.842e-02` | `1.245e-02` | `5.827e-02` | `1.238e-01` |
-| `abs(pval)` | `1.548e-02` | `1.199e-02` | `3.996e-02` | `5.007e-01` |
-| `abs(padj)` | `1.248e-02` | `5.101e-03` | `5.784e-02` | `2.458e-01` |
+For new GPU-vs-R comparisons:
 
-Relative p-value difference (`|p_r - p_gpu| / max(|p_r|, 1e-12)`):
+- use `nPermSimple=100000` as the practical baseline
+- use `nPermSimple=10000` only for smoke checks
+- use `nPermSimple=1000000` for final tail/stress comparisons when runtime allows
+- keep `sampleSize`, `eps`, `scoreType`, `gseaParam`, size filters, seeds, and
+  input files identical on both sides
+- record GPU model, driver, backend, and WSL2 D3D12 environment variables if used
 
-- mean: `4.15%`
-- median: `2.37%`
-- p95: `13.36%`
-- max: `67.39%`
-- `<1%`: `26.4%` of pathways
-- `<10%`: `90.9%` of pathways
+The GPU path has fixed overhead and benefits most from larger work batches:
+many tested pathways, larger pathway collections, and higher simple-stage
+permutation counts. Small example datasets are useful for checking that the
+adapter works, but they are too small to show the intended GPU advantage.
 
 ## What To Record
 

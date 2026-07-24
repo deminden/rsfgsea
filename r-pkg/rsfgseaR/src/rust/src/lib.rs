@@ -4,6 +4,7 @@ use extendr_api::prelude::*;
 use extendr_api::throw_r_error;
 use rayon::ThreadPoolBuilder;
 use rsfgsea::prelude::*;
+use std::str::FromStr;
 
 fn parse_score_type(score_type: &str) -> std::result::Result<ScoreType, String> {
     match score_type.to_lowercase().as_str() {
@@ -24,6 +25,51 @@ fn parse_sample_kind(sample_kind: &str) -> std::result::Result<RSampleKind, Stri
             "Invalid sampleKind '{other}'. Expected one of: Rejection, Rounding."
         )),
     }
+}
+
+fn parse_method(method: &str) -> std::result::Result<EnrichmentMethod, String> {
+    match method.to_lowercase().as_str() {
+        "classic" => Ok(EnrichmentMethod::Classic),
+        "decor" => Ok(EnrichmentMethod::Decor),
+        other => Err(format!(
+            "Invalid method '{other}'. Expected one of: classic, decor."
+        )),
+    }
+}
+
+fn parse_decor_cache_mode(mode: &str) -> std::result::Result<DecorCacheMode, String> {
+    match mode.to_lowercase().as_str() {
+        "auto" => Ok(DecorCacheMode::Auto),
+        "reuse" => Ok(DecorCacheMode::Reuse),
+        "rebuild" => Ok(DecorCacheMode::Rebuild),
+        other => Err(format!(
+            "Invalid decor.cache.mode '{other}'. Expected one of: auto, reuse, rebuild."
+        )),
+    }
+}
+
+fn parse_decor_correlation(correlation: &str) -> std::result::Result<DecorCorrelation, String> {
+    match correlation.to_lowercase().as_str() {
+        "pearson" => Ok(DecorCorrelation::Pearson),
+        "spearman" => Ok(DecorCorrelation::Spearman),
+        other => Err(format!(
+            "Invalid decor.correlation '{other}'. Expected one of: pearson, spearman."
+        )),
+    }
+}
+
+fn parse_decor_redundancy(redundancy: &str) -> std::result::Result<DecorRedundancy, String> {
+    match redundancy.to_lowercase().as_str() {
+        "positive_mean" => Ok(DecorRedundancy::PositiveMean),
+        "abs_mean" => Ok(DecorRedundancy::AbsMean),
+        other => Err(format!(
+            "Invalid decor.redundancy '{other}'. Expected one of: positive_mean, abs_mean."
+        )),
+    }
+}
+
+fn parse_decor_weight_formula(formula: &str) -> std::result::Result<DecorWeightFormula, String> {
+    DecorWeightFormula::from_str(formula)
 }
 
 fn normalize_seed(seed: Nullable<i32>) -> std::result::Result<Option<u64>, String> {
@@ -117,7 +163,7 @@ fn rsfgsea_version() -> String {
 /// @export
 #[extendr]
 fn supported_modes() -> Vec<&'static str> {
-    vec!["fgsea", "simple", "multilevel"]
+    vec!["fgsea", "simple", "multilevel", "blitz"]
 }
 
 /// Write a single-pathway enrichment plot as PNG.
@@ -146,7 +192,7 @@ fn write_enrichment_plot(
         }
 
         let genes: Vec<String> = genes.iter().map(|gene| gene.to_string()).collect();
-        let scores: Vec<f64> = stats.iter().map(|v| v.inner()).collect();
+        let scores: Vec<f64> = stats.iter().map(|v| v.0).collect();
         let ranks = RankedList::new(genes, scores);
         let pathway = Pathway {
             name: pathway_name.to_string(),
@@ -206,7 +252,9 @@ fn write_gsea_table_plot(
             return Err("stats and gene names must have the same length.".to_string());
         }
         if pathway_names.len() != pathway_gene_lists.len() {
-            return Err("pathway_names and pathway_gene_lists must have the same length.".to_string());
+            return Err(
+                "pathway_names and pathway_gene_lists must have the same length.".to_string(),
+            );
         }
         if result_pathways.len() != result_nes.len()
             || result_pathways.len() != result_pval.len()
@@ -223,7 +271,7 @@ fn write_gsea_table_plot(
         }
 
         let genes: Vec<String> = genes.iter().map(|gene| gene.to_string()).collect();
-        let scores: Vec<f64> = stats.iter().map(|v| v.inner()).collect();
+        let scores: Vec<f64> = stats.iter().map(|v| v.0).collect();
         let ranks = RankedList::new(genes, scores);
 
         let pathway_names_vec: Vec<String> =
@@ -255,9 +303,9 @@ fn write_gsea_table_plot(
                 pathway_name: pathway_name.to_string(),
                 size: 0,
                 es: 0.0,
-                nes: Some(nes.inner()),
-                p_value: pval.inner(),
-                padj: Some(padj.inner()),
+                nes: Some(nes.0),
+                p_value: pval.0,
+                padj: Some(padj.0),
                 log2err: None,
                 leading_edge: Vec::new(),
             })
@@ -304,6 +352,24 @@ fn fgsea_rust_impl(
     sample_size: i32,
     sample_kind: &str,
     gpu: bool,
+    method: &str,
+    decor_cache: Nullable<String>,
+    decor_expression: Nullable<String>,
+    decor_alpha: f64,
+    decor_cache_mode: &str,
+    decor_correlation: &str,
+    decor_redundancy: &str,
+    decor_weight_formula: &str,
+    decor_threshold: f64,
+    decor_gamma: f64,
+    decor_penalty_floor: f64,
+    decor_scale_epsilon: f64,
+    blitz_anchors: i32,
+    blitz_symmetric: bool,
+    blitz_center: bool,
+    blitz_accuracy: i32,
+    blitz_deep_accuracy: i32,
+    blitz_signature_cache: bool,
 ) -> std::result::Result<Robj, String> {
     if stats.len() != genes.len() {
         return Err("stats and gene names must have the same length.".to_string());
@@ -314,7 +380,7 @@ fn fgsea_rust_impl(
     if nproc < 0 {
         return Err("nproc must be greater than or equal to 0.".to_string());
     }
-    if min_size <= 0 {
+    if min_size == 0 {
         return Err("minSize must be greater than 0.".to_string());
     }
     if max_size == 0 {
@@ -326,22 +392,148 @@ fn fgsea_rust_impl(
     if nperm == 0 {
         return Err("nperm must be greater than 0 when provided.".to_string());
     }
+    if blitz_anchors <= 0 || blitz_accuracy <= 0 || blitz_deep_accuracy <= 0 {
+        return Err(
+            "blitz.anchors, blitz.accuracy, and blitz.deep.accuracy must be greater than 0."
+                .to_string(),
+        );
+    }
 
     let genes: Vec<String> = genes.iter().map(|gene| gene.to_string()).collect();
-    let scores: Vec<f64> = stats.iter().map(|v| v.inner()).collect();
+    let scores: Vec<f64> = stats.iter().map(|v| v.0).collect();
     let ranks = RankedList::new(genes, scores);
     let pathways =
         read_gmt(gmt_path).map_err(|err| format!("Failed to read GMT file '{gmt_path}': {err}"))?;
 
     let score_type = parse_score_type(score_type)?;
     let sample_kind = parse_sample_kind(sample_kind)?;
+    let method = parse_method(method)?;
     let seed = normalize_seed(seed)?;
     let mode = parse_interface_mode(mode).map_err(|err| err.to_string())?;
     let nperm = (nperm >= 0).then_some(nperm as usize);
-    let exec_mode =
-        resolve_execution_plan(mode, gpu, nperm, n_perm_simple as usize).map_err(|e| e.to_string())?;
+    let min_size = if min_size > 0 {
+        min_size as usize
+    } else if mode == InterfaceMode::Blitz {
+        5
+    } else {
+        1
+    };
+    if mode == InterfaceMode::Blitz {
+        if gpu {
+            return Err("gpu is not supported with mode = 'blitz'.".to_string());
+        }
+        if method != EnrichmentMethod::Classic {
+            return Err("mode = 'blitz' supports only method = 'classic'.".to_string());
+        }
+        if nperm.is_some() {
+            return Err("nperm is not supported with mode = 'blitz'.".to_string());
+        }
+        if score_type != ScoreType::Std {
+            return Err("mode = 'blitz' supports only scoreType = 'std'.".to_string());
+        }
+        if (gsea_param - 1.0).abs() > f64::EPSILON {
+            return Err("mode = 'blitz' supports only gseaParam = 1.".to_string());
+        }
+    }
+    if decor_alpha < 0.0 || !decor_alpha.is_finite() {
+        return Err("decor.alpha must be a finite numeric value >= 0.".to_string());
+    }
+    if decor_gamma < 0.0 || !decor_gamma.is_finite() {
+        return Err("decor.gamma must be a finite numeric value >= 0.".to_string());
+    }
+    if !(0.0..1.0).contains(&decor_threshold) || !decor_threshold.is_finite() {
+        return Err("decor.threshold must be a finite numeric value >= 0 and < 1.".to_string());
+    }
+    if !(0.0..1.0).contains(&decor_penalty_floor) || !decor_penalty_floor.is_finite() {
+        return Err("decor.penalty.floor must be a finite numeric value >= 0 and < 1.".to_string());
+    }
+    if decor_scale_epsilon <= 0.0 || !decor_scale_epsilon.is_finite() {
+        return Err("decor.scale.epsilon must be a finite numeric value > 0.".to_string());
+    }
+    if method == EnrichmentMethod::Decor {
+        if gpu {
+            return Err(
+                "decor supports CPU execution only; gpu is not supported with method = 'decor'."
+                    .to_string(),
+            );
+        }
+        if mode == InterfaceMode::Multilevel && nperm.is_some() {
+            return Err("nperm is only valid with mode = 'fgsea' or mode = 'simple'.".to_string());
+        }
+        let cache_path = decor_cache
+            .into_option()
+            .ok_or_else(|| "method = 'decor' requires decor.cache.".to_string())?;
+        let options = DecorOptions {
+            alpha: decor_alpha,
+            cache_path: Some(std::path::PathBuf::from(cache_path)),
+            expression_path: decor_expression.into_option().map(std::path::PathBuf::from),
+            cache_mode: parse_decor_cache_mode(decor_cache_mode)?,
+            correlation: parse_decor_correlation(decor_correlation)?,
+            redundancy: parse_decor_redundancy(decor_redundancy)?,
+            weight_formula: parse_decor_weight_formula(decor_weight_formula)?,
+            gamma: decor_gamma,
+            threshold_tau: decor_threshold,
+            penalty_floor: decor_penalty_floor,
+            scale_epsilon: decor_scale_epsilon,
+            ..DecorOptions::default()
+        };
+        let (cache, _) = ensure_decor_cache_for_paths(
+            &pathways.pathways,
+            std::path::Path::new(gmt_path),
+            &options,
+            true,
+        )
+        .map_err(|err| err.to_string())?;
+        let max_size = if max_size > 0 {
+            max_size as usize
+        } else {
+            ranks.len().saturating_sub(1)
+        };
+        let decor_multilevel =
+            mode == InterfaceMode::Multilevel || (mode == InterfaceMode::Fgsea && nperm.is_none());
+        let results = run_with_optional_thread_pool(nproc, || {
+            if decor_multilevel {
+                fgsea_decor_multilevel_with_options(
+                    &ranks,
+                    &pathways.pathways,
+                    &cache,
+                    &options,
+                    n_perm_simple as usize,
+                    seed,
+                    min_size,
+                    max_size,
+                    eps,
+                    score_type,
+                    gsea_param,
+                    sample_size as usize,
+                )
+            } else {
+                fgsea_decor_simple_with_options(
+                    &ranks,
+                    &pathways.pathways,
+                    &cache,
+                    &options,
+                    nperm.unwrap_or(n_perm_simple as usize),
+                    seed,
+                    min_size,
+                    max_size,
+                    eps,
+                    score_type,
+                    gsea_param,
+                    sample_size as usize,
+                )
+            }
+        })?
+        .map_err(|err| err.to_string())?;
+
+        return results_to_robj(results);
+    }
+    let exec_mode = resolve_execution_plan(mode, gpu, nperm, n_perm_simple as usize)
+        .map_err(|e| e.to_string())?;
     let max_size = if max_size > 0 {
         max_size as usize
+    } else if mode == InterfaceMode::Blitz {
+        4000
     } else {
         ranks.len().saturating_sub(1)
     };
@@ -369,53 +561,84 @@ fn fgsea_rust_impl(
             allow_multilevel,
             nproc,
         )?,
-        _ => run_with_optional_thread_pool(nproc, || match exec_mode {
-            ExecutionPlan::Cpu(InterfaceMode::Fgsea) => fgsea_with_sample_size_and_kind(
-                &ranks,
-                &pathways.pathways,
-                nperm,
-                n_perm_simple as usize,
-                seed,
-                min_size as usize,
-                max_size,
-                eps,
-                score_type,
-                gsea_param,
-                sample_size as usize,
-                sample_kind,
-            ),
-            ExecutionPlan::Cpu(InterfaceMode::Simple) => fgsea_simple_with_sample_size_and_kind(
-                &ranks,
-                &pathways.pathways,
-                nperm.unwrap_or(n_perm_simple as usize),
-                seed,
-                min_size as usize,
-                max_size,
-                eps,
-                score_type,
-                gsea_param,
-                sample_size as usize,
-                sample_kind,
-            ),
-            ExecutionPlan::Cpu(InterfaceMode::Multilevel) => {
-                fgsea_multilevel_with_sample_size_and_kind(
-                &ranks,
-                &pathways.pathways,
-                n_perm_simple as usize,
-                seed,
-                min_size as usize,
-                max_size,
-                eps,
-                score_type,
-                gsea_param,
-                sample_size as usize,
-                sample_kind,
-            )
-            }
-            ExecutionPlan::Gpu { .. } => unreachable!(),
-        })?,
+        _ => run_with_optional_thread_pool(
+            nproc,
+            || -> std::result::Result<Vec<EnrichmentResult>, String> {
+                match exec_mode {
+                    ExecutionPlan::Cpu(InterfaceMode::Fgsea) => {
+                        Ok(fgsea_with_sample_size_and_kind(
+                            &ranks,
+                            &pathways.pathways,
+                            nperm,
+                            n_perm_simple as usize,
+                            seed,
+                            min_size,
+                            max_size,
+                            eps,
+                            score_type,
+                            gsea_param,
+                            sample_size as usize,
+                            sample_kind,
+                        ))
+                    }
+                    ExecutionPlan::Cpu(InterfaceMode::Simple) => {
+                        Ok(fgsea_simple_with_sample_size_and_kind(
+                            &ranks,
+                            &pathways.pathways,
+                            nperm.unwrap_or(n_perm_simple as usize),
+                            seed,
+                            min_size,
+                            max_size,
+                            eps,
+                            score_type,
+                            gsea_param,
+                            sample_size as usize,
+                            sample_kind,
+                        ))
+                    }
+                    ExecutionPlan::Cpu(InterfaceMode::Multilevel) => {
+                        Ok(fgsea_multilevel_with_sample_size_and_kind(
+                            &ranks,
+                            &pathways.pathways,
+                            n_perm_simple as usize,
+                            seed,
+                            min_size,
+                            max_size,
+                            eps,
+                            score_type,
+                            gsea_param,
+                            sample_size as usize,
+                            sample_kind,
+                        ))
+                    }
+                    ExecutionPlan::Cpu(InterfaceMode::Blitz) => fgsea_blitz_with_options(
+                        &ranks,
+                        &pathways.pathways,
+                        &BlitzOptions {
+                            permutations: n_perm_simple as usize,
+                            anchors: blitz_anchors as usize,
+                            min_size,
+                            max_size,
+                            processes: if nproc > 0 { nproc as usize } else { 4 },
+                            symmetric: blitz_symmetric,
+                            seed: seed.unwrap_or(0),
+                            center: blitz_center,
+                            accuracy: blitz_accuracy as usize,
+                            deep_accuracy: blitz_deep_accuracy as usize,
+                            signature_cache: blitz_signature_cache,
+                        },
+                    )
+                    .map_err(|err| err.to_string()),
+                    ExecutionPlan::Gpu { .. } => unreachable!(),
+                }
+            },
+        )??,
     };
 
+    results_to_robj(results)
+}
+
+fn results_to_robj(results: Vec<EnrichmentResult>) -> std::result::Result<Robj, String> {
     let pathway: Vec<String> = results.iter().map(|row| row.pathway_name.clone()).collect();
     let size: Vec<i32> = results.iter().map(|row| row.size as i32).collect();
     let es: Vec<f64> = results.iter().map(|row| row.es).collect();
@@ -469,6 +692,24 @@ fn fgsea_rust(
     sample_size: i32,
     sample_kind: &str,
     gpu: bool,
+    method: &str,
+    decor_cache: Nullable<String>,
+    decor_expression: Nullable<String>,
+    decor_alpha: f64,
+    decor_cache_mode: &str,
+    decor_correlation: &str,
+    decor_redundancy: &str,
+    decor_weight_formula: &str,
+    decor_threshold: f64,
+    decor_gamma: f64,
+    decor_penalty_floor: f64,
+    decor_scale_epsilon: f64,
+    blitz_anchors: i32,
+    blitz_symmetric: bool,
+    blitz_center: bool,
+    blitz_accuracy: i32,
+    blitz_deep_accuracy: i32,
+    blitz_signature_cache: bool,
 ) -> Robj {
     match fgsea_rust_impl(
         stats,
@@ -487,6 +728,24 @@ fn fgsea_rust(
         sample_size,
         sample_kind,
         gpu,
+        method,
+        decor_cache,
+        decor_expression,
+        decor_alpha,
+        decor_cache_mode,
+        decor_correlation,
+        decor_redundancy,
+        decor_weight_formula,
+        decor_threshold,
+        decor_gamma,
+        decor_penalty_floor,
+        decor_scale_epsilon,
+        blitz_anchors,
+        blitz_symmetric,
+        blitz_center,
+        blitz_accuracy,
+        blitz_deep_accuracy,
+        blitz_signature_cache,
     ) {
         Ok(obj) => obj,
         Err(err) => throw_r_error(err),

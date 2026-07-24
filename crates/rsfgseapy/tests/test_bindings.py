@@ -11,6 +11,19 @@ def write_gmt(tmp_path: Path) -> Path:
     return gmt_path
 
 
+def write_expression(tmp_path: Path) -> Path:
+    expression_path = tmp_path / "expression.tsv"
+    expression_path.write_text(
+        "gene\ts1\ts2\ts3\ts4\n"
+        "g1\t1\t2\t3\t4\n"
+        "g2\t1.1\t2.1\t3.1\t4.1\n"
+        "g3\t4\t3\t2\t1\n"
+        "g4\t2\t1\t2\t1\n",
+        encoding="utf-8",
+    )
+    return expression_path
+
+
 def test_cpu_simple_mode_runs(tmp_path: Path) -> None:
     gmt_path = write_gmt(tmp_path)
     ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
@@ -27,6 +40,39 @@ def test_cpu_simple_mode_runs(tmp_path: Path) -> None:
     assert {row["pathway"] for row in results} == {"PW_A", "PW_B"}
 
 
+def test_cpu_blitz_mode_runs(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    results = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        mode="blitz",
+        nPermSimple=64,
+        minSize=1,
+        maxSize=4,
+        blitz_anchors=4,
+        blitz_signature_cache=False,
+    )
+
+    assert len(results) == 2
+    assert {row["pathway"] for row in results} == {"PW_A", "PW_B"}
+    assert all(row["log2err"] is None for row in results)
+
+
+def test_blitz_rejects_incompatible_options(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    with pytest.raises(ValueError, match="mode='blitz' supports only scoreType='std'"):
+        rsfgseapy.run_gsea_py(
+            ranks=ranks,
+            gmt_path=str(gmt_path),
+            mode="blitz",
+            scoreType="pos",
+        )
+
+
 def test_invalid_mode_raises_value_error(tmp_path: Path) -> None:
     gmt_path = write_gmt(tmp_path)
     ranks = {"g1": 2.0, "g2": 1.0}
@@ -36,6 +82,220 @@ def test_invalid_mode_raises_value_error(tmp_path: Path) -> None:
             ranks=ranks,
             gmt_path=str(gmt_path),
             mode="bogus",
+        )
+
+
+def test_default_method_remains_classic(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    results = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        mode="simple",
+        nPermSimple=50,
+        nperm=50,
+    )
+
+    assert len(results) == 2
+
+
+def test_decor_requires_cache(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    with pytest.raises(ValueError, match="requires decor_cache"):
+        rsfgseapy.run_gsea_py(
+            ranks=ranks,
+            gmt_path=str(gmt_path),
+            method="decor",
+            mode="simple",
+            nperm=50,
+        )
+
+
+def test_decor_builds_cache_from_expression(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    expression_path = write_expression(tmp_path)
+    cache_path = tmp_path / "decor-cache.tsv"
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    results = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        method="decor",
+        mode="simple",
+        nperm=50,
+        seed=42,
+        decor_cache=str(cache_path),
+        decor_expression=str(expression_path),
+    )
+
+    assert cache_path.exists()
+    assert len(results) == 2
+
+
+def test_decor_accepts_named_presets(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    expression_path = write_expression(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    for preset in ["sensitive", "balanced", "specific", "strict"]:
+        cache_path = tmp_path / f"decor-cache-{preset}.tsv"
+        results = rsfgseapy.run_gsea_py(
+            ranks=ranks,
+            gmt_path=str(gmt_path),
+            method="decor",
+            mode="simple",
+            nperm=25,
+            seed=42,
+            decor_cache=str(cache_path),
+            decor_expression=str(expression_path),
+            decor_preset=preset,
+        )
+
+        assert len(results) == 2
+
+
+def test_decor_explicit_formula_matches_balanced_preset(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    expression_path = write_expression(tmp_path)
+    cache_path = tmp_path / "decor-cache.tsv"
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    preset = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        method="decor",
+        mode="simple",
+        nperm=50,
+        seed=42,
+        decor_cache=str(cache_path),
+        decor_expression=str(expression_path),
+        decor_preset="balanced",
+    )
+    explicit = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        method="decor",
+        mode="simple",
+        nperm=50,
+        seed=42,
+        decor_cache=str(cache_path),
+        decor_weight_formula="threshold-rational",
+        decor_alpha=60.0,
+        decor_threshold=0.04,
+    )
+
+    assert len(preset) == len(explicit)
+    for lhs, rhs in zip(preset, explicit):
+        assert lhs["pathway"] == rhs["pathway"]
+        assert lhs["size"] == rhs["size"]
+        assert lhs["es"] == pytest.approx(rhs["es"])
+        assert lhs["nes"] == pytest.approx(rhs["nes"])
+        assert lhs["pval"] == pytest.approx(rhs["pval"])
+        assert lhs["padj"] == pytest.approx(rhs["padj"])
+
+
+def test_decor_multilevel_and_wrapper_without_nperm_run(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    expression_path = write_expression(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    explicit_cache = tmp_path / "decor-cache-explicit.tsv"
+    explicit = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        method="decor",
+        mode="multilevel",
+        nPermSimple=50,
+        sampleSize=11,
+        seed=42,
+        decor_cache=str(explicit_cache),
+        decor_expression=str(expression_path),
+        decor_preset="balanced",
+    )
+
+    wrapper_cache = tmp_path / "decor-cache-wrapper.tsv"
+    wrapper = rsfgseapy.run_gsea_py(
+        ranks=ranks,
+        gmt_path=str(gmt_path),
+        method="decor",
+        mode="fgsea",
+        nperm=None,
+        nPermSimple=50,
+        sampleSize=11,
+        seed=42,
+        decor_cache=str(wrapper_cache),
+        decor_expression=str(expression_path),
+    )
+
+    assert len(explicit) == 2
+    assert len(wrapper) == 2
+    assert {row["pathway"] for row in explicit} == {"PW_A", "PW_B"}
+    assert all({"pval", "padj", "es", "nes", "log2err"} <= row.keys() for row in explicit)
+
+
+def test_decor_accepts_stringency_ladder(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    expression_path = write_expression(tmp_path)
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    for stringency in [10.0, 50.0, 75.0, 95.0]:
+        cache_path = tmp_path / f"decor-cache-stringency-{int(stringency)}.tsv"
+        results = rsfgseapy.run_gsea_py(
+            ranks=ranks,
+            gmt_path=str(gmt_path),
+            method="decor",
+            mode="simple",
+            nperm=25,
+            seed=42,
+            decor_cache=str(cache_path),
+            decor_expression=str(expression_path),
+            decor_stringency=stringency,
+        )
+
+        assert len(results) == 2
+
+
+def test_decor_rejects_preset_and_stringency_together(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    expression_path = write_expression(tmp_path)
+    cache_path = tmp_path / "decor-cache.tsv"
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    with pytest.raises(ValueError, match="decor_preset or decor_stringency"):
+        rsfgseapy.run_gsea_py(
+            ranks=ranks,
+            gmt_path=str(gmt_path),
+            method="decor",
+            mode="simple",
+            nperm=25,
+            seed=42,
+            decor_cache=str(cache_path),
+            decor_expression=str(expression_path),
+            decor_preset="balanced",
+            decor_stringency=50.0,
+        )
+
+
+def test_decor_does_not_expose_null_selection(tmp_path: Path) -> None:
+    gmt_path = write_gmt(tmp_path)
+    expression_path = write_expression(tmp_path)
+    cache_path = tmp_path / "decor-cache.tsv"
+    ranks = {"g1": 2.0, "g2": 1.0, "g3": -1.0, "g4": -2.0}
+
+    with pytest.raises(TypeError, match="decor_null"):
+        rsfgseapy.run_gsea_py(
+            ranks=ranks,
+            gmt_path=str(gmt_path),
+            method="decor",
+            mode="simple",
+            nperm=25,
+            seed=42,
+            decor_cache=str(cache_path),
+            decor_expression=str(expression_path),
+            decor_null="profile",
         )
 
 

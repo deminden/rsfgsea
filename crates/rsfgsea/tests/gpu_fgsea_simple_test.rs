@@ -1,9 +1,27 @@
 #![cfg(feature = "gpu")]
 
 use rsfgsea::GpuEngine;
+use std::fs;
+use std::process::Command;
+
+fn gl_backend_in_libtest() -> bool {
+    let requested_gl = std::env::var("WGPU_BACKEND")
+        .map(|value| value.eq_ignore_ascii_case("gl"))
+        .unwrap_or(false);
+    let gallium_d3d12 = std::env::var("GALLIUM_DRIVER")
+        .map(|value| value.eq_ignore_ascii_case("d3d12"))
+        .unwrap_or(false);
+    requested_gl || gallium_d3d12
+}
 
 macro_rules! skip_if_no_gpu {
-    ($engine:expr) => {
+    ($engine:expr) => {{
+        if gl_backend_in_libtest() {
+            println!(
+                "Skipping test: wgpu GL/D3D12 backend can crash during libtest thread teardown"
+            );
+            return;
+        }
         match $engine {
             Ok(e) => e,
             Err(e) => {
@@ -11,12 +29,17 @@ macro_rules! skip_if_no_gpu {
                 return;
             }
         }
-    };
+    }};
 }
 
 /// Test basic GPU engine initialization
 #[test]
 fn test_gpu_engine_init() {
+    if gl_backend_in_libtest() {
+        println!("Skipping test: wgpu GL/D3D12 backend can crash during libtest thread teardown");
+        return;
+    }
+
     pollster::block_on(async {
         let engine_res = GpuEngine::new().await;
         if let Err(e) = engine_res {
@@ -27,6 +50,52 @@ fn test_gpu_engine_init() {
         // Just verify it exists
         drop(engine);
     });
+}
+
+#[test]
+fn test_gpu_cli_smoke_for_gl_d3d12_backend() {
+    if !gl_backend_in_libtest() {
+        println!("Skipping test: GL/D3D12 backend was not requested");
+        return;
+    }
+
+    let dir = tempfile::tempdir().unwrap();
+    let ranks = dir.path().join("test.rnk");
+    let gmt = dir.path().join("test.gmt");
+    let output = dir.path().join("out.tsv");
+    fs::write(
+        &ranks,
+        "A\t4.0\nB\t3.0\nC\t2.0\nD\t-1.0\nE\t-2.0\nF\t-3.0\n",
+    )
+    .unwrap();
+    fs::write(&gmt, "PW_REDUNDANT\tna\tA\tB\tC\nPW_MIXED\tna\tA\tD\tF\n").unwrap();
+
+    let status = Command::new(env!("CARGO_BIN_EXE_rsfgsea"))
+        .args([
+            "--gpu",
+            "--mode",
+            "fgsea",
+            "--nperm",
+            "64",
+            "--seed",
+            "42",
+            "--minSize",
+            "1",
+            "--maxSize",
+            "6",
+            "--ranks",
+            ranks.to_str().unwrap(),
+            "--gmt",
+            gmt.to_str().unwrap(),
+            "--output",
+            output.to_str().unwrap(),
+        ])
+        .status()
+        .expect("failed to run rsfgsea CLI");
+    assert!(status.success(), "rsfgsea GPU CLI smoke test failed");
+
+    let content = fs::read_to_string(output).unwrap();
+    assert!(content.contains("PW_REDUNDANT"));
 }
 
 /// Test compute_es_batch with a simple case

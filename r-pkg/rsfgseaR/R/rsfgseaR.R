@@ -55,6 +55,30 @@ NULL
   }
 }
 
+.validate_nonnegative_scalar <- function(value, name, allow_null = FALSE) {
+  if (is.null(value)) {
+    if (allow_null) {
+      return(invisible(NULL))
+    }
+    stop(name, " must not be NULL.", call. = FALSE)
+  }
+  if (length(value) != 1L || !is.numeric(value) || !is.finite(value) || value < 0) {
+    stop(name, " must be a single finite numeric value >= 0.", call. = FALSE)
+  }
+}
+
+.validate_unit_interval_floor <- function(value, name, allow_null = FALSE) {
+  if (is.null(value)) {
+    if (allow_null) {
+      return(invisible(NULL))
+    }
+    stop(name, " must not be NULL.", call. = FALSE)
+  }
+  if (length(value) != 1L || !is.numeric(value) || !is.finite(value) || value < 0 || value >= 1) {
+    stop(name, " must be a single finite numeric value >= 0 and < 1.", call. = FALSE)
+  }
+}
+
 .validate_choice <- function(value, name, choices) {
   if (!is.character(value) || length(value) != 1L || !(tolower(value) %in% choices)) {
     stop(name, " must be one of: ", paste(choices, collapse = ", "), ".", call. = FALSE)
@@ -67,6 +91,59 @@ NULL
     return(kinds[[3L]])
   }
   "Rounding"
+}
+
+.resolve_decor_preset <- function(preset) {
+  switch(tolower(preset),
+    sensitive = list(
+      alpha = 22.0,
+      weight.formula = "raw-rational",
+      threshold = 0.0,
+      gamma = 1.0,
+      penalty.floor = 0.0
+    ),
+    balanced = list(
+      alpha = 60.0,
+      weight.formula = "threshold-rational",
+      threshold = 0.04,
+      gamma = 1.0,
+      penalty.floor = 0.0
+    ),
+    specific = list(
+      alpha = 65.0,
+      weight.formula = "threshold-rational",
+      threshold = 0.05,
+      gamma = 1.0,
+      penalty.floor = 0.0
+    ),
+    strict = list(
+      alpha = -log(0.10),
+      weight.formula = "exp-scaled",
+      threshold = 0.0,
+      gamma = 1.0,
+      penalty.floor = 0.0
+    )
+  )
+}
+
+.resolve_decor_stringency <- function(stringency) {
+  if (length(stringency) != 1L || !is.numeric(stringency) || !is.finite(stringency) || stringency < 0 || stringency > 100) {
+    stop("decor.stringency must be a single finite numeric value from 0 to 100.", call. = FALSE)
+  }
+
+  preset <- if (stringency < 35) {
+    "sensitive"
+  } else if (stringency < 65) {
+    "balanced"
+  } else if (stringency < 85) {
+    "specific"
+  } else {
+    "strict"
+  }
+  resolved <- .resolve_decor_preset(preset)
+  resolved$preset <- preset
+  resolved$stringency <- stringency
+  resolved
 }
 
 .normalize_stats <- function(stats) {
@@ -106,6 +183,15 @@ NULL
     character(1)
   )
   export$leadingEdge <- NULL
+
+  # Seventeen significant decimal digits uniquely identify every binary64
+  # value. Convert doubles before write.table(), whose default formatting
+  # otherwise follows the session's display precision.
+  double_columns <- vapply(export, is.double, logical(1))
+  export[double_columns] <- lapply(
+    export[double_columns],
+    function(values) sprintf("%.17g", values)
+  )
   utils::write.table(
     export,
     file = path,
@@ -400,21 +486,71 @@ plotGseaTable <- function(
 #'
 #' @param pathways Either a named list of character vectors or a path to a GMT file.
 #' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
-#' @param nPermSimple Integer permutation count for the simple screening stage.
-#' @param seed Optional integer RNG seed. `NULL` uses a fresh random seed.
-#' @param nproc Number of worker threads. `0` keeps the default Rayon behavior.
-#' @param minSize Minimum pathway size.
-#' @param maxSize Maximum pathway size. Defaults to `length(stats) - 1`.
+#' @param nPermSimple Integer permutation count for the simple screening stage;
+#'   in Blitz mode, the number of null permutations per calibration anchor. For
+#'   CPU/GPU or R/GPU comparisons, prefer `100000L` as a practical baseline;
+#'   use `10000L` only as a smoke tier and `1000000L` for final tail/stress
+#'   checks when runtime allows.
+#' @param seed Optional integer RNG seed. `NULL` uses a fresh seed outside Blitz
+#'   mode and deterministic seed `0` in Blitz mode.
+#' @param nproc Number of workers. `0` keeps the default Rayon behavior outside
+#'   Blitz mode and uses four calibration workers in Blitz mode.
+#' @param minSize Minimum pathway size. Defaults to `1`, or `5` in Blitz mode.
+#' @param maxSize Maximum pathway size. Defaults to `length(stats) - 1`, or
+#'   `4000` in Blitz mode.
 #' @param eps Multilevel epsilon parameter.
 #' @param scoreType One of `"std"`, `"pos"`, `"neg"`.
 #' @param gseaParam Weighting exponent.
-#' @param mode One of `"fgsea"`, `"simple"`, `"multilevel"`.
-#' @param nperm Optional fixed-permutation override for wrapper mode.
+#' @param mode One of `"fgsea"`, `"simple"`, `"multilevel"`, `"blitz"`.
+#'   Blitz mode targets compatibility with `blitzgsea 1.3.54`.
+#' @param nperm Optional fixed-permutation override for classic wrapper mode;
+#'   unsupported in Blitz mode.
 #' @param sampleSize Multilevel sample size.
+#' @param method One of `"classic"` or `"decor"`. The default preserves the
+#'   fgsea-compatible classic method.
+#' @param decor.cache Path to a decor redundancy cache.
+#' @param decor.expression Optional normalized expression matrix used to build
+#'   or rebuild the decor cache.
+#' @param decor.preset Decor redundancy preset. `"balanced"` is the default
+#'   held-out-validated threshold preset. Other choices are `"sensitive"`,
+#'   `"specific"`, and `"strict"`.
+#' @param decor.stringency Optional numeric 0-100 convenience control. When set,
+#'   it autoswitches between the calibrated decor presets instead of exposing
+#'   formula-level controls.
+#' @param decor.weight.formula Optional explicit decor hit-weight formula,
+#'   currently one of `"raw-rational"`, `"exp-scaled"`, or
+#'   `"threshold-rational"`.
+#' @param decor.alpha Optional explicit decor redundancy penalty strength.
+#' @param decor.threshold Optional explicit decor threshold tau for
+#'   threshold-rational weights.
+#' @param decor.gamma Optional explicit gamma parameter for formula families
+#'   that use it.
+#' @param decor.penalty.floor Optional explicit lower bound on decor penalties.
+#' @param decor.scale.epsilon Small positive epsilon for scaled decor formulas.
+#' @param decor.cache.mode One of `"auto"`, `"reuse"`, `"rebuild"`.
+#' @param decor.correlation Correlation method for decor cache building. Only
+#'   `"pearson"` is currently implemented.
+#' @param decor.redundancy Redundancy score definition, `"positive_mean"` or
+#'   `"abs_mean"`.
 #' @param output Optional TSV output path. When set, results are also written in
-#'   the same column shape as the CLI.
+#'   the CLI column shape with round-trip-safe numeric text; decimal width is
+#'   not fixed.
 #' @param gpu Logical flag mirroring the CLI `--gpu` switch. Uses the same
 #'   hybrid GPU path as the Rust CLI and currently supports only `mode = "fgsea"`.
+#'   On WSL2, if CUDA is visible but WebGPU selects `llvmpipe`, start R with
+#'   `GALLIUM_DRIVER=d3d12` and `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`.
+#' @param blitz.anchors Number of blitz calibration anchors.
+#' @param blitz.symmetric Use one symmetric positive/negative blitz null fit.
+#' @param blitz.center Center signature values before blitz scoring.
+#' @param blitz.accuracy Upstream-compatible normal-tail setting, currently
+#'   retained for interface parity and not used to alter the native normal-tail
+#'   calculation.
+#' @param blitz.deep.accuracy Decimal precision used by the high-precision gamma
+#'   fallback for extreme Blitz tails. Changing it can change extreme-tail
+#'   p-values and NES.
+#' @param blitz.signature.cache Reuse blitz null-model fits for repeated calls
+#'   with the same preprocessed signature and calibration settings in this R
+#'   process.
 #'
 #' @return A data frame with fgsea-style result columns.
 #' @export
@@ -424,7 +560,7 @@ fgsea <- function(
   nPermSimple = 1000L,
   seed = NULL,
   nproc = 0L,
-  minSize = 1L,
+  minSize = NULL,
   maxSize = NULL,
   eps = 1e-50,
   scoreType = "std",
@@ -432,8 +568,28 @@ fgsea <- function(
   mode = "fgsea",
   nperm = NULL,
   sampleSize = 101L,
+  method = "classic",
+  decor.cache = NULL,
+  decor.expression = NULL,
+  decor.preset = "balanced",
+  decor.stringency = NULL,
+  decor.weight.formula = NULL,
+  decor.alpha = NULL,
+  decor.threshold = NULL,
+  decor.gamma = NULL,
+  decor.penalty.floor = NULL,
+  decor.scale.epsilon = 1e-12,
+  decor.cache.mode = "auto",
+  decor.correlation = "pearson",
+  decor.redundancy = "positive_mean",
   output = NULL,
-  gpu = FALSE
+  gpu = FALSE,
+  blitz.anchors = 40L,
+  blitz.symmetric = FALSE,
+  blitz.center = TRUE,
+  blitz.accuracy = 40L,
+  blitz.deep.accuracy = 50L,
+  blitz.signature.cache = TRUE
 ) {
   stats <- .normalize_stats(stats)
   .validate_integerish_scalar(nPermSimple, "nPermSimple", min_value = 1L)
@@ -441,8 +597,11 @@ fgsea <- function(
     .validate_integerish_scalar(seed, "seed", min_value = 0L)
   }
   .validate_integerish_scalar(nproc, "nproc", min_value = 0L)
-  .validate_integerish_scalar(minSize, "minSize", min_value = 1L)
+  .validate_integerish_scalar(minSize, "minSize", min_value = 1L, allow_null = TRUE)
   .validate_integerish_scalar(sampleSize, "sampleSize", min_value = 1L)
+  .validate_integerish_scalar(blitz.anchors, "blitz.anchors", min_value = 1L)
+  .validate_integerish_scalar(blitz.accuracy, "blitz.accuracy", min_value = 1L)
+  .validate_integerish_scalar(blitz.deep.accuracy, "blitz.deep.accuracy", min_value = 1L)
   if (!is.null(maxSize)) {
     .validate_integerish_scalar(maxSize, "maxSize", min_value = 1L)
   }
@@ -455,10 +614,41 @@ fgsea <- function(
   if (!is.numeric(gseaParam) || length(gseaParam) != 1L || !is.finite(gseaParam)) {
     stop("gseaParam must be a single finite numeric value.", call. = FALSE)
   }
-  .validate_choice(mode, "mode", c("fgsea", "simple", "multilevel"))
+  .validate_choice(mode, "mode", c("fgsea", "simple", "multilevel", "blitz"))
   .validate_choice(scoreType, "scoreType", c("std", "pos", "neg"))
+  .validate_choice(method, "method", c("classic", "decor"))
+  .validate_choice(decor.preset, "decor.preset", c("sensitive", "balanced", "specific", "strict"))
+  if (!is.null(decor.stringency) && tolower(decor.preset) != "balanced") {
+    stop("Use either decor.preset or decor.stringency, not both.", call. = FALSE)
+  }
+  .validate_choice(decor.cache.mode, "decor.cache.mode", c("auto", "reuse", "rebuild"))
+  .validate_choice(decor.correlation, "decor.correlation", c("pearson", "spearman"))
+  .validate_choice(decor.redundancy, "decor.redundancy", c("positive_mean", "abs_mean"))
+  if (!is.null(decor.weight.formula)) {
+    .validate_choice(decor.weight.formula, "decor.weight.formula", c("raw-rational", "exp-scaled", "threshold-rational"))
+  }
+  .validate_nonnegative_scalar(decor.alpha, "decor.alpha", allow_null = TRUE)
+  .validate_unit_interval_floor(decor.threshold, "decor.threshold", allow_null = TRUE)
+  .validate_nonnegative_scalar(decor.gamma, "decor.gamma", allow_null = TRUE)
+  .validate_unit_interval_floor(decor.penalty.floor, "decor.penalty.floor", allow_null = TRUE)
+  .validate_positive_scalar(decor.scale.epsilon, "decor.scale.epsilon")
+  if (!is.null(decor.cache) && (!is.character(decor.cache) || length(decor.cache) != 1L || identical(decor.cache, ""))) {
+    stop("decor.cache must be NULL or a single file path.", call. = FALSE)
+  }
+  if (!is.null(decor.expression) && (!is.character(decor.expression) || length(decor.expression) != 1L || identical(decor.expression, ""))) {
+    stop("decor.expression must be NULL or a single file path.", call. = FALSE)
+  }
   if (!is.logical(gpu) || length(gpu) != 1L || is.na(gpu)) {
     stop("gpu must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(blitz.symmetric) || length(blitz.symmetric) != 1L || is.na(blitz.symmetric)) {
+    stop("blitz.symmetric must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(blitz.center) || length(blitz.center) != 1L || is.na(blitz.center)) {
+    stop("blitz.center must be TRUE or FALSE.", call. = FALSE)
+  }
+  if (!is.logical(blitz.signature.cache) || length(blitz.signature.cache) != 1L || is.na(blitz.signature.cache)) {
+    stop("blitz.signature.cache must be TRUE or FALSE.", call. = FALSE)
   }
   if (!is.null(output) && (!is.character(output) || length(output) != 1L)) {
     stop("output must be NULL or a single file path.", call. = FALSE)
@@ -468,6 +658,56 @@ fgsea <- function(
   }
   if (gpu && tolower(mode) != "fgsea") {
     stop("gpu currently supports only mode = 'fgsea'.", call. = FALSE)
+  }
+  if (tolower(mode) == "blitz") {
+    if (gpu) {
+      stop("gpu is not supported with mode = 'blitz'.", call. = FALSE)
+    }
+    if (tolower(method) != "classic") {
+      stop("mode = 'blitz' supports only method = 'classic'.", call. = FALSE)
+    }
+    if (!is.null(nperm)) {
+      stop("nperm is not supported with mode = 'blitz'.", call. = FALSE)
+    }
+    if (tolower(scoreType) != "std") {
+      stop("mode = 'blitz' supports only scoreType = 'std'.", call. = FALSE)
+    }
+    if (!identical(as.numeric(gseaParam), 1.0)) {
+      stop("mode = 'blitz' supports only gseaParam = 1.", call. = FALSE)
+    }
+  }
+  if (tolower(method) == "decor") {
+    if (is.null(decor.cache)) {
+      stop("method = 'decor' requires decor.cache.", call. = FALSE)
+    }
+    if (tolower(decor.correlation) == "spearman") {
+      stop("spearman decor correlation is not implemented yet.", call. = FALSE)
+    }
+    if (gpu) {
+      stop("decor supports CPU execution only; gpu is not supported with method = 'decor'.", call. = FALSE)
+    }
+  } else if (!is.null(decor.cache) || !is.null(decor.expression) || !is.null(decor.stringency) || tolower(decor.preset) != "balanced") {
+    stop("decor arguments require method = 'decor'.", call. = FALSE)
+  }
+  decor.resolved <- if (is.null(decor.stringency)) {
+    .resolve_decor_preset(decor.preset)
+  } else {
+    .resolve_decor_stringency(decor.stringency)
+  }
+  if (!is.null(decor.weight.formula)) {
+    decor.resolved$weight.formula <- decor.weight.formula
+  }
+  if (!is.null(decor.alpha)) {
+    decor.resolved$alpha <- decor.alpha
+  }
+  if (!is.null(decor.threshold)) {
+    decor.resolved$threshold <- decor.threshold
+  }
+  if (!is.null(decor.gamma)) {
+    decor.resolved$gamma <- decor.gamma
+  }
+  if (!is.null(decor.penalty.floor)) {
+    decor.resolved$penalty.floor <- decor.penalty.floor
   }
 
   pathways_info <- .normalize_pathways(pathways)
@@ -482,7 +722,7 @@ fgsea <- function(
     as.integer(nPermSimple),
     if (is.null(seed)) NULL else as.integer(seed),
     as.integer(nproc),
-    as.integer(minSize),
+    if (is.null(minSize)) -1L else as.integer(minSize),
     if (is.null(maxSize)) -1L else as.integer(maxSize),
     eps,
     scoreType,
@@ -491,7 +731,25 @@ fgsea <- function(
     if (is.null(nperm)) -1L else as.integer(nperm),
     as.integer(sampleSize),
     .resolve_sample_kind(),
-    gpu
+    gpu,
+    method,
+    if (is.null(decor.cache)) NULL else decor.cache,
+    if (is.null(decor.expression)) NULL else decor.expression,
+    as.numeric(decor.resolved$alpha),
+    decor.cache.mode,
+    decor.correlation,
+    decor.redundancy,
+    decor.resolved$weight.formula,
+    as.numeric(decor.resolved$threshold),
+    as.numeric(decor.resolved$gamma),
+    as.numeric(decor.resolved$penalty.floor),
+    as.numeric(decor.scale.epsilon),
+    as.integer(blitz.anchors),
+    isTRUE(blitz.symmetric),
+    isTRUE(blitz.center),
+    as.integer(blitz.accuracy),
+    as.integer(blitz.deep.accuracy),
+    isTRUE(blitz.signature.cache)
   )
 
   result_df <- .as_fgsea_df(result)
@@ -505,7 +763,8 @@ fgsea <- function(
 #'
 #' @param pathways Either a named list of character vectors or a path to a GMT file.
 #' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
-#' @param nperm Number of permutations.
+#' @param nperm Number of permutations. For CPU/GPU or R/GPU comparisons,
+#'   prefer `100000L` as a practical baseline; use `10000L` only as a smoke tier.
 #' @param seed Optional integer RNG seed. `NULL` uses a fresh random seed.
 #' @param nproc Number of worker threads. `0` keeps the default Rayon behavior.
 #' @param minSize Minimum pathway size.
@@ -514,9 +773,12 @@ fgsea <- function(
 #' @param scoreType One of `"std"`, `"pos"`, `"neg"`.
 #' @param gseaParam Weighting exponent.
 #' @param sampleSize Multilevel sample size, kept for interface parity.
-#' @param output Optional TSV output path in CLI-style tabular format.
+#' @param output Optional TSV output path in CLI-style tabular format with
+#'   round-trip-safe numeric text and no fixed decimal width.
 #' @param gpu Logical flag mirroring the CLI `--gpu` switch. GPU execution
 #'   currently supports only `mode = "fgsea"`, so `fgseaSimple()` will reject it.
+#'   On WSL2, if CUDA is visible but WebGPU selects `llvmpipe`, start R with
+#'   `GALLIUM_DRIVER=d3d12` and `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`.
 #'
 #' @return A data frame with fgsea-style result columns.
 #' @export
@@ -549,6 +811,7 @@ fgseaSimple <- function(
     mode = "simple",
     nperm = as.integer(nperm),
     sampleSize = sampleSize,
+    method = "classic",
     output = output,
     gpu = gpu
   )
@@ -559,6 +822,9 @@ fgseaSimple <- function(
 #' @param pathways Either a named list of character vectors or a path to a GMT file.
 #' @param stats Named numeric vector of preranked statistics, or a path to a ranked-list file.
 #' @param nPermSimple Simple-stage permutation count used before multilevel refinement.
+#'   For CPU/GPU or R/GPU comparisons, prefer `100000L` as a practical baseline;
+#'   use `10000L` only as a smoke tier and `1000000L` for final tail/stress
+#'   checks when runtime allows.
 #' @param seed Optional integer RNG seed. `NULL` uses a fresh random seed.
 #' @param nproc Number of worker threads. `0` keeps the default Rayon behavior.
 #' @param minSize Minimum pathway size.
@@ -567,9 +833,12 @@ fgseaSimple <- function(
 #' @param scoreType One of `"std"`, `"pos"`, `"neg"`.
 #' @param gseaParam Weighting exponent.
 #' @param sampleSize Multilevel sample size.
-#' @param output Optional TSV output path in CLI-style tabular format.
+#' @param output Optional TSV output path in CLI-style tabular format with
+#'   round-trip-safe numeric text and no fixed decimal width.
 #' @param gpu Logical flag mirroring the CLI `--gpu` switch. GPU execution
 #'   currently supports only `mode = "fgsea"`, so `fgseaMultilevel()` will reject it.
+#'   On WSL2, if CUDA is visible but WebGPU selects `llvmpipe`, start R with
+#'   `GALLIUM_DRIVER=d3d12` and `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`.
 #'
 #' @return A data frame with fgsea-style result columns.
 #' @export

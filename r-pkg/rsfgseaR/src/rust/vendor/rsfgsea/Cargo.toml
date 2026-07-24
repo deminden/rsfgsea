@@ -1,9 +1,10 @@
 [package]
 name = "rsfgsea"
-version = "0.3.4"
+version = "0.4.0"
 edition = "2024"
+rust-version = "1.97.1"
 authors = ["Denis Demin"]
-description = "High-performance fgsea-compatible preranked Gene Set Enrichment Analysis in Rust"
+description = "High-performance decor, fgsea-compatible, and Blitz-compatible preranked GSEA in Rust"
 license = "MIT"
 documentation = "https://github.com/deminden/rsfgsea/tree/main/docs"
 homepage = "https://github.com/deminden/rsfgsea"
@@ -11,37 +12,32 @@ repository = "https://github.com/deminden/rsfgsea"
 readme = "README.md"
 
 [dependencies]
-anyhow = "1.0.102"
+anyhow = "1.0.104"
 ab_glyph = "0.2.32"
-bytemuck = { version = "1.25.0", features = ["derive"], optional = true }
-clap = { version = "4.6.0", features = ["derive"] }
+astro-float = { version = "0.9.5", default-features = false, features = ["std"] }
+bytemuck = { version = "1.25.2", features = ["derive"], optional = true }
+clap = { version = "4.6.4", features = ["derive"] }
 csv = "1.4.0"
-flate2 = "1.1.5"
-flume = { version = "0.12.0", optional = true }
+flate2 = "1.1.9"
 futures-intrusive = { version = "0.5.0", optional = true }
 image = "0.25.10"
-imageproc = "0.26.1"
-itertools = "0.14.0"
-log = "0.4.29"
-ndarray = "0.17.2"
-num_cpus = "1.17.0"
+imageproc = "0.27.0"
+log = "0.4.33"
 png = "0.18.1"
-pollster = { version = "0.4.0", optional = true }
-rand = "0.10.0"
-rand_chacha = "0.10.0"
-rayon = "1.11.0"
-serde = { version = "1.0.228", features = ["derive"] }
-special = "0.13.0"
-statrs = "0.18.0"
-thiserror = "2.0.18"
-tokio = { version = "1.50.0", features = ["macros", "rt-multi-thread"], optional = true }
-wgpu = { version = "28.0.0", optional = true }
+pollster = { version = "1.0.1", optional = true }
+rand = "0.10.2"
+rayon = "1.12.0"
+serde = { version = "1.0.229", features = ["derive"] }
+sha2 = "0.11.0"
+special = "0.13.1"
+statrs = "0.19.0"
+tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread"], optional = true }
+wgpu = { version = "30.0.0", optional = true }
 
 [features]
 default = []
 gpu = [
     "dep:bytemuck",
-    "dep:flume",
     "dep:futures-intrusive",
     "dep:pollster",
     "dep:tokio",

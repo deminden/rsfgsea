@@ -1,18 +1,23 @@
 # rsfgseapy
 
-Python bindings for `rsfgsea`, a Rust implementation of preranked fgsea-compatible gene set enrichment analysis.
+Python bindings for `rsfgsea`, a Rust implementation of preranked gene set enrichment analysis with decor, classic fgsea-compatible, and native blitz workflows.
 
 ## What It Exposes
 
-The package currently exposes one public entrypoint:
+The package exposes three public entrypoints:
 
 - `run_gsea_py(...)`
+- `write_enrichment_plot_png_py(...)`
+- `write_gsea_table_plot_png_py(...)`
 
-The API intentionally keeps fgsea-style parameter names and execution modes:
+The API intentionally keeps fgsea-style parameter names while exposing decor first, classic fgsea-compatible modes second, and native blitz third:
 
+- `method="decor"` / `method="classic"`
+- `decor_cache`, `decor_expression`, `decor_preset`, `decor_stringency`
 - `mode="fgsea"`
 - `mode="simple"`
 - `mode="multilevel"`
+- `mode="blitz"`
 - `nPermSimple`
 - `seed`
 - `nperm`
@@ -21,6 +26,7 @@ The API intentionally keeps fgsea-style parameter names and execution modes:
 - `sampleSize`
 - `scoreType`
 - `gseaParam`
+- `blitz_anchors`, `blitz_symmetric`, `blitz_center`, `blitz_accuracy`, `blitz_deep_accuracy`, `blitz_signature_cache`
 
 ## Installation
 
@@ -50,25 +56,36 @@ maturin develop --release
 
 - path to a GMT file
 
-## Performance Snapshot
+## Performance and Precision
 
 The Python package calls the same Rust backend as the CLI and R wrapper.
-Current local benchmark snapshots from the main repository, measured on an AMD
-Ryzen 7950X3D:
-
-- representative Criterion benchmark, simple: `2.282 s` for 10k genes, 1k pathways, 10k permutations
-- representative Criterion benchmark, multilevel: `3.438 s` for 10k genes, 1k pathways, `nPermSimple=1000`
-- file-backed comparison, multilevel large workload, 16 workers: Rust `105 ms` vs R `977 ms` (`9.3x` faster)
-- file-backed comparison, simple large workload, 16 workers: Rust `674 ms` vs R `798 ms` (`1.18x` faster)
-- real muscle-comparison validation workload: Rust `81 MB` peak RSS vs R `329 MB` peak RSS (`4.1x` lower)
-
-Full benchmark setup, thread-scaling tables, and parity notes are in:
+Current benchmark protocols, results, and Blitz precision evidence are owned by:
 
 - https://github.com/deminden/rsfgsea/blob/main/docs/reproducibility.md
 
-## Minimal Example
+## Decor Example
 
-For most users, wrapper mode with defaults is the right starting point.
+Decor is CPU-only. It uses fixed-permutation simple runs when `nperm` is set,
+and decor multilevel refinement when `mode="multilevel"` or wrapper mode omits
+`nperm`.
+
+```python
+import rsfgseapy
+
+results = rsfgseapy.run_gsea_py(
+    ranks={"TP53": 3.1, "MYC": 2.8, "ACTB": -1.2},
+    gmt_path="pathways.gmt",
+    method="decor",
+    mode="simple",
+    nperm=10000,
+    decor_cache="cache/pathways.decor.tsv",
+    decor_expression="data/expression.tsv",
+)
+```
+
+## Classic Minimal Example
+
+Wrapper mode with defaults is the closest match to the standard R `fgsea` interface.
 
 ```python
 import rsfgseapy
@@ -82,7 +99,7 @@ for row in results:
     print(row["pathway"], row["pval"])
 ```
 
-## Full Example
+## Classic Full Example
 
 ```python
 import rsfgseapy
@@ -99,7 +116,7 @@ results = rsfgseapy.run_gsea_py(
     gmt_path="pathways.gmt",
     mode="fgsea",
     gpu=False,
-    nPermSimple=1000,
+    nPermSimple=100000,
     seed=None,
     nperm=None,
     minSize=1,
@@ -114,6 +131,22 @@ results = rsfgseapy.run_gsea_py(
 for row in results:
     print(row["pathway"], row["nes"], row["pval"])
 ```
+
+## Blitz Example
+
+Blitz mode is a native Rust implementation of the `blitzgsea.gsea()` workflow.
+
+```python
+import rsfgseapy
+
+results = rsfgseapy.run_gsea_py(
+    ranks={"TP53": 3.1, "MYC": 2.8, "ACTB": -1.2, "GATA3": -2.0, "ESR1": 1.5},
+    gmt_path="pathways.gmt",
+    mode="blitz",
+)
+```
+
+`blitz_signature_cache=True` reuses native blitz null-model fits for repeated identical calls in the same Python process. Set it to `False` to force cold calibration.
 
 ## Plotting
 
@@ -176,6 +209,9 @@ Practical rule:
 - light users: keep `nperm=None`
 - use `nPermSimple` to tune the default wrapper behavior
 - only set `nperm` when you deliberately want fixed-permutation simple execution
+- for CPU/GPU or R/GPU comparisons, prefer `nPermSimple=100000` as a practical
+  baseline; use `10000` only as a smoke tier and `1000000` for final
+  tail/stress checks when runtime allows
 
 ## Returned Results
 
@@ -203,9 +239,21 @@ Current behavior:
 
 If the extension is built without GPU support, `gpu=True` raises a runtime error.
 
+On WSL2, CUDA can be visible while WebGPU still selects Mesa `llvmpipe`. If
+`nvidia-smi` works but `gpu=True` fails with a `llvmpipe` adapter error, start
+Python with Mesa's D3D12 path enabled:
+
+```bash
+export GALLIUM_DRIVER=d3d12
+export MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+```
+
+For older builds or adapter debugging, also try `WGPU_BACKEND=gl` and
+`RSFGSEA_GPU_ALLOW_GL=1`.
+
 ## Supported Python Versions
 
-The package metadata currently targets Python 3.8 and newer.
+The package metadata targets Python 3.10 and newer.
 
 ## Project Links
 

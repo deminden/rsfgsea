@@ -3,6 +3,8 @@ use pyo3::prelude::*;
 use pyo3::types::PyAny;
 use rsfgsea::prelude::*;
 use std::collections::HashMap;
+use std::path::PathBuf;
+use std::str::FromStr;
 
 fn parse_score_type(score_type: &str) -> PyResult<ScoreType> {
     match score_type.to_lowercase().as_str() {
@@ -16,10 +18,138 @@ fn parse_score_type(score_type: &str) -> PyResult<ScoreType> {
     }
 }
 
+fn parse_method(method: &str) -> PyResult<EnrichmentMethod> {
+    match method.to_lowercase().as_str() {
+        "classic" => Ok(EnrichmentMethod::Classic),
+        "decor" => Ok(EnrichmentMethod::Decor),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid method '{}'. Expected one of: classic, decor.",
+            other
+        ))),
+    }
+}
+
+fn parse_decor_cache_mode(mode: &str) -> PyResult<DecorCacheMode> {
+    match mode.to_lowercase().as_str() {
+        "auto" => Ok(DecorCacheMode::Auto),
+        "reuse" => Ok(DecorCacheMode::Reuse),
+        "rebuild" => Ok(DecorCacheMode::Rebuild),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid decor_cache_mode '{}'. Expected one of: auto, reuse, rebuild.",
+            other
+        ))),
+    }
+}
+
+fn parse_decor_correlation(correlation: &str) -> PyResult<DecorCorrelation> {
+    match correlation.to_lowercase().as_str() {
+        "pearson" => Ok(DecorCorrelation::Pearson),
+        "spearman" => Ok(DecorCorrelation::Spearman),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid decor_correlation '{}'. Expected one of: pearson, spearman.",
+            other
+        ))),
+    }
+}
+
+fn parse_decor_redundancy(redundancy: &str) -> PyResult<DecorRedundancy> {
+    match redundancy.to_lowercase().as_str() {
+        "positive_mean" => Ok(DecorRedundancy::PositiveMean),
+        "abs_mean" => Ok(DecorRedundancy::AbsMean),
+        other => Err(pyo3::exceptions::PyValueError::new_err(format!(
+            "Invalid decor_redundancy '{}'. Expected one of: positive_mean, abs_mean.",
+            other
+        ))),
+    }
+}
+
+fn parse_decor_weight_formula(formula: &str) -> PyResult<DecorWeightFormula> {
+    DecorWeightFormula::from_str(formula).map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+fn parse_decor_preset(preset: &str) -> PyResult<DecorPreset> {
+    DecorPreset::from_str(preset).map_err(pyo3::exceptions::PyValueError::new_err)
+}
+
+fn apply_decor_release_tuning(
+    options: &mut DecorOptions,
+    decor_preset: Option<&str>,
+    decor_stringency: Option<f64>,
+) -> PyResult<()> {
+    if decor_preset.is_some() && decor_stringency.is_some() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "Use either decor_preset or decor_stringency, not both.",
+        ));
+    }
+
+    if let Some(stringency) = decor_stringency {
+        options
+            .apply_stringency(stringency)
+            .map_err(pyo3::exceptions::PyValueError::new_err)?;
+    } else {
+        options.apply_preset(parse_decor_preset(decor_preset.unwrap_or("balanced"))?);
+    }
+
+    Ok(())
+}
+
+fn apply_decor_formula_overrides(
+    options: &mut DecorOptions,
+    decor_weight_formula: Option<&str>,
+    decor_alpha: Option<f64>,
+    decor_threshold: Option<f64>,
+    decor_gamma: Option<f64>,
+    decor_penalty_floor: Option<f64>,
+    decor_scale_epsilon: f64,
+) -> PyResult<()> {
+    if let Some(formula) = decor_weight_formula {
+        options.weight_formula = parse_decor_weight_formula(formula)?;
+    }
+    if let Some(alpha) = decor_alpha {
+        if alpha < 0.0 || !alpha.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "decor_alpha must be a finite numeric value >= 0.",
+            ));
+        }
+        options.alpha = alpha;
+    }
+    if let Some(threshold) = decor_threshold {
+        if !(0.0..1.0).contains(&threshold) || !threshold.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "decor_threshold must be a finite numeric value >= 0 and < 1.",
+            ));
+        }
+        options.threshold_tau = threshold;
+    }
+    if let Some(gamma) = decor_gamma {
+        if gamma < 0.0 || !gamma.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "decor_gamma must be a finite numeric value >= 0.",
+            ));
+        }
+        options.gamma = gamma;
+    }
+    if let Some(penalty_floor) = decor_penalty_floor {
+        if !(0.0..1.0).contains(&penalty_floor) || !penalty_floor.is_finite() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "decor_penalty_floor must be a finite numeric value >= 0 and < 1.",
+            ));
+        }
+        options.penalty_floor = penalty_floor;
+    }
+    if decor_scale_epsilon <= 0.0 || !decor_scale_epsilon.is_finite() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "decor_scale_epsilon must be a finite numeric value > 0.",
+        ));
+    }
+    options.scale_epsilon = decor_scale_epsilon;
+    Ok(())
+}
+
 #[allow(clippy::too_many_arguments)]
 #[allow(non_snake_case)]
 #[pyfunction]
-#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=1, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false))]
+#[pyo3(signature = (ranks, gmt_path, nPermSimple=1000, seed=None, nproc=0, minSize=None, maxSize=None, eps=1e-50, scoreType="std", gseaParam=1.0, mode="fgsea", nperm=None, sampleSize=101, gpu=false, method="classic", decor_cache=None, decor_expression=None, decor_preset=None, decor_stringency=None, decor_weight_formula=None, decor_alpha=None, decor_threshold=None, decor_gamma=None, decor_penalty_floor=None, decor_scale_epsilon=1e-12, decor_cache_mode="auto", decor_correlation="pearson", decor_redundancy="positive_mean", blitz_anchors=40, blitz_symmetric=false, blitz_center=true, blitz_accuracy=40, blitz_deep_accuracy=50, blitz_signature_cache=true))]
 fn run_gsea_py(
     py: Python<'_>,
     ranks: HashMap<String, f64>,
@@ -27,7 +157,7 @@ fn run_gsea_py(
     nPermSimple: usize,
     seed: Option<u64>,
     nproc: usize,
-    minSize: usize,
+    minSize: Option<usize>,
     maxSize: Option<usize>,
     eps: f64,
     scoreType: &str,
@@ -36,6 +166,26 @@ fn run_gsea_py(
     nperm: Option<usize>,
     sampleSize: usize,
     gpu: bool,
+    method: &str,
+    decor_cache: Option<String>,
+    decor_expression: Option<String>,
+    decor_preset: Option<&str>,
+    decor_stringency: Option<f64>,
+    decor_weight_formula: Option<&str>,
+    decor_alpha: Option<f64>,
+    decor_threshold: Option<f64>,
+    decor_gamma: Option<f64>,
+    decor_penalty_floor: Option<f64>,
+    decor_scale_epsilon: f64,
+    decor_cache_mode: &str,
+    decor_correlation: &str,
+    decor_redundancy: &str,
+    blitz_anchors: usize,
+    blitz_symmetric: bool,
+    blitz_center: bool,
+    blitz_accuracy: usize,
+    blitz_deep_accuracy: usize,
+    blitz_signature_cache: bool,
 ) -> PyResult<Vec<HashMap<String, Py<PyAny>>>> {
     if sampleSize == 0 {
         return Err(pyo3::exceptions::PyValueError::new_err(
@@ -47,6 +197,16 @@ fn run_gsea_py(
         let _ = rayon::ThreadPoolBuilder::new()
             .num_threads(nproc)
             .build_global();
+    }
+    if minSize.is_some_and(|min_size| min_size == 0) {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "minSize must be greater than 0.",
+        ));
+    }
+    if blitz_anchors == 0 || blitz_accuracy == 0 || blitz_deep_accuracy == 0 {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "blitz_anchors, blitz_accuracy, and blitz_deep_accuracy must be greater than 0.",
+        ));
     }
 
     let mut genes = Vec::new();
@@ -61,7 +221,114 @@ fn run_gsea_py(
         read_gmt(&gmt_path).map_err(|e| pyo3::exceptions::PyIOError::new_err(e.to_string()))?;
 
     let st = parse_score_type(scoreType)?;
+    let method = parse_method(method)?;
     let mode = parse_interface_mode(mode).map_err(pyo3::exceptions::PyValueError::new_err)?;
+    let min_size = minSize.unwrap_or(if mode == InterfaceMode::Blitz { 5 } else { 1 });
+    if mode == InterfaceMode::Blitz {
+        if gpu {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "gpu is not supported with mode='blitz'.",
+            ));
+        }
+        if method != EnrichmentMethod::Classic {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "mode='blitz' supports only method='classic'.",
+            ));
+        }
+        if nperm.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "nperm is not supported with mode='blitz'.",
+            ));
+        }
+        if st != ScoreType::Std {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "mode='blitz' supports only scoreType='std'.",
+            ));
+        }
+        if (gseaParam - 1.0).abs() > f64::EPSILON {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "mode='blitz' supports only gseaParam=1.0.",
+            ));
+        }
+    }
+    if method == EnrichmentMethod::Decor {
+        if gpu {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "decor supports CPU execution only; gpu is not supported with method='decor'.",
+            ));
+        }
+        if mode == InterfaceMode::Multilevel && nperm.is_some() {
+            return Err(pyo3::exceptions::PyValueError::new_err(
+                "nperm is only valid with mode='fgsea' or mode='simple'.",
+            ));
+        }
+        let cache_path = decor_cache.ok_or_else(|| {
+            pyo3::exceptions::PyValueError::new_err("method='decor' requires decor_cache.")
+        })?;
+        let mut options = DecorOptions::default();
+        apply_decor_release_tuning(&mut options, decor_preset, decor_stringency)?;
+        apply_decor_formula_overrides(
+            &mut options,
+            decor_weight_formula,
+            decor_alpha,
+            decor_threshold,
+            decor_gamma,
+            decor_penalty_floor,
+            decor_scale_epsilon,
+        )?;
+        options.cache_path = Some(PathBuf::from(cache_path));
+        options.expression_path = decor_expression.map(PathBuf::from);
+        options.cache_mode = parse_decor_cache_mode(decor_cache_mode)?;
+        options.correlation = parse_decor_correlation(decor_correlation)?;
+        options.redundancy = parse_decor_redundancy(decor_redundancy)?;
+        let (cache, _) = ensure_decor_cache_for_paths(
+            &pd.pathways,
+            PathBuf::from(&gmt_path).as_path(),
+            &options,
+            true,
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        let max_size = maxSize.unwrap_or_else(|| rs_ranks.len().saturating_sub(1));
+        let decor_multilevel =
+            mode == InterfaceMode::Multilevel || (mode == InterfaceMode::Fgsea && nperm.is_none());
+        let results = if decor_multilevel {
+            fgsea_decor_multilevel_with_options(
+                &rs_ranks,
+                &pd.pathways,
+                &cache,
+                &options,
+                nPermSimple,
+                seed,
+                min_size,
+                max_size,
+                eps,
+                st,
+                gseaParam,
+                sampleSize,
+            )
+        } else {
+            fgsea_decor_simple_with_options(
+                &rs_ranks,
+                &pd.pathways,
+                &cache,
+                &options,
+                nperm.unwrap_or(nPermSimple),
+                seed,
+                min_size,
+                max_size,
+                eps,
+                st,
+                gseaParam,
+                sampleSize,
+            )
+        }
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?;
+        return results_to_py(py, results);
+    } else if decor_cache.is_some() || decor_expression.is_some() {
+        return Err(pyo3::exceptions::PyValueError::new_err(
+            "decor arguments require method='decor'.",
+        ));
+    }
     let exec_mode = if gpu {
         #[cfg(not(feature = "gpu"))]
         {
@@ -79,15 +346,39 @@ fn run_gsea_py(
         resolve_execution_plan(mode, false, nperm, nPermSimple)
             .map_err(pyo3::exceptions::PyValueError::new_err)?
     };
-    let max_size = maxSize.unwrap_or_else(|| rs_ranks.len().saturating_sub(1));
+    let max_size = maxSize.unwrap_or_else(|| {
+        if mode == InterfaceMode::Blitz {
+            4000
+        } else {
+            rs_ranks.len().saturating_sub(1)
+        }
+    });
     let results = match exec_mode {
+        ExecutionPlan::Cpu(InterfaceMode::Blitz) => fgsea_blitz_with_options(
+            &rs_ranks,
+            &pd.pathways,
+            &BlitzOptions {
+                permutations: nPermSimple,
+                anchors: blitz_anchors,
+                min_size,
+                max_size,
+                processes: if nproc > 0 { nproc } else { 4 },
+                symmetric: blitz_symmetric,
+                seed: seed.unwrap_or(0),
+                center: blitz_center,
+                accuracy: blitz_accuracy,
+                deep_accuracy: blitz_deep_accuracy,
+                signature_cache: blitz_signature_cache,
+            },
+        )
+        .map_err(|e| pyo3::exceptions::PyRuntimeError::new_err(e.to_string()))?,
         ExecutionPlan::Cpu(InterfaceMode::Fgsea) => fgsea_with_sample_size(
             &rs_ranks,
             &pd.pathways,
             nperm,
             nPermSimple,
             seed,
-            minSize,
+            min_size,
             max_size,
             eps,
             st,
@@ -99,7 +390,7 @@ fn run_gsea_py(
             &pd.pathways,
             nPermSimple,
             seed,
-            minSize,
+            min_size,
             max_size,
             eps,
             st,
@@ -111,7 +402,7 @@ fn run_gsea_py(
             &pd.pathways,
             nperm.unwrap_or(nPermSimple),
             seed,
-            minSize,
+            min_size,
             max_size,
             eps,
             st,
@@ -128,7 +419,7 @@ fn run_gsea_py(
             &pd.pathways,
             n_perm,
             seed,
-            minSize,
+            min_size,
             max_size,
             eps,
             st,
@@ -145,6 +436,13 @@ fn run_gsea_py(
         }
     };
 
+    results_to_py(py, results)
+}
+
+fn results_to_py(
+    py: Python<'_>,
+    results: Vec<EnrichmentResult>,
+) -> PyResult<Vec<HashMap<String, Py<PyAny>>>> {
     let mut py_results = Vec::new();
     for res in results {
         let export = res.export();

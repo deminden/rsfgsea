@@ -33,6 +33,48 @@ test_that("fgsea supports CLI-style file inputs and output", {
   expect_true(file.exists(out_path))
   written <- read.delim(out_path, sep = "\t", check.names = FALSE)
   expect_true(all(c("pathway", "size", "es", "nes", "pval", "padj", "log2err", "leading_edge") %in% names(written)))
+  for (column in c("es", "nes", "pval", "padj")) {
+    expect_equal(written[[column]], res[[column]], tolerance = 0)
+  }
+})
+
+test_that("TSV output emits round-trip-safe binary64 text", {
+  out_path <- tempfile(fileext = ".tsv")
+  values <- c(0.1, pi, .Machine$double.eps, .Machine$double.xmin, .Machine$double.xmax)
+  result <- data.frame(
+    pathway = paste0("PW_", seq_along(values)),
+    size = seq_along(values),
+    es = values,
+    nes = -values,
+    pval = values,
+    padj = values,
+    log2err = values
+  )
+  result$leadingEdge <- I(lapply(result$pathway, function(pathway) pathway))
+
+  rsfgseaR:::.write_results_tsv(result, out_path)
+  written_text <- read.delim(
+    out_path,
+    sep = "\t",
+    check.names = FALSE,
+    colClasses = "character"
+  )
+
+  for (column in c("es", "nes", "pval", "padj", "log2err")) {
+    expect_identical(written_text[[column]], sprintf("%.17g", result[[column]]))
+  }
+
+  # Base R's extreme decimal parser is platform-dependent at DBL_MIN and
+  # DBL_MAX. Verify numeric round trips separately on representative values;
+  # the string assertions above cover the two finite boundaries directly.
+  written <- read.delim(out_path, sep = "\t", check.names = FALSE)
+  representative <- seq_len(3L)
+  for (column in c("es", "nes", "pval", "padj", "log2err")) {
+    expect_identical(
+      written[[column]][representative],
+      result[[column]][representative]
+    )
+  }
 })
 
 test_that("fgseaSimple and fgseaMultilevel run", {
@@ -44,6 +86,28 @@ test_that("fgseaSimple and fgseaMultilevel run", {
 
   expect_equal(nrow(simple_res), 2L)
   expect_equal(nrow(multi_res), 2L)
+})
+
+test_that("fgsea blitz mode runs and rejects incompatible options", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+
+  blitz_res <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    mode = "blitz",
+    nPermSimple = 64L,
+    minSize = 1L,
+    maxSize = 4L,
+    blitz.anchors = 4L
+  )
+
+  expect_equal(nrow(blitz_res), 2L)
+  expect_true(all(is.na(blitz_res$log2err)))
+  expect_error(
+    rsfgseaR::fgsea(pathways = pathways, stats = stats, mode = "blitz", scoreType = "pos"),
+    "mode = 'blitz' supports only scoreType = 'std'"
+  )
 })
 
 test_that("fgseaSimple respects the active R sample.kind", {
@@ -114,6 +178,229 @@ test_that("fgsea enforces CLI-equivalent option rules", {
     rsfgseaR::fgsea(pathways = pathways, stats = stats, mode = "simple", gpu = TRUE),
     "gpu currently supports only mode = 'fgsea'"
   )
+})
+
+test_that("fgsea validates decor arguments", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+
+  expect_error(
+    rsfgseaR::fgsea(pathways = pathways, stats = stats, method = "decor", mode = "simple", nperm = 50L),
+    "requires decor.cache"
+  )
+  expect_error(
+    rsfgseaR::fgsea(pathways = pathways, stats = stats, method = "decor", mode = "multilevel", nperm = 50L, decor.cache = tempfile()),
+    "nperm is only valid"
+  )
+  expect_error(
+    rsfgseaR::fgsea(pathways = pathways, stats = stats, method = "decor", mode = "simple", nperm = 50L, decor.cache = tempfile(), decor.preset = "bogus"),
+    "decor.preset must be one of"
+  )
+})
+
+test_that("decor balanced preset builds cache and runs", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  expr_path <- tempfile(fileext = ".tsv")
+  cache_path <- tempfile(fileext = ".decor.tsv")
+  writeLines(
+    c(
+      "gene\ts1\ts2\ts3\ts4",
+      "g1\t1\t2\t3\t4",
+      "g2\t1.1\t2.1\t3.1\t4.1",
+      "g3\t4\t3\t2\t1",
+      "g4\t2\t1\t2\t1"
+    ),
+    expr_path
+  )
+
+  decor <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    method = "decor",
+    mode = "simple",
+    nperm = 50L,
+    seed = 42L,
+    decor.cache = cache_path,
+    decor.expression = expr_path,
+    decor.preset = "balanced"
+  )
+
+  expect_true(file.exists(cache_path))
+  expect_equal(nrow(decor), 2L)
+
+  decor_multilevel <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    method = "decor",
+    mode = "multilevel",
+    nPermSimple = 25L,
+    sampleSize = 11L,
+    seed = 42L,
+    decor.cache = cache_path,
+    decor.expression = expr_path,
+    decor.preset = "balanced"
+  )
+
+  expect_equal(nrow(decor_multilevel), 2L)
+})
+
+test_that("decor accepts named presets", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  expr_path <- tempfile(fileext = ".tsv")
+  writeLines(
+    c(
+      "gene\ts1\ts2\ts3\ts4",
+      "g1\t1\t2\t3\t4",
+      "g2\t1.1\t2.1\t3.1\t4.1",
+      "g3\t4\t3\t2\t1",
+      "g4\t2\t1\t2\t1"
+    ),
+    expr_path
+  )
+
+  for (preset in c("sensitive", "balanced", "specific", "strict")) {
+    decor <- rsfgseaR::fgsea(
+      pathways = pathways,
+      stats = stats,
+      method = "decor",
+      mode = "simple",
+      nperm = 25L,
+      seed = 42L,
+      decor.cache = tempfile(fileext = ".decor.tsv"),
+      decor.expression = expr_path,
+      decor.preset = preset
+    )
+    expect_equal(nrow(decor), 2L)
+  }
+})
+
+test_that("decor explicit formula matches balanced preset", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  expr_path <- tempfile(fileext = ".tsv")
+  cache_path <- tempfile(fileext = ".decor.tsv")
+  writeLines(
+    c(
+      "gene\ts1\ts2\ts3\ts4",
+      "g1\t1\t2\t3\t4",
+      "g2\t1.1\t2.1\t3.1\t4.1",
+      "g3\t4\t3\t2\t1",
+      "g4\t2\t1\t2\t1"
+    ),
+    expr_path
+  )
+
+  preset <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    method = "decor",
+    mode = "simple",
+    nperm = 50L,
+    seed = 42L,
+    decor.cache = cache_path,
+    decor.expression = expr_path,
+    decor.preset = "balanced"
+  )
+  explicit <- rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    method = "decor",
+    mode = "simple",
+    nperm = 50L,
+    seed = 42L,
+    decor.cache = cache_path,
+    decor.weight.formula = "threshold-rational",
+    decor.alpha = 60,
+    decor.threshold = 0.04
+  )
+
+  expect_equal(preset$pathway, explicit$pathway)
+  expect_equal(preset$size, explicit$size)
+  expect_equal(preset$es, explicit$es)
+  expect_equal(preset$nes, explicit$nes)
+  expect_equal(preset$pval, explicit$pval)
+  expect_equal(preset$padj, explicit$padj)
+})
+
+test_that("decor accepts stringency ladder", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  expr_path <- tempfile(fileext = ".tsv")
+  writeLines(
+    c(
+      "gene\ts1\ts2\ts3\ts4",
+      "g1\t1\t2\t3\t4",
+      "g2\t1.1\t2.1\t3.1\t4.1",
+      "g3\t4\t3\t2\t1",
+      "g4\t2\t1\t2\t1"
+    ),
+    expr_path
+  )
+
+  for (stringency in c(10, 50, 75, 95)) {
+    decor <- rsfgseaR::fgsea(
+      pathways = pathways,
+      stats = stats,
+      method = "decor",
+      mode = "simple",
+      nperm = 25L,
+      seed = 42L,
+      decor.cache = tempfile(fileext = ".decor.tsv"),
+      decor.expression = expr_path,
+      decor.stringency = stringency
+    )
+    expect_equal(nrow(decor), 2L)
+  }
+})
+
+test_that("decor rejects preset and stringency together", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+
+  expect_error(
+    rsfgseaR::fgsea(
+      pathways = pathways,
+      stats = stats,
+      method = "decor",
+      mode = "simple",
+      nperm = 25L,
+      decor.cache = tempfile(fileext = ".decor.tsv"),
+      decor.preset = "specific",
+      decor.stringency = 50
+    ),
+    "decor.preset or decor.stringency"
+  )
+})
+
+test_that("decor does not expose null selection", {
+  stats <- c(g1 = 2, g2 = 1, g3 = -1, g4 = -2)
+  pathways <- list(PW_A = c("g1", "g2"), PW_B = c("g3", "g4"))
+  expr_path <- tempfile(fileext = ".tsv")
+  cache_path <- tempfile(fileext = ".decor.tsv")
+  writeLines(
+    c(
+      "gene\ts1\ts2\ts3\ts4",
+      "g1\t1\t2\t3\t4",
+      "g2\t1.1\t2.1\t3.1\t4.1",
+      "g3\t4\t3\t2\t1",
+      "g4\t2\t1\t2\t1"
+    ),
+    expr_path
+  )
+
+  expect_error(rsfgseaR::fgsea(
+    pathways = pathways,
+    stats = stats,
+    method = "decor",
+    mode = "simple",
+    nperm = 25L,
+    seed = 42L,
+    decor.cache = cache_path,
+    decor.expression = expr_path,
+    decor.null = "profile"
+  ), "unused argument")
 })
 
 test_that("fgsea validates named numeric stats", {

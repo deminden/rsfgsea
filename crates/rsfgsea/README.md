@@ -1,10 +1,12 @@
 # rsfgsea
 
-High-performance Rust implementation of preranked Gene Set Enrichment Analysis (GSEA), designed as a drop-in, optimized alternative to the R `fgsea` package.
+High-performance Rust implementation of preranked Gene Set Enrichment Analysis (GSEA), with decor, classic fgsea-compatible, and native blitz workflows.
 
 What it focuses on:
 
-- fgsea-compatible simple and multilevel workflows
+- redundancy-aware decor enrichment for expression-correlated pathway genes
+- classic fgsea-compatible simple and multilevel workflows
+- native blitzGSEA-compatible execution
 - library and CLI use from one Rust crate
 - deterministic parity-focused CPU path
 - optional hybrid GPU acceleration for large simple-stage screening
@@ -38,7 +40,7 @@ Library:
 
 ```toml
 [dependencies]
-rsfgsea = "0.3.4"
+rsfgsea = "0.4.0"
 ```
 
 CLI:

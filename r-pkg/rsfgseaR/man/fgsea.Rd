@@ -10,7 +10,7 @@ fgsea(
   nPermSimple = 1000L,
   seed = NULL,
   nproc = 0L,
-  minSize = 1L,
+  minSize = NULL,
   maxSize = NULL,
   eps = 1e-50,
   scoreType = "std",
@@ -18,8 +18,28 @@ fgsea(
   mode = "fgsea",
   nperm = NULL,
   sampleSize = 101L,
+  method = "classic",
+  decor.cache = NULL,
+  decor.expression = NULL,
+  decor.preset = "balanced",
+  decor.stringency = NULL,
+  decor.weight.formula = NULL,
+  decor.alpha = NULL,
+  decor.threshold = NULL,
+  decor.gamma = NULL,
+  decor.penalty.floor = NULL,
+  decor.scale.epsilon = 1e-12,
+  decor.cache.mode = "auto",
+  decor.correlation = "pearson",
+  decor.redundancy = "positive_mean",
   output = NULL,
-  gpu = FALSE
+  gpu = FALSE,
+  blitz.anchors = 40L,
+  blitz.symmetric = FALSE,
+  blitz.center = TRUE,
+  blitz.accuracy = 40L,
+  blitz.deep.accuracy = 50L,
+  blitz.signature.cache = TRUE
 )
 }
 \arguments{
@@ -27,15 +47,22 @@ fgsea(
 
 \item{stats}{Named numeric vector of preranked statistics, or a path to a ranked-list file.}
 
-\item{nPermSimple}{Integer permutation count for the simple screening stage.}
+\item{nPermSimple}{Integer permutation count for the simple screening stage;
+in Blitz mode, the number of null permutations per calibration anchor. For
+CPU/GPU or R/GPU comparisons, prefer \code{100000L} as a practical baseline;
+use \code{10000L} only as a smoke tier and \code{1000000L} for final tail/stress
+checks when runtime allows.}
 
-\item{seed}{Optional integer RNG seed. \code{NULL} uses a fresh random seed.}
+\item{seed}{Optional integer RNG seed. \code{NULL} uses a fresh seed outside Blitz
+mode and deterministic seed \code{0} in Blitz mode.}
 
-\item{nproc}{Number of worker threads. \code{0} keeps the default Rayon behavior.}
+\item{nproc}{Number of workers. \code{0} keeps the default Rayon behavior outside
+Blitz mode and uses four calibration workers in Blitz mode.}
 
-\item{minSize}{Minimum pathway size.}
+\item{minSize}{Minimum pathway size. Defaults to \code{1}, or \code{5} in Blitz mode.}
 
-\item{maxSize}{Maximum pathway size. Defaults to \code{length(stats) - 1}.}
+\item{maxSize}{Maximum pathway size. Defaults to \code{length(stats) - 1}, or
+\code{4000} in Blitz mode.}
 
 \item{eps}{Multilevel epsilon parameter.}
 
@@ -43,17 +70,80 @@ fgsea(
 
 \item{gseaParam}{Weighting exponent.}
 
-\item{mode}{One of \code{"fgsea"}, \code{"simple"}, \code{"multilevel"}.}
+\item{mode}{One of \code{"fgsea"}, \code{"simple"}, \code{"multilevel"}, \code{"blitz"}.
+Blitz mode targets compatibility with \verb{blitzgsea 1.3.54}.}
 
-\item{nperm}{Optional fixed-permutation override for wrapper mode.}
+\item{nperm}{Optional fixed-permutation override for classic wrapper mode;
+unsupported in Blitz mode.}
 
 \item{sampleSize}{Multilevel sample size.}
 
+\item{method}{One of \code{"classic"} or \code{"decor"}. The default preserves the
+fgsea-compatible classic method.}
+
+\item{decor.cache}{Path to a decor redundancy cache.}
+
+\item{decor.expression}{Optional normalized expression matrix used to build
+or rebuild the decor cache.}
+
+\item{decor.preset}{Decor redundancy preset. \code{"balanced"} is the default
+held-out-validated threshold preset. Other choices are \code{"sensitive"},
+\code{"specific"}, and \code{"strict"}.}
+
+\item{decor.stringency}{Optional numeric 0-100 convenience control. When set,
+it autoswitches between the calibrated decor presets instead of exposing
+formula-level controls.}
+
+\item{decor.weight.formula}{Optional explicit decor hit-weight formula,
+currently one of \code{"raw-rational"}, \code{"exp-scaled"}, or
+\code{"threshold-rational"}.}
+
+\item{decor.alpha}{Optional explicit decor redundancy penalty strength.}
+
+\item{decor.threshold}{Optional explicit decor threshold tau for
+threshold-rational weights.}
+
+\item{decor.gamma}{Optional explicit gamma parameter for formula families
+that use it.}
+
+\item{decor.penalty.floor}{Optional explicit lower bound on decor penalties.}
+
+\item{decor.scale.epsilon}{Small positive epsilon for scaled decor formulas.}
+
+\item{decor.cache.mode}{One of \code{"auto"}, \code{"reuse"}, \code{"rebuild"}.}
+
+\item{decor.correlation}{Correlation method for decor cache building. Only
+\code{"pearson"} is currently implemented.}
+
+\item{decor.redundancy}{Redundancy score definition, \code{"positive_mean"} or
+\code{"abs_mean"}.}
+
 \item{output}{Optional TSV output path. When set, results are also written in
-the same column shape as the CLI.}
+the CLI column shape with round-trip-safe numeric text; decimal width is
+not fixed.}
 
 \item{gpu}{Logical flag mirroring the CLI \code{--gpu} switch. Uses the same
-hybrid GPU path as the Rust CLI and currently supports only \code{mode = "fgsea"}.}
+hybrid GPU path as the Rust CLI and currently supports only \code{mode = "fgsea"}.
+On WSL2, if CUDA is visible but WebGPU selects \code{llvmpipe}, start R with
+\code{GALLIUM_DRIVER=d3d12} and \code{MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA}.}
+
+\item{blitz.anchors}{Number of blitz calibration anchors.}
+
+\item{blitz.symmetric}{Use one symmetric positive/negative blitz null fit.}
+
+\item{blitz.center}{Center signature values before blitz scoring.}
+
+\item{blitz.accuracy}{Upstream-compatible normal-tail setting, currently
+retained for interface parity and not used to alter the native normal-tail
+calculation.}
+
+\item{blitz.deep.accuracy}{Decimal precision used by the high-precision gamma
+fallback for extreme Blitz tails. Changing it can change extreme-tail
+p-values and NES.}
+
+\item{blitz.signature.cache}{Reuse blitz null-model fits for repeated calls
+with the same preprocessed signature and calibration settings in this R
+process.}
 }
 \value{
 A data frame with fgsea-style result columns.

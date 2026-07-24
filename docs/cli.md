@@ -50,11 +50,24 @@ GMT:
 - remaining columns: genes
 - malformed rows are rejected
 
-## Modes
+## Methods And Modes
+
+`--method decor`
+
+- redundancy-aware preranked GSEA method
+- first-class path for expression-correlated pathway genes
+- uses CPU fixed-permutation simple mode when `--nperm` is provided
+- uses decor multilevel refinement in wrapper mode when `--nperm` is omitted, or in explicit `--mode multilevel`
+- supports calibrated presets and the `--decor-stringency` ladder
+
+`--method classic`
+
+- default fgsea-compatible method
+- second public track for classic wrapper, simple, and multilevel workflows
 
 `--mode fgsea`
 
-- wrapper mode
+- classic wrapper mode
 - behaves like fgsea's standard interface
 - uses simple screening first
 - uses multilevel refinement unless `--nperm` forces simple mode
@@ -67,7 +80,19 @@ GMT:
 
 - explicit multilevel workflow
 
+`--mode blitz`
+
+- third public track: native Rust blitzGSEA-compatible workflow
+- uses blitz defaults when mode-specific arguments are omitted: `minSize=5`, `maxSize=4000`, `seed=0`, `nPermSimple=1000`, `--blitz-anchors 40`, and four calibration workers
+- rejects incompatible fgsea options: `--gpu`, `--method decor`, `--nperm`, `--scoreType` other than `std`, and `--gseaParam` other than `1`
+- reports blitz p-values in `pval`, BH/FDR in `padj`, and `NA` for `log2err`
+
 ## Important Arguments
+
+`--method`
+
+- `decor`: redundancy-aware preranked GSEA method
+- `classic`: default fgsea-compatible method
 
 `--nPermSimple`
 
@@ -99,15 +124,111 @@ GMT:
 
 - Rayon worker count
 - `0` means default threadpool behavior
+- in blitz mode, `0` uses the blitz reference default of four calibration workers
 
 `--gpu`
 
 - enables the hybrid GPU path
 - currently only supported with `--mode fgsea`
 
+Decor options:
+
+- `--decor-cache`: path to the decor cache containing redundancy scores
+- `--decor-expression`: normalized tab-separated expression matrix used to build the cache
+- `--decor-preset`: `sensitive`, `balanced`, `specific`, or `strict`; default `balanced`
+- `--decor-stringency`: optional numeric 0-100 convenience control that autoswitches calibrated presets
+- `--decor-cache-mode`: `auto`, `reuse`, or `rebuild`
+- `--decor-expression-format`: `auto` or `tsv`; CSV is parsed as an option but not implemented yet
+- `--decor-expression-has-header`: `true` or `false`, default `true`
+- `--decor-tail-reliability adaptive`: experimental opt-in reliability pass for decor multilevel lower-tail results
+
+Decor presets:
+
+- `sensitive`: raw-rational, `alpha=22`
+- `balanced`: threshold-rational, `tau=0.04`, `alpha=60`; the default held-out-validated balanced preset
+- `specific`: threshold-rational, `tau=0.05`, `alpha=65`
+- `strict`: exp-scaled, target median penalty `0.10`
+
+Stringency is a preset ladder, not a continuous formula interpolation: `0 <= x < 35` resolves to `sensitive`, `35 <= x < 65` to `balanced`, `65 <= x < 85` to `specific`, and `85 <= x <= 100` to `strict`.
+
+The CLI prints the resolved preset, formula, and parameters for reproducibility.
+
+Decor multilevel lower-tail caveat:
+
+- `log2err` should be inspected for very small decor multilevel p-values, especially when conclusions depend on the exact ordering of the strongest pathways.
+- Very broad GO terms can be expensive to refine because decor multilevel samples pathway-specific penalized hit profiles rather than the size-only classic fgsea null.
+- `--decor-tail-reliability adaptive` can be used as an explicit final-analysis check for low-tail decor results, but it is not the default because a small number of large triggered pathways can dominate runtime.
+- For broad ontology collections, consider whether very large terms are scientifically useful before increasing `sampleSize` or enabling adaptive reliability for final runs.
+
+Blitz options:
+
+- `--blitz-anchors`: number of calibration anchors, default `40`
+- `--blitz-symmetric`: use one symmetric positive/negative null fit
+- `--blitz-no-center`: disable signature centering
+- `--blitz-signature-cache`: enable the in-process blitz null-model cache for repeated embedded CLI-style calls; ordinary one-shot CLI runs leave it off
+- `--blitz-accuracy`: normal-tail accuracy setting retained for blitz compatibility metadata, default `40`
+- `--blitz-deep-accuracy`: deep-tail accuracy setting retained for blitz compatibility metadata, default `50`
+
 ## Typical Commands
 
-Wrapper mode:
+Decor first run:
+
+```bash
+rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.decor.tsv \
+  --method decor \
+  --mode simple \
+  --nperm 10000 \
+  --decor-cache cache/pathways.decor.tsv \
+  --decor-expression data/expression.tsv
+```
+
+Decor with a selected preset:
+
+```bash
+rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.decor.tsv \
+  --method decor \
+  --mode simple \
+  --nperm 10000 \
+  --decor-cache cache/pathways.decor.tsv \
+  --decor-expression data/expression.tsv \
+  --decor-preset specific
+```
+
+Decor with easy stringency:
+
+```bash
+rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.decor.tsv \
+  --method decor \
+  --mode simple \
+  --nperm 10000 \
+  --decor-cache cache/pathways.decor.tsv \
+  --decor-expression data/expression.tsv \
+  --decor-stringency 75
+```
+
+Decor reuse run:
+
+```bash
+rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.decor.tsv \
+  --method decor \
+  --mode simple \
+  --nperm 10000 \
+  --decor-cache cache/pathways.decor.tsv
+```
+
+Classic wrapper mode:
 
 ```bash
 ./target/release/rsfgsea \
@@ -116,7 +237,7 @@ Wrapper mode:
   --output results.tsv
 ```
 
-Simple mode:
+Classic simple mode:
 
 ```bash
 ./target/release/rsfgsea \
@@ -127,7 +248,7 @@ Simple mode:
   --output results.tsv
 ```
 
-Wrapper mode forced to simple:
+Classic wrapper forced to simple:
 
 ```bash
 ./target/release/rsfgsea \
@@ -146,17 +267,43 @@ Hybrid GPU mode:
   --gmt data/pathways.gmt \
   --gpu \
   --mode fgsea \
+  --nPermSimple 100000 \
   --output results.tsv
 ```
 
-Full parameter example with the installed binary:
+WSL2 with CUDA visible but WebGPU selecting `llvmpipe`:
+
+```bash
+GALLIUM_DRIVER=d3d12 \
+MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
+./target/release/rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --gpu \
+  --mode fgsea \
+  --nPermSimple 100000 \
+  --output results.tsv
+```
+
+Blitz mode:
+
+```bash
+rsfgsea \
+  --ranks data/example.rnk \
+  --gmt data/pathways.gmt \
+  --output results.blitz.tsv \
+  --mode blitz
+```
+
+Full parameter example with the installed binary and a comparison-friendly
+simple-stage budget:
 
 ```bash
 rsfgsea \
     --ranks data/pearson_symbols.rnk \
     --gmt data/h.all.v2025.1.Hs.symbols.gmt \
     --mode fgsea \
-    --nPermSimple 1000 \
+    --nPermSimple 100000 \
     --minSize 1 \
     --maxSize 5000 \
     --scoreType std \
@@ -182,12 +329,25 @@ The CLI writes a TSV with these columns:
 
 `leading_edge` is written as a comma-separated gene list.
 
+Floating-point columns use Rust's shortest round-trip representation. Parsing a
+written value as an IEEE-754 double therefore recovers the value held by the
+CLI; output is not truncated to a fixed number of decimal places.
+
+For decor runs, `es`, `nes`, `pval`, `padj`, `log2err`, and `leading_edge`
+refer to the decor statistic.
+
 ## GPU Notes
 
 The GPU path is hybrid, not fully GPU-native:
 
 - GPU: simple-stage null generation and screening
 - CPU: multilevel refinement when needed
+
+For CPU/GPU or R/GPU result comparisons, use `--nPermSimple 100000` as a
+practical baseline. Use `10000` only as a smoke tier, and use `1000000` for
+final tail/stress checks when runtime allows. The default `1000` is better
+treated as a quick execution check because p-value and FDR comparisons are
+dominated by Monte Carlo noise at that scale.
 
 The binary rejects `--gpu` with `--mode simple` or `--mode multilevel`.
 
@@ -196,3 +356,26 @@ Useful environment variables:
 - `WGPU_BACKEND=vulkan`
 - `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`
 - `RSFGSEA_GPU_ALLOW_GL=1`
+- `GALLIUM_DRIVER=d3d12`
+
+For WSL2, first check whether the graphics stack is using software rendering:
+
+```bash
+glxinfo -B | grep -E 'OpenGL renderer|Accelerated'
+vulkaninfo --summary | grep -E 'deviceName|deviceType|driverName'
+```
+
+If those commands report `llvmpipe` even though `nvidia-smi` sees the GPU,
+run `rsfgsea` with:
+
+```bash
+GALLIUM_DRIVER=d3d12 MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA
+```
+
+This forces Mesa's D3D12-backed OpenGL path and asks WSL to choose the NVIDIA
+adapter. `rsfgsea` treats `GALLIUM_DRIVER=d3d12` as an intentional GL fallback.
+If you are debugging older builds, also try:
+
+```bash
+WGPU_BACKEND=gl RSFGSEA_GPU_ALLOW_GL=1
+```

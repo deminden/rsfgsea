@@ -1,13 +1,16 @@
 # rsfgseaR
 
 `rsfgseaR` provides an R interface to `rsfgsea`, the Rust implementation of
-fgsea-compatible preranked Gene Set Enrichment Analysis.
+decor, classic fgsea-compatible, and native blitz preranked Gene Set Enrichment
+Analysis workflows.
 
 Current public entrypoints:
 
-- `fgsea()` for wrapper-style execution
+- `fgsea(..., method = "decor")` for CPU redundancy-aware decor execution; set `nperm` for fixed-permutation simple runs, or omit it/use `mode = "multilevel"` for decor multilevel refinement
+- `fgsea()` for classic wrapper-style execution
 - `fgseaSimple()` for fixed-permutation simple mode
 - `fgseaMultilevel()` for multilevel refinement
+- `fgsea(..., mode = "blitz")` for native blitzGSEA-compatible execution
 - `readRanks()` for ranked-list files
 - `gmtPathways()` / `writeGmtPathways()` for GMT conversion
 
@@ -17,20 +20,42 @@ GPU note:
 - `fgsea(..., gpu = TRUE)` uses the same hybrid GPU path as the Rust CLI when the package is built with `RSFGSEAR_ENABLE_GPU=1`
 - GPU is currently supported only for wrapper mode, not `fgseaSimple()` or `fgseaMultilevel()`
 - an actual compatible GPU/driver/runtime is still required at execution time
+- for CPU/GPU or R/GPU comparisons, use `nPermSimple = 100000L` as a practical baseline; use `10000L` only as a smoke tier and `1000000L` for final tail/stress checks when runtime allows
+- on WSL2, if `nvidia-smi` works but `gpu = TRUE` reports a `llvmpipe` adapter, start R with `GALLIUM_DRIVER=d3d12` and `MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA`
 
-Performance snapshot:
+Example WSL2 launch:
 
-- representative Rust-core Criterion benchmark, simple: `2.282 s` for 10k genes, 1k pathways, 10k permutations
-- representative Rust-core Criterion benchmark, multilevel: `3.438 s` for 10k genes, 1k pathways, `nPermSimple=1000`
-- file-backed comparison, multilevel large workload, 16 workers: Rust `105 ms` vs R `977 ms` (`9.3x` faster)
-- file-backed comparison, simple large workload, 16 workers: Rust `674 ms` vs R `798 ms` (`1.18x` faster)
-- real muscle-comparison validation workload: Rust `81 MB` peak RSS vs R `329 MB` peak RSS (`4.1x` lower)
+```bash
+GALLIUM_DRIVER=d3d12 \
+MESA_D3D12_DEFAULT_ADAPTER_NAME=NVIDIA \
+R
+```
 
-Full benchmark setup, thread-scaling tables, and parity notes are in:
+Performance, precision, and reproducibility evidence is owned by:
 
 - <https://github.com/deminden/rsfgsea/blob/main/docs/reproducibility.md>
 
-Minimal example:
+Decor example:
+
+```r
+library(rsfgseaR)
+
+stats <- c(TP53 = 3.1, MYC = 2.8, ACTB = -1.2)
+pathways <- list(PW_A = c("TP53", "MYC"), PW_B = c("ACTB"))
+
+res <- fgsea(
+  pathways = pathways,
+  stats = stats,
+  method = "decor",
+  mode = "simple",
+  nperm = 10000L,
+  decor.cache = "cache/pathways.decor.tsv",
+  decor.expression = "data/expression.tsv"
+)
+print(res)
+```
+
+Classic minimal example:
 
 ```r
 library(rsfgseaR)
@@ -55,17 +80,29 @@ print(res)
 - a named numeric vector
 - a path to a ranked-list file
 
-CLI-style file workflow:
+Classic CLI-style file workflow:
 
 ```r
 res <- fgsea(
   pathways = "pathways.gmt",
   stats = "ranks.rnk",
   mode = "simple",
-  nPermSimple = 1000L,
+  nPermSimple = 100000L,
   output = "results.tsv"
 )
 ```
+
+Blitz mode:
+
+```r
+res <- fgsea(
+  pathways = pathways,
+  stats = stats,
+  mode = "blitz"
+)
+```
+
+Blitz mode uses blitz defaults when arguments are omitted (`minSize = 5`, `maxSize = 4000`, seed `0`, four calibration workers) and returns `NA` for `log2err`. `blitz.signature.cache = TRUE` reuses native blitz null-model fits for repeated identical calls in the same R process.
 
 Plot example:
 
