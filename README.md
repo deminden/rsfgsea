@@ -5,8 +5,8 @@ High-performance Rust implementation of preranked Gene Set Enrichment Analysis (
 ## Features
 
 - **rsfgsea-decor**: A redundancy-aware preranked GSEA method that downweights pathway genes with high expression-derived within-pathway correlation. Decor uses validated presets (`sensitive`, `balanced`, `specific`, `strict`), with `balanced` as the release default, plus an optional 0-100 stringency ladder for preset autoswitching.
-- **Classic fgsea Parity**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`; current CPU multilevel parity vs R is near floating-point noise (max abs diff about `5e-9`, see [Precision vs R](#precision-vs-r) and `crates/rsfgsea/tests/r_validation.rs`).
-- **Native Blitz Mode**: Adds `mode=blitz` across Rust, CLI, Python, and R with native Rust execution against the locked `blitzgsea 1.3.54` reference. The current large audit reaches floating-point-scale maximum errors: ES `4.441e-16`, NES `3.331e-15`, p-value `1.776e-15`, and FDR `2.665e-15`.
+- **Classic fgsea Parity**: Reproduces fgsea-style simple and multilevel workflows with NES, adjusted p-values, and `log2err`. On the current 5,324-result CPU multilevel audit, ES and NES are exact, while maximum p-value and FDR errors are `8.3e-17` and `2.8e-16` (see [Precision vs R](#precision-vs-r)).
+- **Native Blitz Mode**: Adds `mode=blitz` across Rust, CLI, Python, and R with native Rust execution against the locked `blitzgsea 1.3.54` reference. The current large audit reaches floating-point-scale maximum errors: ES `4.4e-16`, NES `3.3e-15`, p-value `1.8e-15`, and FDR `2.7e-15`.
 - **Fast Core Algorithms**: Uses \(O(k)\) ES kernels and size-group batching to avoid redundant work. Benchmark claims and their exact protocols are kept in the [Reproducibility Guide](./docs/reproducibility.md).
 - **Built-In Plotting**: Writes single-pathway enrichment plots and multi-pathway GSEA table plots as PNG directly from Rust, CLI, Python, and R.
 - **Hybrid CPU/GPU Engine (Experimental)**: WebGPU accelerates large simple-stage screening/null generation, while multilevel refinement uses the parity-focused CPU kernel.
@@ -334,26 +334,33 @@ Validation protocol:
 - parity tests against R reference outputs are implemented in `crates/rsfgsea/tests/r_validation.rs`
 - primary metrics are max and mean absolute differences for ES, NES, p-value, and adjusted p-value on matched pathways
 
-Examples-folder snapshot:
-- source: `data/Folder_with_examples`
-- files: `23`
-- seed: `42`
-- `nPermSimple=1000`
+Shared large-audit workload:
+- ranks: `data/deseq2_positive_ranks/lung_vs_muscle.rnk` (`63,904`)
+- pathways: `data/GO_Biological_Process_2025.gmt` (`5,343` source; `5,324` scored)
+- mode: multilevel, seed `42`, `nPermSimple=1000`, `sampleSize=101`
+- filters: `minSize=5`, `maxSize=4000`, `eps=1e-10`
+- reference: R `4.4.3`, fgsea `1.37.2`
 
-Compact parity snapshot:
-- multilevel:
-  max `|ES|` diff `4.988e-09`, max `|NES|` diff `4.983e-09`, max `|pval|` diff `4.975e-09`, max `|padj|` diff `4.965e-09`
-- simple:
-  max `|ES|` diff `4.988e-09`, max `|NES|` diff `4.983e-09`, max `|pval|` diff `4.975e-09`, max `|padj|` diff `4.965e-09`
+Compact parity result:
+- ES: exact for all `5,324` pathways
+- NES: exact for all `5,324` pathways
+- max `|pval|` diff: `8.3e-17`
+- max `|padj|` diff: `2.8e-16`
+
+Classic and Blitz now use the same audit input, removing the previous
+workload-size confound. Each still measures parity against its own reference
+implementation, so their error maxima are not measures of statistical quality
+relative to one another.
 
 Notes:
-- p-value NaN mismatch count was `0` in both modes on this run
-- in this parity configuration and snapshot, ES/NES/p-value agreement is at floating-point-noise scale
-- with fixed seed and settings, outputs are invariant across `nproc` values in the current CPU parity path
+- there were no missing pathways, size mismatches, leading-edge mismatches, or finite-class mismatches
+- release outputs from `nproc=1` and `nproc=16` were byte-identical
 - for strict parity, `rsfgsea` currently preserves an upstream `fgsea`
   single-pathway simple-stage RNG quirk; this compatibility behavior should be
   removed once upstream `fgsea` fixes it
-- full parity distribution tables are in [`docs/reproducibility.md`](./docs/reproducibility.md)
+- full parity distributions and the exact protocol are in
+  [`docs/reproducibility.md`](./docs/reproducibility.md); the machine-readable
+  summary is [`docs/evidence/classic-latest.json`](./docs/evidence/classic-latest.json)
 
 This section describes the CPU parity path. GPU parity is materially looser at present and is discussed separately in [GPU Accuracy vs R](#gpu-accuracy-vs-r).
 
@@ -363,8 +370,8 @@ The compatibility target is `blitzgsea 1.3.54` under Python `3.12.9`, NumPy
 `2.5.1`, SciPy `1.18.0`, pandas `3.0.3`, statsmodels `0.14.6`, and mpmath
 `1.4.1`; `reference/blitz/uv.lock` fixes the complete environment. On the
 63,904-rank, 5,324-result `lung_vs_muscle + GO BP` audit, finite maximum
-absolute differences are ES `4.441e-16`, NES `3.331e-15`, p-value
-`1.776e-15`, and FDR `2.665e-15`. All pathway sizes and leading-edge sets
+absolute differences are ES `4.4e-16`, NES `3.3e-15`, p-value
+`1.8e-15`, and FDR `2.7e-15`. All pathway sizes and leading-edge sets
 match; 36 leading edges differ only in ordering. Retargeting SciPy 1.18's
 de Boor-weight interpolation reduced the pre-change NES maximum from
 `1.508e-8` by about 4.53 million×. These are reference-compatibility results,

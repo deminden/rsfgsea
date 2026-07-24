@@ -27,12 +27,11 @@ Run the local optimization benchmark with:
 cargo bench -p rsfgsea --bench gsea_bench
 ```
 
-Current CPU multilevel parity vs R is near floating-point noise in this repo's validation setup:
+On the current 63,904-rank, 5,324-result CPU multilevel audit against R fgsea:
 
-- max `|ES|` diff: `4.988e-09`
-- max `|NES|` diff: `4.983e-09`
-- max `|pval|` diff: `4.975e-09`
-- max `|padj|` diff: `4.965e-09`
+- ES and NES are exact for every pathway
+- max `|pval|` diff: `8.3e-17`
+- max `|padj|` diff: `2.8e-16`
 
 ## Install
 
